@@ -413,9 +413,9 @@ with col_chart:
         # 從選股結果找 row_data（自選股若未入選則 None）
         row_data = None
         if df is not None and len(df) > 0:
-            df['代號_str'] = df['代號'].astype(str)
-            if sid in df['代號_str'].values:
-                row_data = df[df['代號_str'] == sid].iloc[0]
+            # [修正] 直接比對，不要執行 df['代號_str'] = ... 避免污染 session_state
+            if sid in df['代號'].astype(str).values:
+                row_data = df[df['代號'].astype(str) == sid].iloc[0]
 
         sname = row_data['名稱'] if row_data is not None else ui_name_map.get(sid, "")
 
