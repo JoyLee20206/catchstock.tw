@@ -78,8 +78,9 @@ if __name__ == "__main__":
         ai_comment = ""
         if df is not None and not df.empty and GEMINI_API_KEY:
             try:
-                genai.configure(api_key=GEMINI_API_KEY)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                # ── 新版 google-genai 的寫法 ──
+                from google import genai
+                client = genai.Client(api_key=GEMINI_API_KEY)
                 
                 top_stock = df.iloc[0]
                 sid_top = str(top_stock['代號'])
@@ -97,7 +98,12 @@ if __name__ == "__main__":
                 請用繁體中文寫一段約 60~80 字的盤後精闢點評，語氣要專業、客觀。
                 注意：請直接輸出純文字，絕對不要使用 Markdown 語法 (不要有星號或井號)。
                 """
-                response = model.generate_content(prompt)
+                # 新版的呼叫函數改成 client.models.generate_content
+                response = client.models.generate_content(
+                    model='gemini-1.5-flash',
+                    contents=prompt,
+                )
+                
                 ai_comment = (
                     f"🧠 <b>Gemini 虛擬分析師評語：</b>\n"
                     f"<i>「{response.text.strip()}」</i>\n"
