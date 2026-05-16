@@ -122,7 +122,7 @@ _cache_date = _get_cache_max_date()
 if _cache_date is None:
     st.error("⚠ 找不到 daily 快取，請先執行 `python fetch_cache.py` 拉資料")
 else:
-    _today      = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
+    _today = pd.Timestamp.now(tz="Asia/Taipei").replace(tzinfo=None).normalize()
     _age        = (_today - _cache_date.normalize()).days
     _date_str   = _cache_date.strftime('%Y-%m-%d')
     _is_weekend = _today.weekday() >= 5  # 5=週六, 6=週日

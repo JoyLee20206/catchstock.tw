@@ -7,11 +7,14 @@ CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 def send_telegram_message(text):
     if not TOKEN or not CHAT_ID:
-        print("未設定 Telegram Token 或 Chat ID")
-        return
+        print("未設定 Telegram Token 或 Chat ID"); return
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
-    requests.post(url, json=payload)
+    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
+    try:
+        resp = requests.post(url, json=payload, timeout=15)
+        resp.raise_for_status()   # HTTP 4xx/5xx 自動拋出
+    except Exception as e:
+        print(f"[Telegram 發送失敗] {e}")   # 只 print，不再遞迴呼叫
 
 if __name__ == "__main__":
     try:
