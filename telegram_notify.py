@@ -98,7 +98,7 @@ if __name__ == "__main__":
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "qwen/qwen3-4b:free",  # 🎯 換成最新一代的 Qwen 3 免費版
+                    "model": "openai/gpt-oss-20b:free",  # 🎯 OpenAI 官方最新下放的免費版
                     "messages": [{"role": "user", "content": prompt}]
                 }
                 

@@ -587,7 +587,7 @@ with col_chart:
                                 
                                 # 🎯 1. 換成速度極快、不塞車的 Llama 3.3 大腦
                                 payload = {
-                                    "model": "qwen/qwen3-4b:free",  # 🎯 換成最新一代的 Qwen 3 免費版
+                                    "model": "openai/gpt-oss-20b:free",  # 🎯 OpenAI 官方最新下放的免費版
                                     "messages": [{"role": "user", "content": prompt}]
                                 }
                                 
