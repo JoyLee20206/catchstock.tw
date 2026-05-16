@@ -98,7 +98,7 @@ if __name__ == "__main__":
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "meta-llama/llama-3.3-70b-instruct:free", # 🎯 換成超穩定的免費 Llama 3.3 大腦
+                    "model": "qwen/qwen-2.5-7b-instruct:free",  # 🎯 換成 7B 版本，這個通道幾乎永遠暢通
                     "messages": [{"role": "user", "content": prompt}]
                 }
                 
