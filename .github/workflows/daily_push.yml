@@ -6,6 +6,10 @@ on:
     - cron: '30 7 * * 1-5'
   workflow_dispatch: # 允許你在 GitHub 網頁上手動點擊測試
 
+# ── [新增這一段] 消除 Node.js 20 警告 ────────────────────
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  
 jobs:
   build-and-notify:
     runs-on: ubuntu-latest
