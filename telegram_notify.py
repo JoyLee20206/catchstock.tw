@@ -100,7 +100,7 @@ if __name__ == "__main__":
                 """
                 # 新版的呼叫函數改成 client.models.generate_content
                 response = client.models.generate_content(
-                    model='gemini-1.5-flash',
+                    model='gemini-2.0-flash',
                     contents=prompt,
                 )
                 
