@@ -103,6 +103,7 @@ if __name__ == "__main__":
                 }
                 
                 resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=15)
+                resp.raise_for_status()   # ← 加這一行
                 resp_json = resp.json()
                 
                 # 安全解包
@@ -110,7 +111,7 @@ if __name__ == "__main__":
                     ai_text = resp_json['choices'][0]['message']['content'].strip()
                     ai_comment = (
                         f"🧠 <b>AI 虛擬分析師評語：</b>\n"
-                        f"<i>「{ai_text}」</i>\n"
+                        f"<i>「{html.escape(ai_text)}」</i>\n"
                         f"━━━━━━━━━━━━━━\n"
                     )
                 elif 'error' in resp_json:

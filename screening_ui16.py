@@ -94,6 +94,11 @@ def _load_twii_cached() -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_stock_history(sid: str, n_days: int = 200) -> pd.DataFrame:
+    """包一層 @st.cache_data，同一檔股票在同一次 session 只讀一次 parquet。"""
+    return get_stock_history(sid, n_days)
+
 @st.cache_data
 def get_ui_name_map() -> dict:
     files = sorted(CACHE_DIR.glob('info_*.parquet'))
@@ -379,7 +384,7 @@ with col_chart:
         
         # 🧠 修改處：新增第四個 AI 分頁
         tab1, tab2, tab3, tab4 = st.tabs(["📈 技術分析", "📊 籌碼/基本面", "🧠 AI 虛擬點評", "📝 交易筆記"])
-        hist_daily = get_stock_history(sid)
+        hist_daily = _cached_stock_history(sid)
 
         with tab1:
             tcol1, tcol2, tcol3 = st.columns([2, 1.5, 1])
@@ -583,6 +588,7 @@ with col_chart:
                                 }
                                 
                                 resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=20)
+                                resp.raise_for_status()   # ← 加這一行
                                 resp_json = resp.json()
                                 
                                 # 🛡️ 2. 鋼鐵防禦機制：有拿到 choices 才解包，沒拿到就印出真實錯誤

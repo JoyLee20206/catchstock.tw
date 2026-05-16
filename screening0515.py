@@ -986,10 +986,26 @@ def run_screening(
 if __name__ == '__main__':
     run_screening()
 
-def get_stock_history(stock_id):
-    """供 UI 繪圖：讀取 cache 中的 daily 資料"""
-    df = latest("daily", required=True)
-    df['date'] = pd.to_datetime(df['date'])
-    # 過濾出該股票並確保按日期排序
-    stock_data = df[df['stock_id'] == stock_id].sort_values('date')
-    return stock_data
+def get_stock_history(stock_id: str, n_days: int = 200) -> pd.DataFrame:
+    """
+    從 daily 快取讀取單一股票的 OHLCV 歷史，供 UI K 線圖使用。
+    使用 pyarrow filters 在讀取層就過濾，只載入該股資料，不讀整張表。
+    n_days=0 代表不限筆數，回傳全部歷史。
+    """
+    files = sorted(CACHE_DIR.glob('daily_*.parquet'))
+    if not files:
+        return pd.DataFrame()
+    try:
+        g = pd.read_parquet(
+            files[-1],
+            filters=[('stock_id', '==', str(stock_id))]  # ← pyarrow 層過濾
+        )
+        if g.empty:
+            return pd.DataFrame()
+        g['date'] = pd.to_datetime(g['date'])
+        g = g.sort_values('date').reset_index(drop=True)
+        if n_days and len(g) > n_days:
+            g = g.tail(n_days).reset_index(drop=True)
+        return g
+    except Exception:
+        return pd.DataFrame()
