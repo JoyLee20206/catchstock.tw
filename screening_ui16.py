@@ -252,7 +252,10 @@ def show_market_banner(meta: dict) -> None:
     state_txt = "🟢 多頭(站上季線)" if bullish else "🔴 空頭(跌破季線)"
     thr_txt   = f"過關門檻 {base}" if base == eff else f"過關門檻 {base} → **{eff}**"
     msg = f"{state_txt}  |  {thr_txt}  |  TWII {twii_now:,.0f} / MA60 {twii_ma:,.0f} | 近 20 日 {change:+.2f}%"
-    st.success(msg) if bullish else st.warning(msg)
+    if bullish:
+        st.success(msg)
+    else:
+        st.warning(msg)
 
 if run_clicked:
     with st.spinner("選股中..."):
