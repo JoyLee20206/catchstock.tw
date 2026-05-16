@@ -3,13 +3,17 @@ import json
 import requests
 import pandas as pd
 import tempfile
+import html
 from pathlib import Path
+import google.generativeai as genai
 from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS
 
 # 從環境變數讀取安全金鑰
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-# 設定記憶檔案的路徑 (存放在 cache 資料夾，GitHub Actions 會自動備份)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # 🧠 新增：讀取 Gemini 金鑰
+
+# 設定記憶檔案的路徑
 PREV_PICKS_FILE = "cache/previous_picks.json"
 
 def send_telegram_message(text):
@@ -40,19 +44,12 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"讀取歷史名單失敗，忽略比對：{e}")
 
-        # 1. 執行選股 ── 改前後只差這一段 ──────────────────────────
-        # 改前（會在 repo 根目錄產生廢檔）:
-        # df, _, meta = run_screening(pass_score=PASS_SCORE)
-
-        # 改後（輸出到暫存目錄，用完自動清除）:
+        # 1. 執行選股
         with tempfile.TemporaryDirectory() as tmpdir:
             df, _, meta = run_screening(pass_score=PASS_SCORE, output_dir=Path(tmpdir))
-        # ────────────────────────────────────────────────────────────
 
         # 2. 準備台北時區當前日期
         date_str = pd.Timestamp.now(tz="Asia/Taipei").strftime("%m/%d")
-        
-        
         
         # 3. 安全提取 meta 變數
         twii_now      = meta.get('twii_now', 0) if meta.get('twii_now') is not None else 0
@@ -73,20 +70,48 @@ if __name__ == "__main__":
             f"📐 乖離：{bias_icon}{twii_bias:+.2f}% (位階)\n"
             f"🌡️ 盤勢：<b>{market_status}</b>\n"
         )
-
         if score_note:
             header += f"❗ <b>{score_note}</b>\n"
-        
         header += "━━━━━━━━━━━━━━\n\n"
 
-        # 6. 組裝個股清單與自動標籤
+        # 🧠 6. 呼叫 Gemini AI 產生盤後點評 (取本日冠軍股)
+        ai_comment = ""
+        if df is not None and not df.empty and GEMINI_API_KEY:
+            try:
+                genai.configure(api_key=GEMINI_API_KEY)
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                
+                top_stock = df.iloc[0]
+                sid_top = str(top_stock['代號'])
+                name_top = top_stock['名稱']
+                score_top = top_stock['總分']
+                
+                # 判斷亮點
+                breakout_col = f"·{HIGH_BREAK_DAYS}日量價齊揚突破"
+                is_breakout = top_stock.get(breakout_col) == 1
+                is_sync = top_stock.get("★籌碼共振(大戶↑散戶↓)") == 1
+                
+                prompt = f"""
+                你是一位台灣股市的資深量化分析師。本日系統選股冠軍是 {sid_top} {name_top} (總分 {score_top}/10分)。
+                該股亮點包含：{"帶量突破," if is_breakout else ""}{"大戶增散戶減的籌碼共振," if is_sync else ""}動能強勁。
+                請用繁體中文寫一段約 60~80 字的盤後精闢點評，語氣要專業、客觀。
+                注意：請直接輸出純文字，絕對不要使用 Markdown 語法 (不要有星號或井號)。
+                """
+                response = model.generate_content(prompt)
+                ai_comment = (
+                    f"🧠 <b>Gemini 虛擬分析師評語：</b>\n"
+                    f"<i>「{response.text.strip()}」</i>\n"
+                    f"━━━━━━━━━━━━━━\n"
+                )
+            except Exception as e:
+                print(f"AI 生成失敗: {e}")
+
+        # 7. 組裝個股清單與自動標籤
         if df is None or len(df) == 0:
             content = "💡 目前盤勢較嚴峻，沒有股票達標。"
         else:
             content = f"🔥 <b>今日達標個股 (共 {len(df)} 檔)：</b>\n"
-
-        # 問題 2 的修改位置：把硬寫的欄位名換成動態的
-            breakout_col = f"·{HIGH_BREAK_DAYS}日量價齊揚突破"   # ← 新增這行            
+            breakout_col = f"·{HIGH_BREAK_DAYS}日量價齊揚突破"
             for _, row in df.head(15).iterrows():
                 sid_str = str(row['代號'])
                 score_icon = "🔥" if row['總分'] >= 9 else "•"
@@ -110,22 +135,19 @@ if __name__ == "__main__":
             if len(df) > 15:
                 content += f"\n<i>...等其餘 {len(df)-15} 檔請至網頁查看完整分析</i>"
                 
-        # 💡 修正 1：完全退到 if/else 外面，確保每天都顯示網址！
         content += f"\n\n🌐 <b><a href='https://catchstocktw.streamlit.app/'>開啟我的全自動選股儀表板</a></b>"
                 
-        # 7. 合體並發送最終戰報
-        send_telegram_message(header + content)
+        # 8. 合體並發送最終戰報 (加入 ai_comment)
+        send_telegram_message(header + ai_comment + content)
         print(f"推播成功！今日共 {len(df) if df is not None else 0} 檔達標。")
 
-        # 8. 儲存今天的名單，供明天比對使用
+        # 9. 儲存今天的名單
         current_sids = df['代號'].astype(str).tolist() if (df is not None and not df.empty) else []
         os.makedirs("cache", exist_ok=True)
         with open(PREV_PICKS_FILE, "w", encoding="utf-8") as f:
             json.dump(current_sids, f, ensure_ascii=False)
 
     except Exception as e:
-        import html # 引入 html 模組處理跳脫字元
-        # 💡 修正 2：使用 html.escape 把危險符號安全轉換，避免推播被 Telegram 擋掉
         safe_error = html.escape(str(e))
         error_msg = f"❌ <b>選股機器人罷工求救！</b>\n\n系統發生致命錯誤，請至 GitHub 檢查：\n<code>{safe_error}</code>"
         send_telegram_message(error_msg)

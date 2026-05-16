@@ -8,3 +8,4 @@ beautifulsoup4>=4.12
 xlwt
 streamlit>=1.30
 plotly
+google-generativeai
