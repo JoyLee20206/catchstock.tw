@@ -129,6 +129,41 @@ else:
     else:
         st.error(f"📅 cache 最新日期: {_date_str}({_age} 天前) ⚠ 過舊，請先更新")
 
+
+    # ── [新增] 雲端資料更新系統 ──
+    st.divider()
+    st.subheader("🔄 資料更新")
+    st.caption("雲端環境專用：點擊後從網路抓取最新台股資料。")
+
+    # [關鍵修正 1] 接收重整後的成功狀態，並在這裡顯示提示！
+    if st.session_state.get('show_update_success'):
+        st.toast("✅ 雲端資料檢查/更新完成！", icon="🎉")
+        st.session_state.show_update_success = False
+
+    if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True):
+        st.toast("⏳ 系統已收到請求，開始比對資料...", icon="🤖") 
+        with st.spinner("正在執行資料更新... (若轉圈超過 2 分鐘，可能是主機記憶體不足崩潰)"):
+            try:
+                import subprocess
+                import sys
+                
+                result = subprocess.run(
+                    [sys.executable, "fetch_cache.py"], 
+                    capture_output=True, text=True, check=True
+                )
+                
+                st.cache_data.clear()
+                
+                # [關鍵修正 2] 把成功狀態存起來，讓它在 rerun 之後才觸發顯示
+                st.session_state.show_update_success = True
+                st.rerun()
+                
+            except subprocess.CalledProcessError as e:
+                st.error("❌ 雲端腳本執行失敗！")
+                st.code(e.stderr)
+            except Exception as e:
+                st.error(f"❌ 發生未知的錯誤：{e}")
+
 # ── Session state 初始化 (Fix #11: 各 key 獨立初始化，不包在一個 if 裡) ──
 DEFAULTS = {
     'pass_score':       PASS_SCORE,
@@ -250,36 +285,6 @@ with st.sidebar:
                 save_watchlist(st.session_state.watchlist)
                 st.rerun()
 
-    # ── [新增] 雲端資料更新系統 (請確認這裡剛好退回 4 個空格) ──
-    st.divider()
-    st.subheader("🔄 資料更新")
-    st.caption("雲端環境專用：點擊後從網路抓取最新台股資料。")
-    
-    if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True):
-        st.toast("⏳ 系統已收到請求，開始呼叫爬蟲...", icon="🤖") 
-        with st.spinner("正在比對與下載最新資料..."):
-            try:
-                import subprocess
-                import sys
-                import time
-                
-                # [修正] 拿掉 "--force"，讓程式只做「增量更新」，減輕雲端記憶體負擔
-                result = subprocess.run(
-                    [sys.executable, "fetch_cache.py"], 
-                    capture_output=True, text=True, check=True
-                )
-                
-                st.cache_data.clear()
-                st.toast("✅ 雲端資料檢查/更新完成！", icon="🎉")
-                time.sleep(2)
-                st.rerun()
-                
-            except subprocess.CalledProcessError as e:
-                st.error("❌ 雲端腳本執行失敗！")
-                st.write("這通常是因為雲端記憶體不足被中斷。錯誤日誌如下：")
-                st.code(e.stderr)
-            except Exception as e:
-                st.error(f"❌ 發生未知的錯誤：{e}")
                
 # ── 大盤狀態橫幅 ───────────────────────────────────────────────────────────
 def show_market_banner(meta: dict) -> None:
