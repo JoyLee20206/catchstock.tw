@@ -448,10 +448,19 @@ with col_chart:
                     height=850, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10),
                     hovermode='x unified', showlegend=False, barmode='group' # 啟用並列柱狀圖模式
                 )
-                fig.update_xaxes(gridcolor=grid_color, rangebreaks=[dict(values=missing_dates)], type="date")
-                fig.update_xaxes(rangeselector=dict(buttons=[dict(count=30, label="1月", step="day", stepmode="backward"), dict(count=90, label="3月", step="day", stepmode="backward"), dict(count=180, label="半年", step="day", stepmode="backward"), dict(step="all", label="全部")]), bgcolor='#333' if theme_choice == "深色" else '#EEE', row=1, col=1)
-                fig.update_yaxes(gridcolor=grid_color, side='right')
-                fig.update_yaxes(fixedrange=False, row=1, col=1)
+                # 修正：將 bgcolor 放入 rangeselector 的 dict() 內部
+                fig.update_xaxes(
+                    rangeselector=dict(
+                        buttons=[
+                            dict(count=30, label="1月", step="day", stepmode="backward"), 
+                            dict(count=90, label="3月", step="day", stepmode="backward"), 
+                            dict(count=180, label="半年", step="day", stepmode="backward"), 
+                            dict(step="all", label="全部")
+                        ],
+                        bgcolor='#333' if theme_choice == "深色" else '#EEE'
+                    ), 
+                    row=1, col=1
+                )
 
                 config = {'modeBarButtonsToAdd': ['drawline', 'drawopenpath', 'drawrect', 'eraseshape'], 'displayModeBar': True, 'displaylogo': False, 'scrollZoom': True}
                 st.plotly_chart(fig, use_container_width=True, config=config)
