@@ -376,4 +376,4 @@ with col_list:
 # ── K 線與技術圖表區 ────────────────────────────────────────────────────────
 with col_chart:
     if not st.session_state.target_sid:
-        st.info("👈 請點擊左側列表或自選股
+        st.info("👈 請點擊左側列表或自選股，開始量化決策分析。")
