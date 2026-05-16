@@ -37,6 +37,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}    # 👈 新增這行！
         run: python telegram_notify.py
 
       - name: 自動將快取存回 GitHub (自動更新網頁版)
