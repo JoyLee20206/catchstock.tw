@@ -116,7 +116,8 @@ _cache_date = _get_cache_max_date()
 if _cache_date is None:
     st.error("⚠ 找不到 daily 快取，請先執行 `python fetch_cache.py` 拉資料")
 else:
-    _today    = pd.Timestamp.now().normalize()
+    # [優化] 強制使用台北時區計算「今天」，避免雲端主機的 UTC 時差造成天數誤判
+    _today    = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
     _age      = (_today - _cache_date.normalize()).days
     _date_str = _cache_date.strftime('%Y-%m-%d')
     if _age == 0:
@@ -255,29 +256,29 @@ with st.sidebar:
     st.caption("雲端環境專用：點擊後從網路抓取最新台股資料。")
     
 # ── 側邊欄更新按鈕的正確完整邏輯 ──
-    if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True):
-        with st.spinner("正在下載最新資料..."):
+if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True):
+        with st.spinner("正在下載最新資料... (約需 1~2 分鐘)"):
             try:
                 import subprocess
                 import sys
+                import time
                 
-                # 執行爬蟲
+                # [優化] 加入 "--force" 參數，強迫 fetch_cache.py 覆蓋舊資料，不略過
                 result = subprocess.run(
-                    [sys.executable, "fetch_cache.py"], 
+                    [sys.executable, "fetch_cache.py", "--force"], 
                     capture_output=True, text=True, check=True
                 )
                 
-                # 💡 關鍵：必須先清空所有記憶體快取
                 st.cache_data.clear()
                 
-                st.success("✅ 資料更新完成！")
-                
-                # 💡 關鍵：強制網頁重新整理，才會重新觸發頂部的日期偵測
+                # [優化] 改用 toast 彈出提示，並延遲 2 秒再重整，讓你絕對看得到成功訊息
+                st.toast("✅ 雲端資料更新完成！", icon="🎉")
+                time.sleep(2)
                 st.rerun()
                 
             except subprocess.CalledProcessError as e:
                 st.error("❌ 雲端腳本執行失敗，詳細錯誤如下：")
-                st.code(e.stderr) # 這行會把錯誤印在網頁上
+                st.code(e.stderr)
 
 # ── 大盤狀態橫幅 ───────────────────────────────────────────────────────────
 def show_market_banner(meta: dict) -> None:
