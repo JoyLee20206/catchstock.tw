@@ -1,11 +1,14 @@
 import os
+import json
 import requests
-import pandas as pd  # ✅ 已補上：確保 pd.Timestamp 與時間序列處理正常
+import pandas as pd
 from screening0515 import run_screening, PASS_SCORE
 
 # 從環境變數讀取安全金鑰
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# 設定記憶檔案的路徑 (存放在 cache 資料夾，GitHub Actions 會自動備份)
+PREV_PICKS_FILE = "cache/previous_picks.json"
 
 def send_telegram_message(text):
     """透過 Telegram Bot API 發送 HTML 格式訊息"""
@@ -26,13 +29,22 @@ def send_telegram_message(text):
 
 if __name__ == "__main__":
     try:
+        # 0. 讀取昨天的過關名單 (賦予程式記憶力)
+        previous_sids = set()
+        if os.path.exists(PREV_PICKS_FILE):
+            try:
+                with open(PREV_PICKS_FILE, "r", encoding="utf-8") as f:
+                    previous_sids = set(json.load(f))
+            except Exception as e:
+                print(f"讀取歷史名單失敗，忽略比對：{e}")
+
         # 1. 執行選股，同時取得大盤 meta 數據
         df, _, meta = run_screening(pass_score=PASS_SCORE)
 
         # 2. 準備台北時區當前日期 (顯示於標題)
         date_str = pd.Timestamp.now(tz="Asia/Taipei").strftime("%m/%d")
         
-        # 3. 安全提取 meta 變數 (防範大盤抓取失敗時的 NameError/KeyError)
+        # 3. 安全提取 meta 變數
         twii_now      = meta.get('twii_now', 0) if meta.get('twii_now') is not None else 0
         twii_pct      = meta.get('twii_pct', 0.0) if meta.get('twii_pct') is not None else 0.0
         twii_bias     = meta.get('twii_bias', 0.0) if meta.get('twii_bias') is not None else 0.0
@@ -52,47 +64,56 @@ if __name__ == "__main__":
             f"🌡️ 盤勢：<b>{market_status}</b>\n"
         )
 
-        # ❗ 只有在市場環境改變、門檻變動時才動態插入警示文字 (減少平時的干擾)
         if score_note:
             header += f"❗ <b>{score_note}</b>\n"
         
         header += "━━━━━━━━━━━━━━\n\n"
 
-        # 6. 組裝個股清單與即時亮點標籤
+        # 6. 組裝個股清單與自動標籤
         if df is None or len(df) == 0:
             content = "💡 目前盤勢較嚴峻，沒有股票達標。"
         else:
             content = f"🔥 <b>今日達標個股 (共 {len(df)} 檔)：</b>\n"
             
-            # 取前 15 檔發送，精確比對對應 screening0515.py 的欄位名稱
             for _, row in df.head(15).iterrows():
+                sid_str = str(row['代號'])
                 score_icon = "🔥" if row['總分'] >= 9 else "•"
                 
-                # 🏷️ 自動組裝籌碼與法人雙亮點標籤
+                # 🏷️ 自動組裝亮點標籤
                 tags = ""
-                if row.get('★籌碼共振(大戶↑散戶↓)') == 1:
-                    tags += " <code>[★共振]</code>"
-                if row.get('投信+外資雙買') == 1:  # ✅ 已對齊 screening0515.py 的欄位名
-                    tags += " <code>[雙買]</code>"
+                # 判斷是否為新進榜 (前提是 previous_sids 不是空的，避免第一次執行全部都標新進)
+                if sid_str not in previous_sids and len(previous_sids) > 0:
+                    tags += " <code>[新進]</code>"
                 
-                content += f"{score_icon} <code>{row['代號']}</code> {row['名稱']} ({row['總分']}分){tags}\n"
+                # 動能突破標籤
+                if row.get('·60日量價齊揚突破') == 1:
+                    tags += " <code>[突破]</code>"
+                
+                # 把單純的 <code> 換成帶有 Yahoo 股市連結的 <a> 標籤
+                content += f"{score_icon} <a href='https://tw.stock.yahoo.com/quote/{sid_str}'>{sid_str}</a> {row['名稱']} ({row['總分']}分){tags}\n"
             
-            # 📊 自動統計並顯示今日最具備群聚效應的主流產業
+            # 📊 自動統計並顯示今日主流產業
             if '產業' in df.columns and len(df) > 0:
                 valid_industries = df['產業'].dropna()
-                valid_industries = valid_industries[valid_industries != ""] # 排除空白未分類
+                valid_industries = valid_industries[valid_industries != ""] 
                 if not valid_industries.empty:
                     top_industry = valid_industries.value_counts().idxmax()
                     top_count = valid_industries.value_counts().max()
                     content += f"\n📊 <b>今日主流群聚：</b> {top_industry} ({top_count}檔)\n"
                 
-            # 檔數過多時的精緻化結尾提示
             if len(df) > 15:
                 content += f"\n<i>...等其餘 {len(df)-15} 檔請至網頁查看完整分析</i>"
-
+                content += f"\n🌐 <b><a href='YOUR_STREAMLIT_URL'>開啟我的全自動選股儀表板</a></b>"
+                
         # 7. 合體並發送最終戰報
         send_telegram_message(header + content)
         print(f"推播成功！今日共 {len(df) if df is not None else 0} 檔達標。")
+
+        # 8. 儲存今天的名單，供明天比對使用
+        current_sids = df['代號'].astype(str).tolist() if (df is not None and not df.empty) else []
+        os.makedirs("cache", exist_ok=True)
+        with open(PREV_PICKS_FILE, "w", encoding="utf-8") as f:
+            json.dump(current_sids, f, ensure_ascii=False)
 
     except Exception as e:
         print(f"❌ 選股推播發生致命錯誤：{e}")
