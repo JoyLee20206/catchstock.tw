@@ -26,8 +26,9 @@ from screening0515 import (
     CACHE_DIR,
 )
 
-# ── 自選股持久化 ───────────────────────────────────────────────────────────
+# ── 自選股與交易筆記持久化 ────────────────────────────────────────────────
 WATCHLIST_FILE = "watchlist.json"
+NOTES_FILE = "notes.json"
 
 def load_watchlist() -> list:
     if Path(WATCHLIST_FILE).exists():
@@ -38,9 +39,6 @@ def load_watchlist() -> list:
 def save_watchlist(wl: list) -> None:
     with open(WATCHLIST_FILE, 'w', encoding='utf-8') as f:
         json.dump(wl, f, ensure_ascii=False, indent=2)
-
-# ── 交易筆記持久化 (🔥 修正版：避免 Widget Cleanup 刪除機制) ───────────────────
-NOTES_FILE = "notes.json"
 
 def load_notes() -> dict:
     if Path(NOTES_FILE).exists():
@@ -63,7 +61,7 @@ def _note_on_change_cb(sid: str) -> None:
     st.session_state.trading_notes[sid] = val
     save_note(sid, val)
 
-# ── [新增] 法人資料讀取器 (供技術圖表渲染副圖) ──────────────────────────────────
+# ── 資料快取讀取 ───────────────────────────────────────────────────────────
 @st.cache_data(ttl=60, show_spinner=False)
 def get_stock_institutional(stock_id: str) -> pd.DataFrame:
     """讀取最新的三大法人快取並過濾指定標的"""
@@ -79,7 +77,6 @@ def get_stock_institutional(stock_id: str) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-# ── 大盤 RS 快取 ───────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_twii_cached() -> pd.DataFrame:
     try:
@@ -92,24 +89,34 @@ def _load_twii_cached() -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-# ── 頁面設定 ───────────────────────────────────────────────────────────────
+@st.cache_data
+def get_ui_name_map() -> dict:
+    files = sorted(CACHE_DIR.glob('info_*.parquet'))
+    if not files:
+        return {}
+    try:
+        df_info = pd.read_parquet(files[-1])
+        df_info = df_info.drop_duplicates(subset='stock_id', keep='last')
+        return df_info.set_index('stock_id')['stock_name'].astype(str).to_dict()
+    except Exception:
+        return {}
+
+ui_name_map = get_ui_name_map()
+
+# ── 頁面設定與快取狀態橫幅 ──────────────────────────────────────────────────
 st.set_page_config(page_title="台股選股", page_icon="📊", layout="wide")
 st.title("📊 台股選股工具")
 st.caption("拖滑桿調參數 → 按開始選股 → 結果可下載匯入 嘉實 / 精誠。")
 
-# ── Cache 新鮮度警示 & 雲端更新 ─────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def _get_cache_max_date():
     files = sorted(CACHE_DIR.glob('daily_*.parquet'))
-    if not files:
-        return None
+    if not files: return None
     try:
         df = pd.read_parquet(files[-1], columns=['date'])
-    except Exception:
-        return None
-    if df.empty:
-        return None
-    return pd.to_datetime(df['date']).max()
+        if df.empty: return None
+        return pd.to_datetime(df['date']).max()
+    except Exception: return None
 
 _cache_date = _get_cache_max_date()
 if _cache_date is None:
@@ -118,19 +125,18 @@ else:
     _today      = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
     _age        = (_today - _cache_date.normalize()).days
     _date_str   = _cache_date.strftime('%Y-%m-%d')
-    _is_weekend = _today.weekday() >= 5  # 5代表星期六，6代表星期日
+    _is_weekend = _today.weekday() >= 5  # 5=週六, 6=週日
 
     if _age == 0:
         st.success(f"📅 cache 最新日期: {_date_str} (今天)")
     elif _is_weekend and _age <= 2:
-        # 如果今天是週末，且資料是 1~2 天前（通常是週五），直接顯示為綠色的最新狀態
         st.success(f"📅 cache 最新日期: {_date_str} (週末未開盤，此已為最新交易日)")
     elif _age <= 5:
-        # 平日時，如果資料是幾天前，補上國定假日的提示
         st.info(f"📅 cache 最新日期: {_date_str} ({_age} 天前 - 註：若遇國定假日未開盤，此即為最新資料)")
     else:
         st.error(f"📅 cache 最新日期: {_date_str} ({_age} 天前) ⚠ 過舊，請先更新")
 
+    # 雲端更新按鈕區塊
     st.divider()
     st.subheader("🔄 資料更新")
     st.caption("雲端環境專用：點擊後從網路抓取最新台股資料。")
@@ -155,29 +161,29 @@ else:
             except Exception as e:
                 st.error(f"❌ 發生未知的錯誤：{e}")
 
-        # ── [新增] 策略邏輯導覽 (FAQ) ───────────────────────────────────────────────
-        with st.expander("💡 策略邏輯導覽 (FAQ) — 核心量化規則說明", expanded=False):
-            st.markdown("""
-            ### 📌 1. 為什麼設定「最少買超日為 5 天」，但有些股票沒有連續買超也進榜？
-            * **核心邏輯**：本系統的法人買超天數計算的是**「累計天數」**，而非「嚴格連續天數」。
-                * **量化原理**：若「觀察天數」設為 7 天、「最少買超日」設為 5 天。代表只要這 7 天內有任何 5 天外資或投信站在買方（且區間總淨額為正），條件即成立。
-            * **實戰優勢**：這能有效包容法人在吃貨過程中「進三退一」的洗盤或微調動作。如果要求嚴格連續，往往會因為單日盤中調節而錯失真正的主力波段飆股！
+# ── 策略邏輯導覽 (FAQ) ─────────────────────────────────────────────────────
+with st.expander("💡 策略邏輯導覽 (FAQ) — 核心量化規則說明", expanded=False):
+    st.markdown("""
+    ### 📌 1. 為什麼設定「最少買超日為 5 天」，但有些股票沒有連續買超也進榜？
+    * **核心邏輯**：本系統的法人買超天數計算的是**「累計天數」**，而非「嚴格連續天數」。
+    * **量化原理**：若「觀察天數」設為 7 天、「最少買超日」設為 5 天。代表只要這 7 天內有任何 5 天外資或投信站在買方（且區間總淨額為正），條件即成立。
+    * **實戰優勢**：這能有效包容法人在吃貨過程中「進三退一」的洗盤或微調動作。如果要求嚴格連續，往往會因為單日盤中調節而錯失真正的主力波段飆股！
 
-            ### 📌 2. 為什麼有時候選股的過關門檻（PASS_SCORE）會自動變動？
-            * **動態防禦機制**：系統會自動監控台股加權指數（^TWII）與季線（MA60）的相對位置：
-                * 🟢 **多頭環境**：大盤站上季線時，維持你設定的原始門檻（例如預設 7 分）。
-                * 🔴 **空頭環境**：大盤跌破季線時，系統會**自動將過關門檻 +1 分**（從嚴審查）。幫你過濾掉逆勢抗跌但大盤崩盤時可能補跌的弱勢股。
-                * 🟡 **異常補償**：若因網路問題導致大盤資料抓取失敗，系統會**自動 -1 分**，補償個股因缺少大盤對照而無法取得的 RS 分數。
+    ### 📌 2. 為什麼有時候選股的過關門檻（PASS_SCORE）會自動變動？
+    * **動態防禦機制**：系統會自動監控台股加權指數（^TWII）與季線（MA60）的相對位置：
+        * 🟢 **多頭環境**：大盤站上季線時，維持你設定的原始門檻（例如預設 7 分）。
+        * 🔴 **空頭環境**：大盤跌破季線時，系統會**自動將過關門檻 +1 分**（從嚴審查）。幫你過濾掉逆勢抗跌但大盤崩盤時可能補跌的弱勢股。
+        * 🟡 **異常補償**：若因網路問題導致大盤資料抓取失敗，系統會**自動 -1 分**，補償個股因缺少大盤對照而無法取得的 RS 分數。
 
-            ### 📌 3. 為什麼週末或連假點擊「抓取最新資料」後，最新日期沒有變成今天？
-            * **休市事實**：台股在週末與國定假日是不開盤的。
-            * **智能優化**：系統下載的是最新的官方還原歷史數據。如果今天是週六或週日，最新交易日停留在「本週五」是完全正確且最新的狀態。畫面的警示橫幅此時會智能轉為綠色，提示你「週末未開盤，此已為最新交易日」，不需重複抓取。
+    ### 📌 3. 為什麼週末或連假點擊「抓取最新資料」後，最新日期沒有變成今天？
+    * **休市事實**：台股在週末與國定假日是不開盤的。
+    * **智能優化**：系統下載的是最新的官方還原歷史數據。如果今天是週六或週日，最新交易日停留在「本週五」是完全正確且最新的狀態。畫面的警示橫幅此時會智能轉為綠色，提示你「週末未開盤，此已為最新交易日」，不需重複抓取。
 
-            ### 📌 4. 什麼是「★籌碼共振」？它會額外加分嗎？
-            * **定義**：當某一檔股票在同一個週期內，同時觸發 **「400張大戶持股比例上升（主力吃貨）」** 且 **「1~15張散戶持股比例下降（籌碼沉澱）」**，即達成籌碼共振（大戶↑散戶↓）。
-            * **計分規則**：大戶與散戶指標各自獨立計 1 分（同時成立自然累積 2 分），共振本身**不會再額外加分**。
-            * **排序優勢**：雖然不加分，但「籌碼共振」是本系統**最高優先級的排序基準**！只要總分相同，共振旗標成立（✅）的股票會優先排在表格的最上方，方便你第一時間鎖定主力錮散戶的精選標的。
-            """)
+    ### 📌 4. 什麼是「★籌碼共振」？它會額外加分嗎？
+    * **定義**：當某一檔股票在同一個週期內，同時觸發 **「400張大戶持股比例上升（主力吃貨）」** 且 **「1~15張散戶持股比例下降（籌碼沉澱）」**，即達成籌碼共振（大戶↑散戶↓）。
+    * **計分規則**：大戶與散戶指標各自獨立計 1 分（同時成立自然累積 2 分），共振本身**不會再額外加分**。
+    * **排序優勢**：雖然不加分，但「籌碼共振」是本系統**最高優先級的排序基準**！只要總分相同，共振旗標成立（✅）的股票會優先排在表格的最上方，方便你第一時間鎖定主力錮散戶的精選標的。
+    """)
 
 # ── Session state 初始化 ────────────────────────────────────────────────────
 DEFAULTS = {
@@ -186,37 +192,16 @@ DEFAULTS = {
     'kd_high_cap_now': KD_HIGH_CAP_NOW, 'min_avg_vol_lots': MIN_AVG_VOL_LOTS, 'atr_max_pct': ATR_MAX_PCT,
 }
 for k, v in DEFAULTS.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+    if k not in st.session_state: st.session_state[k] = v
 
 _state_defaults = {
     'result_df': None, 'result_files': {}, 'result_meta': None, 'target_sid': None, 'last_df_selection': [],
 }
 for k, v in _state_defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+    if k not in st.session_state: st.session_state[k] = v
 
-# 🔥 核心修正：將筆記載入獨立字典，不受 Widget 銷毀影響
-if 'trading_notes' not in st.session_state:
-    st.session_state.trading_notes = load_notes()
-
-if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = load_watchlist()
-
-# ── 全域股名對照表 ─────────────────────────────────────────────────────────
-@st.cache_data
-def get_ui_name_map() -> dict:
-    files = sorted(CACHE_DIR.glob('info_*.parquet'))
-    if not files:
-        return {}
-    try:
-        df_info = pd.read_parquet(files[-1])
-        df_info = df_info.drop_duplicates(subset='stock_id', keep='last')
-        return df_info.set_index('stock_id')['stock_name'].astype(str).to_dict()
-    except Exception:
-        return {}
-
-ui_name_map = get_ui_name_map()
+if 'trading_notes' not in st.session_state: st.session_state.trading_notes = load_notes()
+if 'watchlist' not in st.session_state: st.session_state.watchlist = load_watchlist()
 
 def apply_preset(name: str) -> None:
     for k, v in DEFAULTS.items(): st.session_state[k] = v
@@ -233,7 +218,7 @@ with st.sidebar:
     st.button("空頭嚴格", on_click=apply_preset, args=('bear',),      use_container_width=True)
     st.button("KD 起漲",  on_click=apply_preset, args=('kd_start',),  use_container_width=True)
 
-st.divider()
+    st.divider()
     st.subheader("📌 核心 / KD")
     st.slider(labeled("過關門檻 PASS_SCORE", 'pass_score'), 1, 10, key='pass_score',
               help="滿分 10 分，達標才算入榜。\n\n計分包含：法人買超、大戶增散戶減、資減券增、技術突破、KD金叉、營收成長與大盤相對強弱。\n\n💡 系統會智能判斷：若大盤破季線會自動 +1 分（空頭從嚴）。")
@@ -277,7 +262,7 @@ st.divider()
                 save_watchlist(st.session_state.watchlist)
                 st.rerun()
 
-# ── 大盤狀態橫幅 ───────────────────────────────────────────────────────────
+# ── 大盤狀態與選股執行 ─────────────────────────────────────────────────────
 def show_market_banner(meta: dict) -> None:
     if not meta: return
     base = meta.get('base_pass_score')
@@ -313,6 +298,7 @@ if run_clicked:
         st.session_state.result_meta = meta
     st.success("✅ 完成，看下方結果")
 
+# ── 結果顯示區 ─────────────────────────────────────────────────────────────
 df = st.session_state.result_df
 files_bytes = st.session_state.result_files or {}
 meta = st.session_state.result_meta
@@ -355,7 +341,7 @@ with col_list:
             st.session_state.last_df_selection = current_sel
             if current_sel: st.session_state.target_sid = str(filtered.iloc[current_sel[0]]['代號'])
 
-# ── K 線圖區 ───────────────────────────────────────────────────────────────
+# ── K 線與技術圖表區 ────────────────────────────────────────────────────────
 with col_chart:
     if not st.session_state.target_sid:
         st.info("👈 請點擊左側列表或自選股，開始量化決策分析。")
@@ -396,14 +382,13 @@ with col_chart:
                 else:
                     hist = hist_daily.rename(columns={high_col: 'max', low_col: 'min'}).copy()
 
-                # ── [整合] 讀取並排列法人買賣超數據 ──
+                # 法人買賣超數據整合
                 inst_stock = get_stock_institutional(sid)
                 if not inst_stock.empty:
                     inst_stock['net_lots'] = (inst_stock['buy'] - inst_stock['sell']) / 1000.0
                     inst_pivot = inst_stock.pivot_table(index='date', columns='name', values='net_lots', aggfunc='sum').reset_index()
                     for c in ['Foreign_Investor', 'Investment_Trust']:
                         if c not in inst_pivot.columns: inst_pivot[c] = 0.0
-                    
                     if timeframe == "週K":
                         inst_pivot = inst_pivot.set_index('date').resample('W-FRI').sum().reset_index()
                     else:
@@ -442,7 +427,7 @@ with col_chart:
                 m2.metric("日成交量", f"{hist_daily[vol_col].iloc[-1]/1000:,.0f} 張")
                 m3.metric("選股總分", f"{row_data['總分']} 分" if row_data is not None else "未入選")
 
-                # 🎨 大改版：由 3 層擴展為 4 層子圖 (技術/成交量/法人/KD)
+                # 4 層子圖 (技術/成交量/法人/KD)
                 fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.42, 0.12, 0.18, 0.28])
 
                 fig.add_trace(go.Candlestick(x=hist['date'], open=hist['open'], high=hist['max'], low=hist['min'], close=hist['close'], name='K線', increasing_fillcolor='red', increasing_line_color='red', decreasing_fillcolor='green', decreasing_line_color='green'), row=1, col=1)
@@ -458,7 +443,7 @@ with col_chart:
                 if len(hist) > 60:
                     fig.add_hline(y=hist['max'].iloc[-61:-1].max(), line_dash="dot", line_color="orange", annotation_text="60日壓", annotation_position="top left", row=1, col=1)
                 
-                # 新股防護：MA20 NaN 防摔
+                # 新股防護：MA20 NaN 防呆
                 ma20_last = hist['MA20'].iloc[-1]
                 defense_y = hist['min'].tail(10).min() if pd.isna(ma20_last) else max(ma20_last * 0.98, hist['min'].tail(10).min())
                 fig.add_hline(y=defense_y, line_dash="dash", line_color="red", annotation_text="🚨 防守", annotation_position="bottom right", row=1, col=1)
@@ -470,7 +455,7 @@ with col_chart:
                 vol_colors = ['red' if c >= o else 'green' for c, o in zip(hist['close'], hist['open'])]
                 fig.add_trace(go.Bar(x=hist['date'], y=hist[vol_col], marker_color=vol_colors, name='成交量'), row=2, col=1)
 
-                # 🔥 第三層：[新增] 法人買賣超柱狀圖 (barmode='group' 並列顯示)
+                # 第三層：法人買賣超柱狀圖
                 fig.add_trace(go.Bar(x=hist['date'], y=hist['Investment_Trust'], marker_color='#FF4B4B', name='投信(張)'), row=3, col=1)
                 fig.add_trace(go.Bar(x=hist['date'], y=hist['Foreign_Investor'], marker_color='#FACA44', name='外資(張)'), row=3, col=1)
 
@@ -486,9 +471,11 @@ with col_chart:
                 fig.update_layout(
                     template=chart_theme, paper_bgcolor=bg_color, plot_bgcolor=bg_color,
                     height=850, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10),
-                    hovermode='x unified', showlegend=False, barmode='group' # 啟用並列柱狀圖模式
+                    hovermode='x unified', showlegend=False, barmode='group' 
                 )
-                # 修正：將 bgcolor 放入 rangeselector 的 dict() 內部
+                fig.update_xaxes(gridcolor=grid_color, rangebreaks=[dict(values=missing_dates)], type="date")
+                
+                # Plotly rangeselector dict 修正
                 fig.update_xaxes(
                     rangeselector=dict(
                         buttons=[
@@ -501,6 +488,9 @@ with col_chart:
                     ), 
                     row=1, col=1
                 )
+                
+                fig.update_yaxes(gridcolor=grid_color, side='right')
+                fig.update_yaxes(fixedrange=False, row=1, col=1)
 
                 config = {'modeBarButtonsToAdd': ['drawline', 'drawopenpath', 'drawrect', 'eraseshape'], 'displayModeBar': True, 'displaylogo': False, 'scrollZoom': True}
                 st.plotly_chart(fig, use_container_width=True, config=config)
@@ -518,7 +508,6 @@ with col_chart:
             st.subheader("📝 交易筆記")
             st.caption("內容自動儲存，切換股票或刷新頁面後皆不會遺失。")
             
-            # 🔥 核心優化：直接將 sid 綁入 on_change 參數，保證隔離不遺失
             st.text_area(
                 f"紀錄對 {sid} {sname} 的看法…",
                 value=st.session_state.trading_notes.get(sid, ""),
@@ -528,7 +517,6 @@ with col_chart:
                 height=180,
             )
             
-            # 📥 [新增] 筆記備份下載系統
             st.divider()
             st.subheader("💾 筆記資料庫管理")
             notes_json_str = json.dumps(st.session_state.trading_notes, ensure_ascii=False, indent=2)
