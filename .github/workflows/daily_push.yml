@@ -17,6 +17,7 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+          cache: 'pip'  # 👈 只要加上這行，GitHub 就會自動幫你快取套件了！
 
       - name: 安裝套件
         run: pip install -r requirements.txt
