@@ -587,7 +587,7 @@ with col_chart:
                                 
                                 # 🎯 1. 換成速度極快、不塞車的 Llama 3.3 大腦
                                 payload = {
-                                    "model": "meta-llama/llama-3.3-70b-instruct:free",
+                                    "model": "qwen/qwen-2.5-72b-instruct:free", # 🎯 換成這台目前極度穩定的 Qwen 巨獸
                                     "messages": [{"role": "user", "content": prompt}]
                                 }
                                 
