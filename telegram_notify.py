@@ -103,7 +103,8 @@ if __name__ == "__main__":
                 
             if len(df) > 15:
                 content += f"\n<i>...等其餘 {len(df)-15} 檔請至網頁查看完整分析</i>"
-                content += f"\n🌐 <b><a href='YOUR_STREAMLIT_URL'>開啟我的全自動選股儀表板</a></b>"
+            # 💡 往左退一格，讓它脫離 if 的控制，每次都顯示！順便多加一個 \n 讓排版不要太擠
+            content += f"\n\n🌐 <b><a href='YOUR_STREAMLIT_URL'>開啟我的全自動選股儀表板</a></b>"
                 
         # 7. 合體並發送最終戰報
         send_telegram_message(header + content)
