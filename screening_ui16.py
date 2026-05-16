@@ -16,8 +16,6 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from google import genai  # 🧠 新增：導入最新版 Gemini 套件
-
 from screening0515 import (
     run_screening,
     get_stock_history,          
@@ -28,13 +26,6 @@ from screening0515 import (
     MIN_AVG_VOL_LOTS, ATR_MAX_PCT,
     CACHE_DIR,
 )
-
-# 🧠 新增：連線到系統保險箱讀取 Gemini 金鑰 (使用最新寫法)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    ai_client = genai.Client(api_key=GEMINI_API_KEY)
-else:
-    ai_client = None
 
 # ── 自選股與交易筆記持久化 ────────────────────────────────────────────────
 # 🐛 已修正：路徑改為 cache 資料夾，確保網頁與 Telegram 小助理資料完全同步！
