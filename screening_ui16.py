@@ -155,6 +155,30 @@ else:
             except Exception as e:
                 st.error(f"❌ 發生未知的錯誤：{e}")
 
+        # ── [新增] 策略邏輯導覽 (FAQ) ───────────────────────────────────────────────
+        with st.expander("💡 策略邏輯導覽 (FAQ) — 核心量化規則說明", expanded=False):
+            st.markdown("""
+            ### 📌 1. 為什麼設定「最少買超日為 5 天」，但有些股票沒有連續買超也進榜？
+            * **核心邏輯**：本系統的法人買超天數計算的是**「累計天數」**，而非「嚴格連續天數」。
+                * **量化原理**：若「觀察天數」設為 7 天、「最少買超日」設為 5 天。代表只要這 7 天內有任何 5 天外資或投信站在買方（且區間總淨額為正），條件即成立。
+            * **實戰優勢**：這能有效包容法人在吃貨過程中「進三退一」的洗盤或微調動作。如果要求嚴格連續，往往會因為單日盤中調節而錯失真正的主力波段飆股！
+
+            ### 📌 2. 為什麼有時候選股的過關門檻（PASS_SCORE）會自動變動？
+            * **動態防禦機制**：系統會自動監控台股加權指數（^TWII）與季線（MA60）的相對位置：
+                * 🟢 **多頭環境**：大盤站上季線時，維持你設定的原始門檻（例如預設 7 分）。
+                * 🔴 **空頭環境**：大盤跌破季線時，系統會**自動將過關門檻 +1 分**（從嚴審查）。幫你過濾掉逆勢抗跌但大盤崩盤時可能補跌的弱勢股。
+                * 🟡 **異常補償**：若因網路問題導致大盤資料抓取失敗，系統會**自動 -1 分**，補償個股因缺少大盤對照而無法取得的 RS 分數。
+
+            ### 📌 3. 為什麼週末或連假點擊「抓取最新資料」後，最新日期沒有變成今天？
+            * **休市事實**：台股在週末與國定假日是不開盤的。
+            * **智能優化**：系統下載的是最新的官方還原歷史數據。如果今天是週六或週日，最新交易日停留在「本週五」是完全正確且最新的狀態。畫面的警示橫幅此時會智能轉為綠色，提示你「週末未開盤，此已為最新交易日」，不需重複抓取。
+
+            ### 📌 4. 什麼是「★籌碼共振」？它會額外加分嗎？
+            * **定義**：當某一檔股票在同一個週期內，同時觸發 **「400張大戶持股比例上升（主力吃貨）」** 且 **「1~15張散戶持股比例下降（籌碼沉澱）」**，即達成籌碼共振（大戶↑散戶↓）。
+            * **計分規則**：大戶與散戶指標各自獨立計 1 分（同時成立自然累積 2 分），共振本身**不會再額外加分**。
+            * **排序優勢**：雖然不加分，但「籌碼共振」是本系統**最高優先級的排序基準**！只要總分相同，共振旗標成立（✅）的股票會優先排在表格的最上方，方便你第一時間鎖定主力錮散戶的精選標的。
+            """)
+
 # ── Session state 初始化 ────────────────────────────────────────────────────
 DEFAULTS = {
     'pass_score': PASS_SCORE, 'lookback_days': LOOKBACK_DAYS, 'it_min_buy_days': IT_MIN_BUY_DAYS,
@@ -209,20 +233,29 @@ with st.sidebar:
     st.button("空頭嚴格", on_click=apply_preset, args=('bear',),      use_container_width=True)
     st.button("KD 起漲",  on_click=apply_preset, args=('kd_start',),  use_container_width=True)
 
-    st.divider()
+st.divider()
     st.subheader("📌 核心 / KD")
-    st.slider(labeled("過關門檻 PASS_SCORE", 'pass_score'), 1, 10, key='pass_score')
-    st.slider(labeled("KD 觀察區間 (天)", 'kd_lookback'), 1, 30, key='kd_lookback')
-    st.slider(labeled("KD 低檔啟動門檻", 'kd_low_from'), 10, 50, key='kd_low_from')
-    st.slider(labeled("KD 今日上限", 'kd_high_cap_now'), 50, 95, key='kd_high_cap_now')
+    st.slider(labeled("過關門檻 PASS_SCORE", 'pass_score'), 1, 10, key='pass_score',
+              help="滿分 10 分，達標才算入榜。\n\n計分包含：法人買超、大戶增散戶減、資減券增、技術突破、KD金叉、營收成長與大盤相對強弱。\n\n💡 系統會智能判斷：若大盤破季線會自動 +1 分（空頭從嚴）。")
+    st.slider(labeled("KD 觀察區間 (天)", 'kd_lookback'), 1, 30, key='kd_lookback',
+              help="往回看 N 天，尋找『曾經』發生低檔金叉的股票。\n\n- 設短一點：專抓剛發動的。\n- 設長一點：容許起漲後稍微休息的股票。")
+    st.slider(labeled("KD 低檔啟動門檻", 'kd_low_from'), 10, 50, key='kd_low_from',
+              help="金叉當天 K 值必須 < 此數值。\n\n用來確保這是一檔『從谷底翻揚』的股票，而不是在高檔糾纏。數值越低越嚴格。")
+    st.slider(labeled("KD 今日上限", 'kd_high_cap_now'), 50, 95, key='kd_high_cap_now',
+              help="如果今天的 K 值已經超過此數值，代表短線已過熱（超買）。\n\n即使它前幾天曾低檔起漲也會被剔除，避免追高被套牢。")
 
     st.divider()
     st.subheader("📌 預篩 / 法人")
-    st.slider(labeled("20 日均量下限 (張)", 'min_avg_vol_lots'), 100, 2000, key='min_avg_vol_lots', step=50)
-    st.slider(labeled("ATR% 上限", 'atr_max_pct'), 5.0, 25.0, key='atr_max_pct', step=0.5)
-    st.slider(labeled("法人觀察天數", 'lookback_days'), 3, 10, key='lookback_days')
-    st.slider(labeled("投信最少買超日", 'it_min_buy_days'), 1, 5, key='it_min_buy_days')
-    st.slider(labeled("外資最少買超日", 'fi_min_buy_days'), 1, 5, key='fi_min_buy_days')
+    st.slider(labeled("20 日均量下限 (張)", 'min_avg_vol_lots'), 100, 2000, key='min_avg_vol_lots', step=50,
+              help="基本流動性保護。\n\n如果設定 500，代表過去一個月平均每天成交不到 500 張的股票會直接被丟掉，避免買得到賣不掉的冷門股。")
+    st.slider(labeled("ATR% 上限", 'atr_max_pct'), 5.0, 25.0, key='atr_max_pct', step=0.5,
+              help="用來過濾波動極端的『妖股』。\n\n設定 10% 代表該股每天上沖下洗的振幅約在 10% 內。超過此值視為過度投機，直接剔除保平安。")
+    st.slider(labeled("法人觀察天數", 'lookback_days'), 3, 10, key='lookback_days',
+              help="我們往回看法人籌碼的『總天數區間』。\n\n這個區間就是底下『最少買超日』的統計母體。")
+    st.slider(labeled("投信最少買超日", 'it_min_buy_days'), 1, 5, key='it_min_buy_days',
+              help="💡 注意：這是『累計』而非連續！\n\n例如觀察 7 天、最少 5 天，代表只要這 7 天內有 5 天買超且總淨額為正即可。這樣能包容投信『進三退一』的洗盤手法。")
+    st.slider(labeled("外資最少買超日", 'fi_min_buy_days'), 1, 5, key='fi_min_buy_days',
+              help="💡 注意：這是『累計』而非連續！\n\n代表在觀察天數內，總共有幾天買超且總淨額為正。這能容許外資偶爾單日大賣調節，只要整體趨勢站在買方就能抓出。")
 
     st.divider()
     run_clicked = st.button("▶ 開始選股", type='primary', use_container_width=True)
