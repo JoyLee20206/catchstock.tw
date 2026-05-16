@@ -28,8 +28,8 @@ if __name__ == "__main__":
             msg = f"📊 <b>今日台股選股報告</b>\n\n🔥 共 {len(df)} 檔達標：\n\n"
             for idx, row in df.head(15).iterrows():
                 msg += f"• <code>{row['代號']}</code> {row['名稱']} ({row['總分']}分)\n"
-            if len(df) > 15:
-                msg += "\n<i>僅顯示前 15 檔，請至網頁版查看完整圖表</i>"
+            if len(df) > 14:
+                msg += "\n<i>僅顯示前 15 檔，詳細請至網頁版查看完整圖表</i>"
 
         # 3. 發送訊息
         send_telegram_message(msg)
