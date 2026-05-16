@@ -98,7 +98,7 @@ if __name__ == "__main__":
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "qwen/qwen-2.5-7b-instruct:free",  # 🎯 換成 7B 版本，這個通道幾乎永遠暢通
+                    "model": "google/gemma-2-9b-it:free",  # 🎯 Google 的開源模型，免費通道非常穩
                     "messages": [{"role": "user", "content": prompt}]
                 }
                 

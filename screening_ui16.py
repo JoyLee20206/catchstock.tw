@@ -587,7 +587,7 @@ with col_chart:
                                 
                                 # 🎯 1. 換成速度極快、不塞車的 Llama 3.3 大腦
                                 payload = {
-                                    "model": "qwen/qwen-2.5-7b-instruct:free",  # 🎯 換成 7B 版本，這個通道幾乎永遠暢通
+                                    "model": "google/gemma-2-9b-it:free",  # 🎯 Google 的開源模型，免費通道非常穩
                                     "messages": [{"role": "user", "content": prompt}]
                                 }
                                 
