@@ -250,36 +250,37 @@ with st.sidebar:
                 save_watchlist(st.session_state.watchlist)
                 st.rerun()
 
-# ── [新增] 雲端資料更新系統 ──
+    # ── [新增] 雲端資料更新系統 (請確認這裡剛好退回 4 個空格) ──
     st.divider()
     st.subheader("🔄 資料更新")
     st.caption("雲端環境專用：點擊後從網路抓取最新台股資料。")
     
-# ── 側邊欄更新按鈕的正確完整邏輯 ──
-if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True):
-        with st.spinner("正在下載最新資料... (約需 1~2 分鐘)"):
+    if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True):
+        st.toast("⏳ 系統已收到請求，開始呼叫爬蟲...", icon="🤖") 
+        with st.spinner("正在比對與下載最新資料..."):
             try:
                 import subprocess
                 import sys
                 import time
                 
-                # [優化] 加入 "--force" 參數，強迫 fetch_cache.py 覆蓋舊資料，不略過
+                # [修正] 拿掉 "--force"，讓程式只做「增量更新」，減輕雲端記憶體負擔
                 result = subprocess.run(
-                    [sys.executable, "fetch_cache.py", "--force"], 
+                    [sys.executable, "fetch_cache.py"], 
                     capture_output=True, text=True, check=True
                 )
                 
                 st.cache_data.clear()
-                
-                # [優化] 改用 toast 彈出提示，並延遲 2 秒再重整，讓你絕對看得到成功訊息
-                st.toast("✅ 雲端資料更新完成！", icon="🎉")
+                st.toast("✅ 雲端資料檢查/更新完成！", icon="🎉")
                 time.sleep(2)
                 st.rerun()
                 
             except subprocess.CalledProcessError as e:
-                st.error("❌ 雲端腳本執行失敗，詳細錯誤如下：")
+                st.error("❌ 雲端腳本執行失敗！")
+                st.write("這通常是因為雲端記憶體不足被中斷。錯誤日誌如下：")
                 st.code(e.stderr)
-
+            except Exception as e:
+                st.error(f"❌ 發生未知的錯誤：{e}")
+               
 # ── 大盤狀態橫幅 ───────────────────────────────────────────────────────────
 def show_market_banner(meta: dict) -> None:
     if not meta:
