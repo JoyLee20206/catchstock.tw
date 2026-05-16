@@ -115,17 +115,21 @@ _cache_date = _get_cache_max_date()
 if _cache_date is None:
     st.error("⚠ 找不到 daily 快取，請先執行 `python fetch_cache.py` 拉資料")
 else:
-    _today    = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
-    _age      = (_today - _cache_date.normalize()).days
-    _date_str = _cache_date.strftime('%Y-%m-%d')
+    _today      = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
+    _age        = (_today - _cache_date.normalize()).days
+    _date_str   = _cache_date.strftime('%Y-%m-%d')
+    _is_weekend = _today.weekday() >= 5  # 5代表星期六，6代表星期日
+
     if _age == 0:
-        st.success(f"📅 cache 最新日期: {_date_str}(今天)")
-    elif _age <= 2:
-        st.info(f"📅 cache 最新日期: {_date_str}({_age} 天前)")
-    elif _age <= 7:
-        st.warning(f"📅 cache 最新日期: {_date_str}({_age} 天前)— 建議更新快取")
+        st.success(f"📅 cache 最新日期: {_date_str} (今天)")
+    elif _is_weekend and _age <= 2:
+        # 如果今天是週末，且資料是 1~2 天前（通常是週五），直接顯示為綠色的最新狀態
+        st.success(f"📅 cache 最新日期: {_date_str} (週末未開盤，此已為最新交易日)")
+    elif _age <= 5:
+        # 平日時，如果資料是幾天前，補上國定假日的提示
+        st.info(f"📅 cache 最新日期: {_date_str} ({_age} 天前 - 註：若遇國定假日未開盤，此即為最新資料)")
     else:
-        st.error(f"📅 cache 最新日期: {_date_str}({_age} 天前) ⚠ 過舊，請先更新")
+        st.error(f"📅 cache 最新日期: {_date_str} ({_age} 天前) ⚠ 過舊，請先更新")
 
     st.divider()
     st.subheader("🔄 資料更新")
