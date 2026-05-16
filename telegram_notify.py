@@ -5,7 +5,7 @@ import pandas as pd
 import tempfile
 import html
 from pathlib import Path
-import google.generativeai as genai
+from google import genai
 from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS
 
 # 從環境變數讀取安全金鑰
