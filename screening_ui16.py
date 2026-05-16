@@ -584,15 +584,26 @@ with col_chart:
                                     "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                                     "Content-Type": "application/json"
                                 }
+                                
+                                # 🎯 1. 換成速度極快、不塞車的 Llama 3.3 大腦
                                 payload = {
-                                    "model": "deepseek/deepseek-r1:free", # 🎯 指定改用 DeepSeek R1 免費版
+                                    "model": "meta-llama/llama-3.3-70b-instruct:free",
                                     "messages": [{"role": "user", "content": prompt}]
                                 }
-                                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=20)
-                                ai_result = resp.json()['choices'][0]['message']['content'].strip()
                                 
-                                st.session_state.ai_cache[sid] = ai_result
-                                st.rerun()
+                                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=20)
+                                resp_json = resp.json()
+                                
+                                # 🛡️ 2. 鋼鐵防禦機制：有拿到 choices 才解包，沒拿到就印出真實錯誤
+                                if 'choices' in resp_json:
+                                    ai_result = resp_json['choices'][0]['message']['content'].strip()
+                                    st.session_state.ai_cache[sid] = ai_result
+                                    st.rerun()
+                                elif 'error' in resp_json:
+                                    st.error(f"❌ OpenRouter 拒絕請求原因：{resp_json['error'].get('message')}")
+                                else:
+                                    st.error(f"❌ 發生未知異常，完整回應內容：{resp_json}")
+                                    
                             except Exception as e:
                                 st.error(f"❌ 呼叫 OpenRouter AI 發生異常：{str(e)}")
 
