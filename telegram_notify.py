@@ -2,8 +2,8 @@ import os
 import requests
 from screening0515 import run_screening, PASS_SCORE
 
-TOKEN = os.environ.get("8581402045:AAGLDNg9kX0xMRZGGMgauUUya4NwwqERjyI")
-CHAT_ID = os.environ.get("8664823906")
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 def send_telegram_message(text):
     if not TOKEN or not CHAT_ID:
