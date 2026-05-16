@@ -957,8 +957,6 @@ def run_screening(
         c_now = twii_close.iloc[-1]
         c_prev = twii_close.iloc[-2]
         twii_pct = ((c_now - c_prev) / c_prev) * 100
-        if twii_ma > 0:
-            bias_ma60 = ((c_now - twii_ma) / twii_ma) * 100
         # 2. 計算與季線的乖離率
         if twii_ma > 0:
             bias_ma60 = ((c_now - twii_ma) / twii_ma) * 100
