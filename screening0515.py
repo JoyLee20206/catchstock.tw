@@ -948,16 +948,32 @@ def run_screening(
         file_paths = {}
 
     # UI 用 meta:大盤橫幅、effective_pass_score、cache 日期都靠這個
-    # (CLI 入口忽略,不影響原本行為)
+    # === [修改處] 優化 meta 資料，供 Telegram 推播戰情摘要使用 ===    
+    # 計算大盤今日漲跌幅 (需檢查 twii_close 是否有足夠資料計算昨日)
+    twii_pct = 0.0
+    if market_data_ok and len(twii_close) >= 2:
+        c_now = twii_close.iloc[-1]
+        c_prev = twii_close.iloc[-2]
+        twii_pct = ((c_now - c_prev) / c_prev) * 100
+
+    # 定義盤勢文字
+    if not market_data_ok:
+        status_text = "數據取得失敗"
+    else:
+        status_text = "偏多操作" if market_bullish else "謹慎保守"
+
     meta = {
         'market_data_ok':        market_data_ok,
         'market_bullish':        market_bullish,
+        'market_status':         status_text,       # 👈 新增：盤勢文字
         'twii_now':              twii_now,
         'twii_ma':               twii_ma,
+        'twii_close':            twii_now,          # 👈 新增：為了相容性重複提供
+        'twii_pct':              twii_pct,          # 👈 新增：今日漲跌幅
         'twii_lookback_change':  twii_lookback_change,
         'effective_pass_score':  effective_pass_score,
         'cache_max_date':        cache_max_date,
-        'base_pass_score':       pass_score,    # 使用者傳進來的滑桿值 (未經動態調整)
+        'base_pass_score':       pass_score,        # 使用者傳進來的滑桿值 (未經動態調整)    
     }
     return (df, file_paths, meta)
 
