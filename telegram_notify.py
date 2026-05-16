@@ -99,7 +99,8 @@ if __name__ == "__main__":
                 }
                 payload = {
                     "model": "openai/gpt-oss-20b:free",  # 🎯 OpenAI 官方最新下放的免費版
-                    "messages": [{"role": "user", "content": prompt}]
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3 
                 }
                 
                 resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=15)
