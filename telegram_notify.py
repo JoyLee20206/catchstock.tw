@@ -5,12 +5,12 @@ import pandas as pd
 import tempfile
 import html
 from pathlib import Path
-from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS  # 👈 讓這行變成最靠近載入區的底部
+from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS
 
 # 從環境變數讀取安全金鑰
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # 🧠 新增：讀取 Gemini 金鑰
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") # 🎯 改用 OpenRouter 金鑰
 
 # 設定記憶檔案的路徑
 PREV_PICKS_FILE = "cache/previous_picks.json"
@@ -73,9 +73,8 @@ if __name__ == "__main__":
             header += f"❗ <b>{score_note}</b>\n"
         header += "━━━━━━━━━━━━━━\n\n"
 
-        # 🧠 6. 呼叫 OpenRouter 免費 AI 產生盤後點評 (取本日冠軍股)
+        # 🧠 6. 呼叫 OpenRouter 免費 AI 產生盤後點評 (安全防禦+不塞車模型版)
         ai_comment = ""
-        OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
         if df is not None and not df.empty and OPENROUTER_API_KEY:
             try:
                 top_stock = df.iloc[0]
@@ -88,30 +87,37 @@ if __name__ == "__main__":
                 is_sync = top_stock.get("★籌碼共振(大戶↑散戶↓)") == 1
                 
                 prompt = f"""
-                你是一位台灣股市的資盛量化分析師。本日系統選股冠軍是 {sid_top} {name_top} (總分 {score_top}/10分)。
+                你是一位台灣股市的資深量化分析師。本日系統選股冠軍是 {sid_top} {name_top} (總分 {score_top}/10分)。
                 該股亮點包含：{"帶量突破," if is_breakout else ""}{"大戶增散戶減的籌碼共振," if is_sync else ""}動能強勁。
                 請用繁體中文寫一段約 60~80 字的盤後精闢點評，語氣要專業、客觀。
                 注意：請直接輸出純文字，絕對不要使用 Markdown 語法 (不要有星號或井號)。
                 """
                 
-                # 🚀 免綁卡 OpenRouter 標準連線設定
                 headers = {
                     "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "deepseek/deepseek-r1:free", # 🎯 指定改用 DeepSeek R1 免費版
+                    "model": "meta-llama/llama-3.3-70b-instruct:free", # 🎯 換成超穩定的免費 Llama 3.3 大腦
                     "messages": [{"role": "user", "content": prompt}]
                 }
-                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=15)
-                resp_data = resp.json()
-                ai_text = resp_data['choices'][0]['message']['content'].strip()
                 
-                ai_comment = (
-                    f"🧠 <b>AI 虛擬分析師評語：</b>\n"
-                    f"<i>「{ai_text}」</i>\n"
-                    f"━━━━━━━━━━━━━━\n"
-                )
+                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=15)
+                resp_json = resp.json()
+                
+                # 安全解包
+                if 'choices' in resp_json:
+                    ai_text = resp_json['choices'][0]['message']['content'].strip()
+                    ai_comment = (
+                        f"🧠 <b>AI 虛擬分析師評語：</b>\n"
+                        f"<i>「{ai_text}」</i>\n"
+                        f"━━━━━━━━━━━━━━\n"
+                    )
+                elif 'error' in resp_json:
+                    print(f"❌ OpenRouter 拒絕請求原因: {resp_json['error'].get('message')}")
+                else:
+                    print(f"❌ 異常回應結構: {resp_json}")
+                    
             except Exception as e:
                 print(f"AI 生成失敗: {e}")
 
@@ -146,7 +152,7 @@ if __name__ == "__main__":
                 
         content += f"\n\n🌐 <b><a href='https://catchstocktw.streamlit.app/'>開啟我的全自動選股儀表板</a></b>"
                 
-        # 8. 合體並發送最終戰報 (加入 ai_comment)
+        # 8. 合體並發送最終戰報
         send_telegram_message(header + ai_comment + content)
         print(f"推播成功！今日共 {len(df) if df is not None else 0} 檔達標。")
 
