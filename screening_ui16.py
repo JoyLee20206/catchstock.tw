@@ -585,7 +585,7 @@ with col_chart:
                                     "Content-Type": "application/json"
                                 }
                                 payload = {
-                                    "model": "openrouter/free", # 🎯 使用 OpenRouter 自動免費路由
+                                    "model": "deepseek/deepseek-r1:free", # 🎯 指定改用 DeepSeek R1 免費版
                                     "messages": [{"role": "user", "content": prompt}]
                                 }
                                 resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=20)

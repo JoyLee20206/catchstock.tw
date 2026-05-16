@@ -5,8 +5,7 @@ import pandas as pd
 import tempfile
 import html
 from pathlib import Path
-from google import genai
-from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS
+from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS  # 👈 讓這行變成最靠近載入區的底部
 
 # 從環境變數讀取安全金鑰
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -101,7 +100,7 @@ if __name__ == "__main__":
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "openrouter/free", # 🎯 自動路由到當下最穩定的免費 AI 模型
+                    "model": "deepseek/deepseek-r1:free", # 🎯 指定改用 DeepSeek R1 免費版
                     "messages": [{"role": "user", "content": prompt}]
                 }
                 resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=15)
