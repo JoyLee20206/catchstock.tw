@@ -127,8 +127,13 @@ else:
     _date_str   = _cache_date.strftime('%Y-%m-%d')
     _is_weekend = _today.weekday() >= 5  # 5=週六, 6=週日
 
+    # 增加一個「收盤後」的判斷 (15:00 之後才算真正的今天)
+    now_hour = pd.Timestamp.now(tz="Asia/Taipei").hour    
     if _age == 0:
-        st.success(f"📅 cache 最新日期: {_date_str} (今天)")
+        if now_hour < 15:
+            st.info(f"📅 目前資料為 {_date_str}。今日盤後數據預計 15:30 自動更新。")
+        else:
+            st.success(f"📅 cache 最新日期: {_date_str} (今日最新數據)")           
     elif _is_weekend and _age <= 2:
         st.success(f"📅 cache 最新日期: {_date_str} (週末未開盤，此已為最新交易日)")
     elif _age <= 5:

@@ -1,5 +1,6 @@
 import os
 import requests
+import pandas as pd
 from screening0515 import run_screening, PASS_SCORE
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -25,16 +26,16 @@ if __name__ == "__main__":
         if df is None or len(df) == 0:
             msg = "📊 <b>今日台股選股報告</b>\n\n沒有股票達到過關門檻。"
         else:
-            msg = f"📊 <b>今日台股選股報告</b>\n\n🔥 共 {len(df)} 檔達標：\n\n"
+            # 加上日期，讓你一眼知道這是哪一天的報告
+            date_str = pd.Timestamp.now(tz="Asia/Taipei").strftime("%m/%d")
+            msg = f"📊 <b>今日台股選股報告 ({date_str})</b>\n\n🔥 共 {len(df)} 檔達標：\n\n"
             for idx, row in df.head(15).iterrows():
                 msg += f"• <code>{row['代號']}</code> {row['名稱']} ({row['總分']}分)\n"
             if len(df) > 14:
                 msg += "\n<i>僅顯示前 15 檔，詳細請至網頁版查看完整圖表</i>"
 
-        # 3. 發送訊息
         send_telegram_message(msg)
         print("推播成功！")
 
     except Exception as e:
-        send_telegram_message(f"❌ 選股推播發生錯誤：\n{e}")
-        print(f"Error: {e}")
+        print(f"❌ 選股推播發生致命錯誤：{e}")
