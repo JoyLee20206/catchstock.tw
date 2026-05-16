@@ -949,31 +949,38 @@ def run_screening(
 
     # UI 用 meta:大盤橫幅、effective_pass_score、cache 日期都靠這個
     # === [修改處] 優化 meta 資料，供 Telegram 推播戰情摘要使用 ===    
-    # 計算大盤今日漲跌幅 (需檢查 twii_close 是否有足夠資料計算昨日)
+    # 計算大盤今日漲跌幅 (需檢查 twii_close 是否有足夠資料計算昨日)   
     twii_pct = 0.0
+    bias_ma60 = 0.0  # 👈 修正：確保無論如何都有這個變數，防止 NameError
+    
     if market_data_ok and len(twii_close) >= 2:
         c_now = twii_close.iloc[-1]
         c_prev = twii_close.iloc[-2]
         twii_pct = ((c_now - c_prev) / c_prev) * 100
-
-    # 定義盤勢文字
-    if not market_data_ok:
-        status_text = "數據取得失敗"
-    else:
-        status_text = "偏多操作" if market_bullish else "謹慎保守"
+        if twii_ma > 0:
+            bias_ma60 = ((c_now - twii_ma) / twii_ma) * 100
+        # 2. 計算與季線的乖離率
+        if twii_ma > 0:
+            bias_ma60 = ((c_now - twii_ma) / twii_ma) * 100
+    # 3. 產生門檻變動文字標註
+    score_note = ""
+    if market_data_ok and not market_bullish:
+        score_note = f"⚠️ 大盤跌破季線，門檻已由 {pass_score} 提高至 {effective_pass_score}"
+    elif not market_data_ok:
+        score_note = "⚠️ 大盤數據取得失敗，門檻自動調整"
 
     meta = {
         'market_data_ok':        market_data_ok,
         'market_bullish':        market_bullish,
-        'market_status':         status_text,       # 👈 新增：盤勢文字
+        'market_status':         "偏多操作" if market_bullish else "謹慎保守",
         'twii_now':              twii_now,
         'twii_ma':               twii_ma,
-        'twii_close':            twii_now,          # 👈 新增：為了相容性重複提供
-        'twii_pct':              twii_pct,          # 👈 新增：今日漲跌幅
-        'twii_lookback_change':  twii_lookback_change,
+        'twii_pct':              twii_pct,      # 👈 推播需要：漲跌幅
+        'twii_bias':             bias_ma60,     # 👈 推播需要：乖離率
+        'score_note':            score_note,    # 👈 推播需要：警示文字
         'effective_pass_score':  effective_pass_score,
         'cache_max_date':        cache_max_date,
-        'base_pass_score':       pass_score,        # 使用者傳進來的滑桿值 (未經動態調整)    
+        'rs_trend':              twii_lookback_change,
     }
     return (df, file_paths, meta)
 
