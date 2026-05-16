@@ -79,20 +79,14 @@ if __name__ == "__main__":
                 sid_str = str(row['代號'])
                 score_icon = "🔥" if row['總分'] >= 9 else "•"
                 
-                # 🏷️ 自動組裝亮點標籤
                 tags = ""
-                # 判斷是否為新進榜 (前提是 previous_sids 不是空的，避免第一次執行全部都標新進)
                 if sid_str not in previous_sids and len(previous_sids) > 0:
                     tags += " <code>[新進]</code>"
-                
-                # 動能突破標籤
                 if row.get('·60日量價齊揚突破') == 1:
                     tags += " <code>[突破]</code>"
                 
-                # 把單純的 <code> 換成帶有 Yahoo 股市連結的 <a> 標籤
                 content += f"{score_icon} <a href='https://tw.stock.yahoo.com/quote/{sid_str}'>{sid_str}</a> {row['名稱']} ({row['總分']}分){tags}\n"
             
-            # 📊 自動統計並顯示今日主流產業
             if '產業' in df.columns and len(df) > 0:
                 valid_industries = df['產業'].dropna()
                 valid_industries = valid_industries[valid_industries != ""] 
@@ -103,8 +97,9 @@ if __name__ == "__main__":
                 
             if len(df) > 15:
                 content += f"\n<i>...等其餘 {len(df)-15} 檔請至網頁查看完整分析</i>"
-            # 💡 往左退一格，讓它脫離 if 的控制，每次都顯示！順便多加一個 \n 讓排版不要太擠
-            content += f"\n\n🌐 <b><a href='https://catchstocktw.streamlit.app/'>開啟我的全自動選股儀表板</a></b>"
+                
+        # 💡 修正 1：完全退到 if/else 外面，確保每天都顯示網址！
+        content += f"\n\n🌐 <b><a href='https://catchstocktw.streamlit.app/'>開啟我的全自動選股儀表板</a></b>"
                 
         # 7. 合體並發送最終戰報
         send_telegram_message(header + content)
@@ -117,4 +112,9 @@ if __name__ == "__main__":
             json.dump(current_sids, f, ensure_ascii=False)
 
     except Exception as e:
+        import html # 引入 html 模組處理跳脫字元
+        # 💡 修正 2：使用 html.escape 把危險符號安全轉換，避免推播被 Telegram 擋掉
+        safe_error = html.escape(str(e))
+        error_msg = f"❌ <b>選股機器人罷工求救！</b>\n\n系統發生致命錯誤，請至 GitHub 檢查：\n<code>{safe_error}</code>"
+        send_telegram_message(error_msg)
         print(f"❌ 選股推播發生致命錯誤：{e}")
