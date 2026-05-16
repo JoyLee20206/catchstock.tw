@@ -30,7 +30,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 執行資料抓取
-        run: python fetch_cache.py
+        run: python -u fetch_cache.py
       
       - name: 發送 Telegram 推播
         if: success()   # 明確宣告，前一步失敗就跳過
