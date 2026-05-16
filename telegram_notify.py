@@ -2,7 +2,9 @@ import os
 import json
 import requests
 import pandas as pd
-from screening0515 import run_screening, PASS_SCORE
+import tempfile
+from pathlib import Path
+from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS
 
 # 從環境變數讀取安全金鑰
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -29,7 +31,7 @@ def send_telegram_message(text):
 
 if __name__ == "__main__":
     try:
-        # 0. 讀取昨天的過關名單 (賦予程式記憶力)
+        # 0. 讀取昨天的過關名單
         previous_sids = set()
         if os.path.exists(PREV_PICKS_FILE):
             try:
@@ -38,11 +40,19 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"讀取歷史名單失敗，忽略比對：{e}")
 
-        # 1. 執行選股，同時取得大盤 meta 數據
-        df, _, meta = run_screening(pass_score=PASS_SCORE)
+        # 1. 執行選股 ── 改前後只差這一段 ──────────────────────────
+        # 改前（會在 repo 根目錄產生廢檔）:
+        # df, _, meta = run_screening(pass_score=PASS_SCORE)
 
-        # 2. 準備台北時區當前日期 (顯示於標題)
+        # 改後（輸出到暫存目錄，用完自動清除）:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            df, _, meta = run_screening(pass_score=PASS_SCORE, output_dir=Path(tmpdir))
+        # ────────────────────────────────────────────────────────────
+
+        # 2. 準備台北時區當前日期
         date_str = pd.Timestamp.now(tz="Asia/Taipei").strftime("%m/%d")
+        
+        
         
         # 3. 安全提取 meta 變數
         twii_now      = meta.get('twii_now', 0) if meta.get('twii_now') is not None else 0
@@ -74,7 +84,9 @@ if __name__ == "__main__":
             content = "💡 目前盤勢較嚴峻，沒有股票達標。"
         else:
             content = f"🔥 <b>今日達標個股 (共 {len(df)} 檔)：</b>\n"
-            
+
+        # 問題 2 的修改位置：把硬寫的欄位名換成動態的
+            breakout_col = f"·{HIGH_BREAK_DAYS}日量價齊揚突破"   # ← 新增這行            
             for _, row in df.head(15).iterrows():
                 sid_str = str(row['代號'])
                 score_icon = "🔥" if row['總分'] >= 9 else "•"
@@ -82,7 +94,7 @@ if __name__ == "__main__":
                 tags = ""
                 if sid_str not in previous_sids and len(previous_sids) > 0:
                     tags += " <code>[新進]</code>"
-                if row.get('·60日量價齊揚突破') == 1:
+                if row.get(breakout_col) == 1:
                     tags += " <code>[突破]</code>"
                 
                 content += f"{score_icon} <a href='https://tw.stock.yahoo.com/quote/{sid_str}'>{sid_str}</a> {row['名稱']} ({row['總分']}分){tags}\n"
