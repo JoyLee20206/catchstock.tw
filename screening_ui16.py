@@ -249,6 +249,40 @@ with st.sidebar:
                 save_watchlist(st.session_state.watchlist)
                 st.rerun()
 
+# ── [新增] 雲端資料更新系統 ──
+    st.divider()
+    st.subheader("🔄 資料更新")
+    st.caption("雲端環境專用：點擊後從網路抓取最新台股資料。")
+    
+    if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True):
+        with st.spinner("正在下載最新資料，這可能需要幾分鐘，請勿關閉網頁..."):
+            try:
+                import subprocess
+                import sys
+                
+                # 在背景執行你的爬蟲程式
+                # 使用 sys.executable 確保使用目前虛擬環境/雲端的 Python 執行檔
+                result = subprocess.run(
+                    [sys.executable, "fetch_cache.py"], 
+                    capture_output=True, 
+                    text=True, 
+                    check=True
+                )
+                
+                # 抓取成功後，必須清空 Streamlit 的記憶體快取，否則它會一直記住舊資料
+                st.cache_data.clear()
+                
+                st.success("✅ 資料更新完成！")
+                # 強制重新整理頁面，讓最上方的「Cache 新鮮度警示」抓到最新日期
+                st.rerun()
+                
+            except subprocess.CalledProcessError as e:
+                # 如果抓取過程中發生錯誤，把錯誤訊息印出來方便我們除錯
+                st.error("❌ 更新失敗，請檢查錯誤訊息：")
+                st.code(e.stderr)
+            except Exception as e:
+                st.error(f"❌ 發生未知的錯誤：{e}")
+
 # ── 大盤狀態橫幅 ───────────────────────────────────────────────────────────
 def show_market_banner(meta: dict) -> None:
     if not meta:
