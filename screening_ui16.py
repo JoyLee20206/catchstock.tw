@@ -538,16 +538,18 @@ with col_chart:
                 c2.write(f"**📈 基本與波動**\n- 產業: {row_data['產業']}\n- 營收增率: {row_data['最新月營收增率(%)']}%\n- ATR%: {row_data['ATR%']}%")
             else: st.info("💡 該股未出現在本次選股名單中，暫無籌碼與評分數據。")
 
-        # 🧠 新增：第三個分頁的 AI 深度診斷邏輯
+        # 🧠 新增：第三個分頁的 AI 深度診斷邏輯 (OpenRouter 免綁卡版)
         with tab3:
-            st.subheader("🧠 Gemini AI 虛擬操盤分析師")
+            st.subheader("🧠 OpenRouter AI 虛擬操盤分析師")
             
-            if ai_client is None:
-                st.warning("⚠️ 網頁系統未偵測到環境變數 `GEMINI_API_KEY`。請先在 Windows 設定環境變數後重新啟動 Streamlit！")
+            # 從環境變數或 Streamlit Secrets 讀取 OpenRouter Key
+            OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+            
+            if not OPENROUTER_API_KEY:
+                st.warning("⚠️ 網頁系統未偵測到環境變數 `OPENROUTER_API_KEY`。請先在 Streamlit Cloud Secrets 設定金鑰！")
             elif row_data is None:
                 st.info("💡 該股未出現在本次排行榜中（未達過關門檻），暫無量化核心數據供 AI 進行深度點評。")
             else:
-                # 檢查這檔股票之前有沒有算過 AI 報告
                 if sid in st.session_state.ai_cache:
                     st.markdown("### 📋 歷史診斷報告記憶檔")
                     st.info(st.session_state.ai_cache[sid])
@@ -555,11 +557,11 @@ with col_chart:
                         del st.session_state.ai_cache[sid]
                         st.rerun()
                 else:
-                    st.caption("點擊下方按鈕將會把本系統算出的 10 大雷達數據餵給 Gemini，為您客觀剖析籌碼優劣與操作建議。")
+                    st.caption("點擊下方按鈕將會把本系統算出的 10 大雷達數據餵給免綁卡的 OpenRouter 免費模型。")
                     if st.button("🚀 啟動 AI 深度量化解析", key=f"btn_ai_{sid}", use_container_width=True):
                         with st.spinner("AI 分析師正在閱讀籌碼量化數據中，請稍候..."):
                             try:
-                                # 組裝結構化數據丟給 Gemini
+                                import requests
                                 prompt = f"""
                                 你是一位台灣股市的資深量化操盤分析師。請根據以下這檔個股由系統算出的核心籌碼與技術數據，用繁體中文寫出一份約 150 字的專業投資診斷。
                                 一針見血指出當前籌碼面（法人大戶）與技術基本面的優缺點，並給出具體的短線操盤與策略建議（多空方向）。
@@ -578,18 +580,21 @@ with col_chart:
                                 相對大盤強度 (RS)：{'表現超越大盤（多頭領頭羊）' if row_data['RS優於大盤'] == 1 else '弱於大盤走勢'}
                                 """
                                 
-                                # ── 使用最新 google-genai 寫法 ──
-                                response = ai_client.models.generate_content(
-                                    model='gemini-2.0-flash',
-                                    contents=prompt,
-                                )
-                                ai_result = response.text.strip()
+                                headers = {
+                                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                                    "Content-Type": "application/json"
+                                }
+                                payload = {
+                                    "model": "openrouter/free", # 🎯 使用 OpenRouter 自動免費路由
+                                    "messages": [{"role": "user", "content": prompt}]
+                                }
+                                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=20)
+                                ai_result = resp.json()['choices'][0]['message']['content'].strip()
                                 
-                                # 寫入網頁快取，避免重複扣額度
                                 st.session_state.ai_cache[sid] = ai_result
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"❌ 呼叫 Gemini AI 發生異常：{str(e)}")
+                                st.error(f"❌ 呼叫 OpenRouter AI 發生異常：{str(e)}")
 
         with tab4:
             st.subheader("📝 交易筆記")

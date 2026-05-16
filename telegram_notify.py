@@ -74,39 +74,43 @@ if __name__ == "__main__":
             header += f"❗ <b>{score_note}</b>\n"
         header += "━━━━━━━━━━━━━━\n\n"
 
-        # 🧠 6. 呼叫 Gemini AI 產生盤後點評 (取本日冠軍股)
+        # 🧠 6. 呼叫 OpenRouter 免費 AI 產生盤後點評 (取本日冠軍股)
         ai_comment = ""
-        if df is not None and not df.empty and GEMINI_API_KEY:
+        OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+        if df is not None and not df.empty and OPENROUTER_API_KEY:
             try:
-                # ── 新版 google-genai 的寫法 ──
-                from google import genai
-                client = genai.Client(api_key=GEMINI_API_KEY)
-                
                 top_stock = df.iloc[0]
                 sid_top = str(top_stock['代號'])
                 name_top = top_stock['名稱']
                 score_top = top_stock['總分']
                 
-                # 判斷亮點
                 breakout_col = f"·{HIGH_BREAK_DAYS}日量價齊揚突破"
                 is_breakout = top_stock.get(breakout_col) == 1
                 is_sync = top_stock.get("★籌碼共振(大戶↑散戶↓)") == 1
                 
                 prompt = f"""
-                你是一位台灣股市的資深量化分析師。本日系統選股冠軍是 {sid_top} {name_top} (總分 {score_top}/10分)。
+                你是一位台灣股市的資盛量化分析師。本日系統選股冠軍是 {sid_top} {name_top} (總分 {score_top}/10分)。
                 該股亮點包含：{"帶量突破," if is_breakout else ""}{"大戶增散戶減的籌碼共振," if is_sync else ""}動能強勁。
                 請用繁體中文寫一段約 60~80 字的盤後精闢點評，語氣要專業、客觀。
                 注意：請直接輸出純文字，絕對不要使用 Markdown 語法 (不要有星號或井號)。
                 """
-                # 新版的呼叫函數改成 client.models.generate_content
-                response = client.models.generate_content(
-                    model='gemini-2.0-flash',
-                    contents=prompt,
-                )
+                
+                # 🚀 免綁卡 OpenRouter 標準連線設定
+                headers = {
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": "openrouter/free", # 🎯 自動路由到當下最穩定的免費 AI 模型
+                    "messages": [{"role": "user", "content": prompt}]
+                }
+                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=15)
+                resp_data = resp.json()
+                ai_text = resp_data['choices'][0]['message']['content'].strip()
                 
                 ai_comment = (
-                    f"🧠 <b>Gemini 虛擬分析師評語：</b>\n"
-                    f"<i>「{response.text.strip()}」</i>\n"
+                    f"🧠 <b>AI 虛擬分析師評語：</b>\n"
+                    f"<i>「{ai_text}」</i>\n"
                     f"━━━━━━━━━━━━━━\n"
                 )
             except Exception as e:
