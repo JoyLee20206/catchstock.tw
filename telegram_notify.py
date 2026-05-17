@@ -26,11 +26,12 @@ TOP_N_DISPLAY = 15                            # Telegram 訊息列出前 N 檔
 # ── AI 模型輪替清單(依優先序排列,前面失敗就試下一個) ──────────────
 # 注意:免費模型可用性會變動,部署前建議到 https://openrouter.ai/models?max_price=0 確認
 AI_MODELS = [
-    {"id": "deepseek/deepseek-chat-v3-0324:free",     "name": "DeepSeek V3"},
-    {"id": "qwen/qwen-2.5-72b-instruct:free",         "name": "Qwen 2.5"},
-    {"id": "google/gemini-2.0-flash-exp:free",        "name": "Gemini 2.0"},
-    {"id": "meta-llama/llama-3.3-70b-instruct:free",  "name": "Llama 3.3"},
-    {"id": "openai/gpt-oss-20b:free",                 "name": "GPT-OSS 20B"},
+    # 換上目前最新的 DeepSeek R1 免費版
+    {"id": "deepseek/deepseek-r1:free",               "name": "DeepSeek R1"},
+    # 換上 Google 最新開放的免費實驗版
+    {"id": "google/gemini-2.0-pro-exp-02-05:free",    "name": "Gemini 2.0 Pro"},
+    {"id": "meta-llama/llama-3.3-70b-instruct:free",  "name": "Llama 3.3"},  # 偶爾塞車，保留著當備胎
+    {"id": "openai/gpt-oss-20b:free",                 "name": "GPT-OSS 20B"}, # 你的神救援 MVP
 ]
 
 
