@@ -1,0 +1,50 @@
+name: Daily Stock Push
+
+on:
+  schedule:
+    # 分 時 日 月 星期。UTC 07:30 等於台灣時間 15:30 (週一到週五執行)
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch: # 允許你在 GitHub 網頁上手動點擊測試
+
+# ── [新增這一段] 消除 Node.js 20 警告 ────────────────────
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  
+jobs:
+  build-and-notify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # ← 缺這行，push 必定失敗
+    
+    steps:
+      - name: 取得程式碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'  # 👈 加上這行，下次執行就會變飛快！
+
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+
+      - name: 執行資料抓取
+        run: python -u fetch_cache.py
+      
+      - name: 發送 Telegram 推播
+        if: success()   # 明確宣告，前一步失敗就跳過
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }} # 👈 修改這行
+        run: python telegram_notify.py
+
+      - name: 自動將快取存回 GitHub (自動更新網頁版)
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add cache/
+          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update daily cache"
+          git pull --rebase origin main || true
+          git push origin HEAD
