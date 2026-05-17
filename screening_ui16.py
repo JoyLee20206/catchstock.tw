@@ -17,6 +17,9 @@ import yfinance as yf
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
+from performance import compute_performance
+from industry_rotation import compute_industry_rotation
+import plotly.express as px # 用於繪製績效直方圖
 
 from screening0515 import (
     run_screening,
@@ -29,13 +32,12 @@ from screening0515 import (
     CACHE_DIR,
 )
 
-# 共用模組(與 telegram_notify.py 共用同一份邏輯)
+# 共用模組
 from ai_helper import call_openrouter_ai, AI_MODELS, get_api_key
 from cache_status import cache_freshness
 from picks_history import load_history, compute_hot_picks
 
 # ── 自選股與交易筆記持久化 ────────────────────────────────────────────────
-# 🐛 已修正：路徑改為 cache 資料夾，確保網頁與 Telegram 小助理資料完全同步！
 WATCHLIST_FILE = "cache/watchlist.json"
 NOTES_FILE = "cache/notes.json"
 
@@ -46,7 +48,6 @@ def load_watchlist() -> list:
     return []
 
 def save_watchlist(wl: list) -> None:
-    # 確保 cache 資料夾存在
     Path("cache").mkdir(exist_ok=True)
     with open(WATCHLIST_FILE, 'w', encoding='utf-8') as f:
         json.dump(wl, f, ensure_ascii=False, indent=2)
@@ -68,7 +69,6 @@ def save_note(sid: str, text: str) -> None:
         json.dump(notes, f, ensure_ascii=False, indent=2)
 
 def _note_on_change_cb(sid: str) -> None:
-    """Widget 內容變動時直接將新文字寫入記憶體與 json 檔案中"""
     val = st.session_state.get(f"note_input_{sid}", "")
     st.session_state.trading_notes[sid] = val
     save_note(sid, val)
@@ -76,7 +76,6 @@ def _note_on_change_cb(sid: str) -> None:
 # ── 資料快取讀取 ───────────────────────────────────────────────────────────
 @st.cache_data(ttl=60, show_spinner=False)
 def get_stock_institutional(stock_id: str) -> pd.DataFrame:
-    """讀取最新的三大法人快取並過濾指定標的"""
     files = sorted(CACHE_DIR.glob('institutional_*.parquet'))
     if not files:
         return pd.DataFrame()
@@ -103,7 +102,6 @@ def _load_twii_cached() -> pd.DataFrame:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_stock_history(sid: str, n_days: int = 200) -> pd.DataFrame:
-    """包一層 @st.cache_data，同一檔股票在同一次 session 只讀一次 parquet。"""
     return get_stock_history(sid, n_days)
 
 @st.cache_data
@@ -137,19 +135,13 @@ def _get_cache_max_date():
 
 _cache_date = _get_cache_max_date()
 _freshness = cache_freshness(_cache_date)
-# Level → Streamlit 顯示元件對映(顏色一致由 cache_status 控制)
 _level_fn = {
-    "missing": st.error,
-    "ok":      st.success,
-    "info":    st.info,
-    "warn":    st.warning,
-    "error":   st.error,
+    "missing": st.error, "ok": st.success, "info": st.info,
+    "warn": st.warning, "error": st.error,
 }
 _level_fn[_freshness["level"]](f"📅 {_freshness['msg']}")
 
 if _freshness["level"] != "missing":
-
-    # 雲端更新按鈕區塊
     st.markdown("#### 🔄 資料更新") 
     st.caption("雲端環境專用：點擊後從網路抓取最新台股資料。")
 
@@ -159,56 +151,15 @@ if _freshness["level"] != "missing":
 
     if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True):
         st.toast("⏳ 系統已收到請求，開始比對資料...", icon="🤖") 
-        with st.spinner("正在執行資料更新... (若轉圈超過 2 分鐘，可能是主機記憶體不足崩潰)"):
+        with st.spinner("正在執行資料更新..."):
             try:
-                import subprocess
-                import sys
-                result = subprocess.run([sys.executable, "fetch_cache.py"], capture_output=True, text=True, check=True)
+                import subprocess, sys
+                subprocess.run([sys.executable, "fetch_cache.py"], capture_output=True, text=True, check=True)
                 st.cache_data.clear()
                 st.session_state.show_update_success = True
                 st.rerun()
-            except subprocess.CalledProcessError as e:
-                st.error("❌ 雲端腳本執行失敗！")
-                st.code(e.stderr)
             except Exception as e:
-                st.error(f"❌ 發生未知的錯誤：{e}")
-
-# ── 策略邏輯導覽 (FAQ) ─────────────────────────────────────────────────────
-with st.expander("💡 策略邏輯導覽 (FAQ) — 核心量化規則說明", expanded=False):
-    st.markdown("""
-    ### 🎯 第一區：快速套用組合
-    不知道參數怎麼調？這裡為你準備了四套大腦：
-    * **預設 (Default)**：系統原始設定（門檻 7 分），適合一般盤勢下的穩健選股。
-    * **多頭寬鬆 (Bull)**：過關門檻降為 6 分，放寬 KD 觀察視窗。適合大盤**強勢上漲**時，避免因條件過於嚴苛而漏掉提早發動的潛力股。
-    * **空頭嚴格 (Bear)**：過關門檻提升至 8 分，縮短 KD 視窗並要求高流動性。適合大盤**大跌或震盪**時，嚴格挑選籌碼最集中、最抗跌的防禦標的。
-    * **KD 起漲 (KD Start)**：專注於尋找「低檔剛發生黃金交叉」的技術面訊號。適合用來抓跌深反彈，或是波段起漲的第一根轉折點。
-
-    ---
-
-    ### 📌 第二區：核心 / KD (計分與技術面)
-    * **過關門檻 (PASS_SCORE)**：滿分 10 分。計分包含：法人買超、大戶增散戶減、資減券增、技術突破、KD金叉、營收成長與大盤相對強弱。
-        * 🛡️ **動態防禦機制**：若大盤跌破季線，系統會**自動將門檻 +1 分**（空頭從嚴），幫你過濾掉崩盤時容易補跌的弱勢股。
-    * **KD 觀察區間**：往回看 N 天，尋找「曾經」發生低檔金叉的股票。設短專抓剛發動，設長容許起漲後稍微休息的股票。
-    * **KD 低檔啟動門檻**：金叉當天的 K 值必須小於此數值，確保這是一檔「從谷底翻揚」的股票，越低越嚴格。
-    * **KD 今日上限**：如果今天的 K 值已經大於此數值，代表短線已過熱（超買），即便曾低檔起漲也會被剔除，避免追高被套牢。
-
-    ---
-
-    ### 📌 第三區：預篩 / 法人 (基本保護與籌碼追蹤)
-    * **20 日均量與 ATR% 上限**：第一線防護網。均量過濾掉買得到賣不掉的「冷門股」；ATR% 則過濾掉每天上沖下洗、過度投機的「妖股」。
-    * **法人最少買超日（累計 vs 連續）**：
-        * 💡 **這是一個超大重點**：本系統計算的是**「累計天數」**而非「嚴格連續天數」。
-        * 例如觀察 7 天、最少買超 5 天，代表只要這 7 天內有任何 5 天外資或投信站在買方（且總淨額為正）即成立。這能有效包容法人在吃貨過程中「進三退一」的洗盤動作，避免因單日調節而錯失波段飆股。
-    * **什麼是「★籌碼共振」？**
-        * 當同週期內觸發「大戶持股上升（主力吃貨）」且「散戶持股下降（籌碼沉澱）」，即達成共振。
-        * 雖然不額外加分，但它是本系統**最高優先級的排序基準**！總分相同時，共振成立（✅）的股票會優先排在最上方。
-
-    ---
-
-    ### 🔄 第四區：資料更新與系統狀態
-    * **為什麼週末點擊「抓取最新資料」，日期沒有變成今天？**
-        * 台股在週末與國定假日是不開盤的。如果今天是週六，最新交易日停留在「本週五」是完全正確的狀態。此時畫面的提示會智能轉為綠色，告訴你「週末未開盤，此已為最新交易日」，不需重複抓取。
-    """)
+                st.error(f"❌ 發生錯誤：{e}")
 
 # ── Session state 初始化 ────────────────────────────────────────────────────
 DEFAULTS = {
@@ -219,15 +170,13 @@ DEFAULTS = {
 for k, v in DEFAULTS.items():
     if k not in st.session_state: st.session_state[k] = v
 
-_state_defaults = {
-    'result_df': None, 'result_files': {}, 'result_meta': None, 'target_sid': None, 'last_df_selection': [],
-}
+_state_defaults = {'result_df': None, 'result_files': {}, 'result_meta': None, 'target_sid': None, 'last_df_selection': []}
 for k, v in _state_defaults.items():
     if k not in st.session_state: st.session_state[k] = v
 
 if 'trading_notes' not in st.session_state: st.session_state.trading_notes = load_notes()
 if 'watchlist' not in st.session_state: st.session_state.watchlist = load_watchlist()
-if 'ai_cache' not in st.session_state: st.session_state.ai_cache = {}  # 🧠 新增：用來記住每一檔股票算出來的 AI 評語
+if 'ai_cache' not in st.session_state: st.session_state.ai_cache = {} 
 
 def apply_preset(name: str) -> None:
     for k, v in DEFAULTS.items(): st.session_state[k] = v
@@ -238,6 +187,10 @@ def labeled(base: str, key: str) -> str:
 
 # ── Sidebar ────────────────────────────────────────────────────────────────
 with st.sidebar:
+    st.divider()
+    st.subheader("📱 介面設定")
+    is_mobile = st.checkbox("切換為手機版排版 (垂直排列)", value=False)
+    
     st.subheader("🎯 快速套用組合")
     st.button("預設",     on_click=apply_preset, args=('default',),   use_container_width=True)
     st.button("多頭寬鬆", on_click=apply_preset, args=('bull',),      use_container_width=True)
@@ -246,27 +199,18 @@ with st.sidebar:
 
     st.divider()
     st.subheader("📌 核心 / KD")
-    st.slider(labeled("過關門檻 PASS_SCORE", 'pass_score'), 1, 10, key='pass_score',
-              help="滿分 10 分，達標才算入榜。\n\n計分包含：法人買超、大戶增散戶減、資減券增、技術突破、KD金叉、營收成長與大盤相對強弱。\n\n💡 系統會智能判斷：若大盤破季線會自動 +1 分（空頭從嚴）。")
-    st.slider(labeled("KD 觀察區間 (天)", 'kd_lookback'), 1, 30, key='kd_lookback',
-              help="往回看 N 天，尋找『曾經』發生低檔金叉的股票。\n\n- 設短一點：專抓剛發動的。\n- 設長一點：容許起漲後稍微休息的股票。")
-    st.slider(labeled("KD 低檔啟動門檻", 'kd_low_from'), 10, 50, key='kd_low_from',
-              help="金叉當天 K 值必須 < 此數值。\n\n用來確保這是一檔『從谷底翻揚』的股票，而不是在高檔糾纏。數值越低越嚴格。")
-    st.slider(labeled("KD 今日上限", 'kd_high_cap_now'), 50, 95, key='kd_high_cap_now',
-              help="如果今天的 K 值已經超過此數值，代表短線已過熱（超買）。\n\n即使它前幾天曾低檔起漲也會被剔除，避免追高被套牢。")
+    st.slider(labeled("過關門檻 PASS_SCORE", 'pass_score'), 1, 10, key='pass_score')
+    st.slider(labeled("KD 觀察區間 (天)", 'kd_lookback'), 1, 30, key='kd_lookback')
+    st.slider(labeled("KD 低檔啟動門檻", 'kd_low_from'), 10, 50, key='kd_low_from')
+    st.slider(labeled("KD 今日上限", 'kd_high_cap_now'), 50, 95, key='kd_high_cap_now')
 
     st.divider()
     st.subheader("📌 預篩 / 法人")
-    st.slider(labeled("20 日均量下限 (張)", 'min_avg_vol_lots'), 100, 2000, key='min_avg_vol_lots', step=50,
-              help="基本流動性保護。\n\n如果設定 500，代表過去一個月平均每天成交不到 500 張的股票會直接被丟掉，避免買得到賣不掉的冷門股。")
-    st.slider(labeled("ATR% 上限", 'atr_max_pct'), 5.0, 25.0, key='atr_max_pct', step=0.5,
-              help="用來過濾波動極端的『妖股』。\n\n設定 10% 代表該股每天上沖下洗的振幅約在 10% 內。超過此值視為過度投機，直接剔除保平安。")
-    st.slider(labeled("法人觀察天數", 'lookback_days'), 3, 10, key='lookback_days',
-              help="我們往回看法人籌碼的『總天數區間』。\n\n這個區間就是底下『最少買超日』的統計母體。")
-    st.slider(labeled("投信最少買超日", 'it_min_buy_days'), 1, 5, key='it_min_buy_days',
-              help="💡 注意：這是『累計』而非連續！\n\n例如觀察 7 天、最少 5 天，代表只要這 7 天內有 5 天買超且總淨額為正即可。這樣能包容投信『進三退一』的洗盤手法。")
-    st.slider(labeled("外資最少買超日", 'fi_min_buy_days'), 1, 5, key='fi_min_buy_days',
-              help="💡 注意：這是『累計』而非連續！\n\n代表在觀察天數內，總共有幾天買超且總淨額為正。這能容許外資偶爾單日大賣調節，只要整體趨勢站在買方就能抓出。")
+    st.slider(labeled("20 日均量下限 (張)", 'min_avg_vol_lots'), 100, 2000, key='min_avg_vol_lots', step=50)
+    st.slider(labeled("ATR% 上限", 'atr_max_pct'), 5.0, 25.0, key='atr_max_pct', step=0.5)
+    st.slider(labeled("法人觀察天數", 'lookback_days'), 3, 10, key='lookback_days')
+    st.slider(labeled("投信最少買超日", 'it_min_buy_days'), 1, 5, key='it_min_buy_days')
+    st.slider(labeled("外資最少買超日", 'fi_min_buy_days'), 1, 5, key='fi_min_buy_days')
 
     st.divider()
     run_clicked = st.button("▶ 開始選股", type='primary', use_container_width=True)
@@ -283,7 +227,7 @@ with st.sidebar:
             if c1.button(label, key=f"view_{w_sid}", use_container_width=True):
                 st.session_state.target_sid = w_sid
                 st.rerun()
-            if c2.button("❌", key=f"del_{w_sid}", help="移除"):
+            if c2.button("❌", key=f"del_{w_sid}"):
                 st.session_state.watchlist.remove(w_sid)
                 save_watchlist(st.session_state.watchlist)
                 st.rerun()
@@ -300,22 +244,13 @@ def show_market_banner(meta: dict) -> None:
     twii_now_raw = meta.get('twii_now')
     twii_ma_raw  = meta.get('twii_ma')
     change_raw   = meta.get('twii_lookback_change')
-    # Bug B 修正：用 pd.notna 同時擋 None 與 NaN
     change       = float(change_raw) if pd.notna(change_raw) else 0.0
     state_txt    = "📈 多頭(站上季線)" if bullish else "📉 空頭(跌破季線)"
     twii_now_s   = f"{twii_now_raw:,.0f}" if pd.notna(twii_now_raw) else "N/A"
     twii_ma_s    = f"{twii_ma_raw:,.0f}"  if pd.notna(twii_ma_raw)  else "N/A"
-    if base is None or eff is None:
-        thr_txt = "過關門檻未知"
-    elif base == eff:
-        thr_txt = f"過關門檻 {base}"
-    else:
-        thr_txt = f"過關門檻 {base} → **{eff}**"
+    thr_txt = f"過關門檻 {base} → **{eff}**" if base != eff else f"過關門檻 {base}"
     msg = f"{state_txt}  |  {thr_txt}  |  TWII {twii_now_s} / MA60 {twii_ma_s} | 近 20 日 {change:+.2f}%"
-    if bullish:
-        st.success(msg)
-    else:
-        st.warning(msg)
+    st.success(msg) if bullish else st.warning(msg)
 
 if run_clicked:
     with st.spinner("選股中..."):
@@ -343,35 +278,70 @@ meta = st.session_state.result_meta
 
 if meta: show_market_banner(meta)
 
-# ── 7 日入選熱度榜(資料來自 cache/previous_picks.json,由 Telegram 每日推播寫入) ──
+# ── 歷史數據大局觀(產業輪動與策略績效) ──
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_hot_picks_cached(top_n: int = 10):
-    """快取 5 分鐘,避免每次 rerun 都重讀 JSON。"""
     hist = load_history()
     return compute_hot_picks(hist, top_n=top_n), len(hist)
 
 _hot, _hist_days = _load_hot_picks_cached(top_n=10)
+hist_data = load_history()
+
+with st.expander("🌍 大局觀：產業輪動 & 策略績效驗證", expanded=False):
+    tab_ind, tab_perf = st.tabs(["🔄 產業輪動 (近7日)", "📈 策略績效 (近30日)"])
+    
+    with tab_ind:
+        rotations = compute_industry_rotation(hist_data, recent_days=7, prev_days=7)
+        if rotations:
+            st.caption("觀察資金正在流入 (↑) 或流出 (↓) 哪些板塊")
+            rot_cols = st.columns(4)
+            for i, r in enumerate(rotations[:8]):
+                trend = "↑" if r['direction'] == 'up' else ("↓" if r['direction'] == 'down' else "平")
+                color = "normal" if trend == "平" else ("inverse" if trend == "↓" else "normal")
+                rot_cols[i % 4].metric(r['industry'], f"{r['recent_count']} 檔次", f"{trend} (上週 {r['prev_count']})", delta_color=color)
+        else:
+            st.info("資料不足，無法計算產業輪動。")
+
+    with tab_perf:
+        perf = compute_performance(hist_data, CACHE_DIR, n_days_list=(5, 10, 20))
+        overall = perf.get("overall", {})
+        if "win_rate_5d" in overall:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("5日後勝率", f"{overall['win_rate_5d']*100:.1f}%")
+            c2.metric("5日平均報酬", f"{overall['avg_return_5d']:+.2f}%")
+            c3.metric("總樣本數", f"{overall['n_5d']} 筆")
+            
+            samples = [s['return_5d'] for s in perf['samples'] if s.get('return_5d') is not None]
+            if samples:
+                fig_hist = px.histogram(x=samples, nbins=20, labels={'x':'5日報酬率(%)', 'y':'次數'}, title="入選後 5 日報酬分佈")
+                fig_hist.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10))
+                st.plotly_chart(fig_hist, use_container_width=True)
+        else:
+            st.info("目前歷史資料不足以計算 5 日後績效。")
+
 if _hot:
     with st.expander(f"🔥 過去 {_hist_days} 日入選熱度榜(TOP 10)", expanded=False):
-        st.caption("追蹤近期持續上榜的強勢股 — 連續出現次數越多,代表趨勢延續性越強。")
-        # 用 dataframe 顯示,讓使用者可以排序與複製
         hot_rows = []
         for r in _hot:
             sid_str = str(r["sid"])
-            name = ui_name_map.get(sid_str, "")
             hot_rows.append({
-                "★今日": "✅" if r["in_latest"] else "",
-                "代號":  sid_str,
-                "名稱":  name,
-                "入選天數":   f"{r['hits']} / {r['total_days']}",
-                "最長連續":   f"{r['max_streak']} 日",
-                "目前連續":   f"{r['active_streak']} 日" if r['active_streak'] >= 1 else "—",
+                "★今日": "✅" if r["in_latest"] else "", "代號": sid_str, "名稱": ui_name_map.get(sid_str, ""),
+                "入選天數": f"{r['hits']} / {r['total_days']}", "最長連續": f"{r['max_streak']} 日",
+                "目前連續": f"{r['active_streak']} 日" if r['active_streak'] >= 1 else "—",
             })
         st.dataframe(pd.DataFrame(hot_rows), use_container_width=True, hide_index=True)
 
 st.divider()
 
-col_list, col_chart = st.columns([0.45, 0.55])
+# 🚀 升級：動態排版切換 (支援手機版)
+if is_mobile:
+    col_list = st.container()
+    st.divider()
+    col_chart = st.container()
+    chart_height = 500
+else:
+    col_list, col_chart = st.columns([0.45, 0.55])
+    chart_height = 850
 
 with col_list:
     if df is None: st.info("👈 請先按左側「開始選股」產生最新清單。")
@@ -398,13 +368,10 @@ with col_list:
             if ftype in files_bytes:
                 fname, data = files_bytes[ftype]
                 dl_cols[i].download_button(LABELS[ftype], data, fname, MIME_TYPES[ftype], use_container_width=True)
-            else:
-                dl_cols[i].button(LABELS[ftype] + " (無)", disabled=True, use_container_width=True)
 
-        # 一鍵複製股號清單(套用篩選後,可直接貼進券商看盤軟體的群組建立)
         codes_csv = ",".join(filtered['代號'].astype(str).tolist())
         if codes_csv:
-            st.caption(f"📋 已篩選 {len(filtered)} 檔 — 點右上角圖示一鍵複製,可貼進券商看盤軟體建立群組")
+            st.caption(f"📋 已篩選 {len(filtered)} 檔 — 點右上角圖示一鍵複製")
             st.code(codes_csv, language=None)
 
         current_sel = event.selection.rows
@@ -412,8 +379,6 @@ with col_list:
             st.session_state.last_df_selection = current_sel
             if current_sel: st.session_state.target_sid = str(filtered.iloc[current_sel[0]]['代號'])
 
-# ── K 線與技術圖表區 ────────────────────────────────────────────────────────
-# 若有選股結果但 target_sid 還沒設,預設指向第一檔(總分最高),讓使用者一進來就有東西看
 if (not st.session_state.target_sid) and (df is not None) and (len(df) > 0):
     st.session_state.target_sid = str(df.iloc[0]['代號'])
 
@@ -423,27 +388,39 @@ with col_chart:
     else:
         sid = str(st.session_state.target_sid)
         row_data = None
-        if df is not None and len(df) > 0:
-            if sid in df['代號'].astype(str).values:
-                row_data = df[df['代號'].astype(str) == sid].iloc[0]
+        if df is not None and len(df) > 0 and sid in df['代號'].astype(str).values:
+            row_data = df[df['代號'].astype(str) == sid].iloc[0]
 
-        # Issue 2 修正：名稱為 NaN 時 fallback 到 ui_name_map，避免顯示「nan」穿透到圖表/AI/筆記
-        if row_data is not None:
-            _raw_name = row_data['名稱']
-            sname = str(_raw_name) if pd.notna(_raw_name) else ui_name_map.get(sid, "")
-        else:
-            sname = ui_name_map.get(sid, "")
+        sname = str(row_data['名稱']) if row_data is not None and pd.notna(row_data['名稱']) else ui_name_map.get(sid, "")
         
-        # 🧠 修改處：新增第四個 AI 分頁
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 技術分析", "📊 籌碼/基本面", "🧠 AI 虛擬點評", "📝 交易筆記"])
+        # 🚀 升級：新增「資金計算」Tab
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 技術分析", "📊 籌碼/基本面", "🧠 AI 虛擬點評", "📝 交易筆記", "🧮 資金計算"])
         hist_daily = _cached_stock_history(sid)
 
         with tab1:
+            # 🚀 升級：進場節奏燈號判斷
+            entry_signal = "🔵 觀察訊號剛初期 (下一兩天再看)"
+            if not hist_daily.empty:
+                latest_close = hist_daily['close'].iloc[-1]
+                ma20_last = hist_daily['close'].rolling(20).mean().iloc[-1]
+                k_list, _ = _calc_kd_series(hist_daily['max'] if 'max' in hist_daily.columns else hist_daily['high'], 
+                                            hist_daily['min'] if 'min' in hist_daily.columns else hist_daily['low'], 
+                                            hist_daily['close'])
+                k_last = next((k for k in reversed(k_list) if k is not None), 50) if k_list else 50
+                
+                if pd.notna(ma20_last):
+                    dist_ma20 = (latest_close - ma20_last) / ma20_last
+                    if k_last > 80 or dist_ma20 > 0.15:
+                        entry_signal = "🟡 追高有風險、等待拉回 (訊號強但 K 值超買或乖離過大)"
+                    elif k_last < 60 and dist_ma20 < 0.08:
+                        entry_signal = "🟢 可進場 (訊號明確、位階合理、未超買)"
+
+            st.info(f"**進場節奏：** {entry_signal}")
+
             tcol1, tcol2, tcol3, tcol4 = st.columns([1.5, 1.5, 1.5, 1])
             tcol1.markdown(f"### {sid} {sname}")
             timeframe = tcol2.radio("週期", ["日K", "週K"], horizontal=True, label_visibility="collapsed")
-            # 改用 Streamlit radio 控制縮放範圍，繞開 Plotly rangeselector + rangebreaks 的相容性問題
-            zoom_choice = tcol3.radio("縮放", ["1月", "3月", "半年", "全部"], horizontal=True, index=3, label_visibility="collapsed", key=f"zoom_{sid}")
+            zoom_choice = tcol3.radio("縮放", ["1月", "3月", "半年", "全部"], horizontal=True, index=3, label_visibility="collapsed")
             theme_choice = tcol4.radio("主題", ["深色", "淺色"], horizontal=True, label_visibility="collapsed")
 
             is_in_watchlist = sid in st.session_state.watchlist
@@ -466,40 +443,22 @@ with col_chart:
                 else:
                     hist = hist_daily.rename(columns={high_col: 'max', low_col: 'min'}).copy()
 
-                # 法人買賣超數據整合
                 inst_stock = get_stock_institutional(sid)
                 if not inst_stock.empty:
                     inst_stock['net_lots'] = (inst_stock['buy'] - inst_stock['sell']) / 1000.0
                     inst_pivot = inst_stock.pivot_table(index='date', columns='name', values='net_lots', aggfunc='sum').reset_index()
                     for c in ['Foreign_Investor', 'Investment_Trust']:
                         if c not in inst_pivot.columns: inst_pivot[c] = 0.0
-                    if timeframe == "週K":
-                        inst_pivot = inst_pivot.set_index('date').resample('W-FRI').sum().reset_index()
-                    else:
-                        inst_pivot['date'] = pd.to_datetime(inst_pivot['date'])
-                    
+                    if timeframe == "週K": inst_pivot = inst_pivot.set_index('date').resample('W-FRI').sum().reset_index()
+                    else: inst_pivot['date'] = pd.to_datetime(inst_pivot['date'])
                     hist['date'] = pd.to_datetime(hist['date'])
                     hist = hist.merge(inst_pivot, on='date', how='left').fillna(0)
                 else:
                     hist['Foreign_Investor'], hist['Investment_Trust'] = 0.0, 0.0
 
-                twii_all = _load_twii_cached()
-                if not twii_all.empty:
-                    m_data = twii_all[((twii_all.index >= hist['date'].min()) & (twii_all.index <= hist['date'].max()))]
-                    if timeframe == "週K" and not m_data.empty: m_data = m_data.resample('W-FRI').agg({'Close': 'last'}).dropna()
-                else: m_data = pd.DataFrame()
-
-                if not m_data.empty and 'Close' in m_data.columns:
-                    m_close = m_data['Close'].reindex(hist.set_index('date').index).ffill()
-                    if len(m_close) > 0 and m_close.iloc[0] > 0: hist['Market_Norm'] = m_close.values / m_close.iloc[0] * 100
-
                 hist['MA5'], hist['MA20'], hist['MA60'] = hist['close'].rolling(5).mean(), hist['close'].rolling(20).mean(), hist['close'].rolling(60).mean()
-                # Bug 1 修正：_calc_kd_series 在歷史不足 10 筆時回傳 (None, None),
-                # 不防護的話新股或剛恢復交易股會讓 list comprehension 拋 TypeError
                 k_list, d_list = _calc_kd_series(hist['max'], hist['min'], hist['close'])
-                if k_list is None:
-                    hist['K'] = float('nan')
-                    hist['D'] = float('nan')
+                if k_list is None: hist['K'], hist['D'] = float('nan'), float('nan')
                 else:
                     hist['K'] = [x if x is not None else float('nan') for x in k_list]
                     hist['D'] = [x if x is not None else float('nan') for x in d_list]
@@ -508,78 +467,36 @@ with col_chart:
                 kd_cross = ((hist['K'] > hist['D']) & (hist['K'].shift(1) <= hist['D'].shift(1)) & (hist['K'] < kd_low_thr))
                 signal_dates, signal_prices = hist[kd_cross]['date'], hist[kd_cross]['min'] * 0.95
 
-                # 頂部卡片顯示
                 latest_close = hist_daily['close'].iloc[-1]
                 prev_close = hist_daily['close'].iloc[-2] if len(hist_daily) > 1 else latest_close
-                change_val = latest_close - prev_close
                 m1, m2, m3 = st.columns(3)
-                m1.metric("日收盤價", f"{latest_close:.2f}", f"{change_val:+.2f} ({change_val/prev_close*100:+.2f}%)")
+                m1.metric("日收盤價", f"{latest_close:.2f}", f"{latest_close - prev_close:+.2f} ({(latest_close - prev_close)/prev_close*100:+.2f}%)")
                 m2.metric("日成交量", f"{hist_daily[vol_col].iloc[-1]/1000:,.0f} 張")
                 m3.metric("選股總分", f"{row_data['總分']} 分" if row_data is not None else "未入選")
 
-                # 4 層子圖 (技術/成交量/法人/KD)
                 fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.42, 0.12, 0.18, 0.28])
-
                 fig.add_trace(go.Candlestick(x=hist['date'], open=hist['open'], high=hist['max'], low=hist['min'], close=hist['close'], name='K線', increasing_fillcolor='red', increasing_line_color='red', decreasing_fillcolor='green', decreasing_line_color='green'), row=1, col=1)
-                if 'Market_Norm' in hist.columns:
-                    fig.add_trace(go.Scatter(x=hist['date'], y=hist['Market_Norm'] * (hist['close'].iloc[0] / 100), line=dict(color='rgba(150,150,150,0.5)', width=1, dash='dot'), name='大盤 RS'), row=1, col=1)
 
-                for col_ma, color, lbl in [('MA5', 'orange', 'MA5'), ('MA20', 'purple', 'MA20'), ('MA60', 'green', 'MA60')]:
-                    fig.add_trace(go.Scatter(x=hist['date'], y=hist[col_ma], line=dict(color=color, width=1.2), name=lbl), row=1, col=1)
+                for col_ma, color in [('MA5', 'orange'), ('MA20', 'purple'), ('MA60', 'green')]:
+                    fig.add_trace(go.Scatter(x=hist['date'], y=hist[col_ma], line=dict(color=color, width=1.2), name=col_ma), row=1, col=1)
 
                 if not signal_dates.empty:
-                    fig.add_trace(go.Scatter(x=signal_dates, y=signal_prices, mode='markers', marker=dict(symbol='triangle-up', color='lime', size=12, line=dict(width=1, color='darkgreen')), name='KD金叉訊號'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=signal_dates, y=signal_prices, mode='markers', marker=dict(symbol='triangle-up', color='lime', size=12), name='KD金叉'), row=1, col=1)
 
-                if len(hist) > 60:
-                    # Issue 3 修正：週K 模式下實際是 60 週(~1.2 年)而非 60 日,正確標示避免誤導
-                    pressure_label = "60週壓" if timeframe == "週K" else "60日壓"
-                    fig.add_hline(y=hist['max'].iloc[-61:-1].max(), line_dash="dot", line_color="orange", annotation_text=pressure_label, annotation_position="top left", row=1, col=1)
-                
-                # 新股防護：MA20 NaN 防呆
-                ma20_last = hist['MA20'].iloc[-1]
-                defense_y = hist['min'].tail(10).min() if pd.isna(ma20_last) else max(ma20_last * 0.98, hist['min'].tail(10).min())
-                fig.add_hline(y=defense_y, line_dash="dash", line_color="red", annotation_text="🚨 防守", annotation_position="bottom right", row=1, col=1)
-
-                if row_data is not None:
-                    fig.add_annotation(x=hist['date'].iloc[-1], y=hist['min'].iloc[-1], text="🔥 訊號觸發", showarrow=True, arrowhead=1, arrowcolor="red", ay=30, row=1, col=1)
-
-                # 第二層：成交量
                 vol_colors = ['red' if c >= o else 'green' for c, o in zip(hist['close'], hist['open'])]
                 fig.add_trace(go.Bar(x=hist['date'], y=hist[vol_col], marker_color=vol_colors, name='成交量'), row=2, col=1)
-
-                # 第三層：法人買賣超柱狀圖
                 fig.add_trace(go.Bar(x=hist['date'], y=hist['Investment_Trust'], marker_color='#FF4B4B', name='投信(張)'), row=3, col=1)
                 fig.add_trace(go.Bar(x=hist['date'], y=hist['Foreign_Investor'], marker_color='#FACA44', name='外資(張)'), row=3, col=1)
-
-                # 第四層：KD 訊號線
                 fig.add_trace(go.Scatter(x=hist['date'], y=hist['K'], line=dict(color='blue', width=1.2), name='K'), row=4, col=1)
                 fig.add_trace(go.Scatter(x=hist['date'], y=hist['D'], line=dict(color='orange', width=1.2), name='D'), row=4, col=1)
-                fig.add_hline(y=80, line_dash="dash", line_color="gray", line_width=0.5, row=4, col=1)
-                fig.add_hline(y=20, line_dash="dash", line_color="gray", line_width=0.5, row=4, col=1)
 
-                all_dates = pd.date_range(start=hist['date'].min(), end=hist['date'].max())
-                missing_dates = [d.strftime("%Y-%m-%d") for d in all_dates if d not in hist['date'].dt.normalize().values]
-
-                fig.update_layout(
-                    template=chart_theme, paper_bgcolor=bg_color, plot_bgcolor=bg_color,
-                    height=850, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10),
-                    hovermode='x unified', showlegend=False, barmode='group' 
-                )
-                fig.update_xaxes(gridcolor=grid_color, rangebreaks=[dict(values=missing_dates)], type="date")
-
-                # 用 Streamlit radio 控制縮放：直接設定 xaxis range，
-                # 比 Plotly 內建 rangeselector 可靠（rangeselector + rangebreaks 在 Plotly 有已知 bug）
+                fig.update_layout(template=chart_theme, paper_bgcolor=bg_color, plot_bgcolor=bg_color, height=chart_height, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
                 if zoom_choice != "全部":
                     days_map = {"1月": 30, "3月": 90, "半年": 180}
-                    end_date   = pd.to_datetime(hist['date'].iloc[-1])
-                    start_date = end_date - pd.Timedelta(days=days_map[zoom_choice])
-                    fig.update_xaxes(range=[start_date, end_date])
+                    start_date = pd.to_datetime(hist['date'].iloc[-1]) - pd.Timedelta(days=days_map[zoom_choice])
+                    fig.update_xaxes(range=[start_date, hist['date'].iloc[-1]])
                 
-                fig.update_yaxes(gridcolor=grid_color, side='right')
-                fig.update_yaxes(fixedrange=False, row=1, col=1)
-
-                config = {'modeBarButtonsToAdd': ['drawline', 'drawopenpath', 'drawrect', 'eraseshape'], 'displayModeBar': True, 'displaylogo': False, 'scrollZoom': True}
-                st.plotly_chart(fig, use_container_width=True, config=config)
+                st.plotly_chart(fig, use_container_width=True)
             else: st.warning("暫無歷史數據。")
 
         with tab2:
@@ -588,135 +505,61 @@ with col_chart:
                 c1, c2 = st.columns(2)
                 c1.write(f"**💎 籌碼數據**\n- 投信淨額: {row_data['投信5日淨額(張)']} 張\n- 外資淨額: {row_data['外資5日淨額(張)']} 張\n- 籌碼共振: {'✅' if row_data['★籌碼共振(大戶↑散戶↓)'] else '❌'}")
                 c2.write(f"**📈 基本與波動**\n- 產業: {row_data['產業']}\n- 營收增率: {row_data['最新月營收增率(%)']}%\n- ATR%: {row_data['ATR%']}%")
-            else: st.info("💡 該股未出現在本次選股名單中，暫無籌碼與評分數據。")
+            else: st.info("💡 該股未出現在本次選股名單中。")
 
-        # 🧠 第三個分頁的 AI 深度診斷邏輯(多模型可選 + 自動 fallback)
         with tab3:
             st.subheader("🧠 OpenRouter AI 虛擬操盤分析師")
-
-            # 共用 ai_helper 的 key 讀取邏輯,確保「警告偵測」與「實際呼叫」用同一把 key
-            _has_api_key = bool(get_api_key())
-
-            if not _has_api_key:
-                st.warning("⚠️ 網頁系統未偵測到環境變數 `OPENROUTER_API_KEY`。請先在 Streamlit Cloud Secrets 設定金鑰!")
-            elif row_data is None:
-                st.info("💡 該股未出現在本次排行榜中（未達過關門檻），暫無量化核心數據供 AI 進行深度點評。")
+            if not bool(get_api_key()): st.warning("⚠️ 未偵測到 API_KEY")
+            elif row_data is None: st.info("💡 該股未達標，暫無數據供 AI 點評。")
             else:
-                # 模型選擇下拉選單：「自動輪替」優先，再列出個別模型
                 model_options = ["自動輪替 (推薦)"] + [m["name"] for m in AI_MODELS]
-                selected_model = st.selectbox(
-                    "🤖 選擇 AI 模型",
-                    model_options,
-                    key=f"ai_model_{sid}",
-                    help="選「自動輪替」會依序試 DeepSeek → Qwen → Gemini → Llama → GPT-OSS,第一個成功的就用。"
-                )
-
-                # cache 用 (sid, model) 當 key,換模型可重新生成而不必清舊的
+                selected_model = st.selectbox("🤖 選擇 AI 模型", model_options)
                 cache_key = (sid, selected_model)
 
                 if cache_key in st.session_state.ai_cache:
-                    cached_model, cached_text = st.session_state.ai_cache[cache_key]
-                    st.markdown(f"### 📋 診斷報告({cached_model})")
-                    st.info(cached_text)
-                    if st.button("🔄 重新生成", key=f"re_ai_{sid}_{selected_model}"):
+                    st.info(st.session_state.ai_cache[cache_key][1])
+                    if st.button("🔄 重新生成"): 
                         del st.session_state.ai_cache[cache_key]
                         st.rerun()
                 else:
-                    st.caption("把系統算出的量化雷達數據與技術位階一起餵給免費模型,產生 ~150 字深度診斷。")
-                    if st.button("🚀 啟動 AI 深度量化解析", key=f"btn_ai_{sid}_{selected_model}", use_container_width=True):
-
-                        # ── 技術位階:從 hist_daily 算 MA20 / MA60 / K 值,讓 AI 點評更具體 ──
-                        position_ctx = ""
-                        if hist_daily is not None and not hist_daily.empty and len(hist_daily) >= 20:
-                            try:
-                                high_col_ai = 'max' if 'max' in hist_daily.columns else 'high'
-                                low_col_ai  = 'min' if 'min' in hist_daily.columns else 'low'
-                                close_s     = hist_daily['close']
-                                latest_p    = float(close_s.iloc[-1])
-                                ma20_p      = float(close_s.tail(20).mean())
-                                ma60_p      = float(close_s.tail(60).mean()) if len(close_s) >= 60 else None
-
-                                # K 值(略過 None 取最近一個有效值)
-                                k_last_p = None
-                                try:
-                                    k_list, _ = _calc_kd_series(hist_daily[high_col_ai], hist_daily[low_col_ai], close_s)
-                                    k_last_p = next((k for k in reversed(k_list) if k is not None), None)
-                                except Exception:
-                                    pass
-
-                                parts = [f"目前股價 {latest_p:.1f}"]
-                                parts.append(f"{'站上' if latest_p > ma20_p else '跌破'} MA20({ma20_p:.1f})")
-                                if ma60_p is not None:
-                                    parts.append(f"{'站上' if latest_p > ma60_p else '跌破'} MA60({ma60_p:.1f})")
-                                if k_last_p is not None:
-                                    k_desc = "超買" if k_last_p > 80 else ("超賣" if k_last_p < 20 else "中性")
-                                    parts.append(f"K值 {k_last_p:.0f}({k_desc})")
-                                position_ctx = "技術位階:" + "、".join(parts) + "。"
-                            except Exception as _pe:
-                                print(f"位階計算失敗(忽略): {_pe}")
-
-                        # 用 textwrap.dedent 清掉每行開頭的縮排,避免 24 spaces 進入 prompt
-                        # 浪費 token 並可能影響 AI 對結構的理解
+                    if st.button("🚀 啟動 AI 深度量化解析", use_container_width=True):
                         prompt = textwrap.dedent(f"""\
-                            你是一位台灣股市的資深量化操盤分析師。請根據以下這檔個股由系統算出的核心籌碼與技術數據,用繁體中文寫出一份約 150 字的專業投資診斷。
-                            一針見血指出當前籌碼面(法人大戶)與技術基本面的優缺點,並給出具體的短線操盤與策略建議(多空方向)。
-                            請不要使用 Markdown 語法,以純文字順暢表達即可。
-
-                            【個股數據報告】
-                            股票標的:{sid} {sname}
-                            當前股價:{row_data['現價']} 元
-                            綜合量化總分:{row_data['總分']} / 10 分
-                            產業板塊:{row_data['產業']}
-                            20日均成交量:{row_data['20日均量(張)']} 張
-                            歷史波動度 (ATR%):{row_data['ATR%']}%
-                            三大法人5日籌碼:投信總計 {row_data['投信5日淨額(張)']} 張 / 外資總計 {row_data['外資5日淨額(張)']} 張
-                            主力與散戶狀態:{'主力大戶吃貨且散戶退場(籌碼共振成立)' if row_data['★籌碼共振(大戶↑散戶↓)'] == 1 else '籌碼尚未集中(共振未成立)'}
-                            最新營收表現:年增/月增率 {row_data['最新月營收增率(%)']}% (採用模式: {row_data['營收模式']})
-                            相對大盤強度 (RS):{'表現超越大盤(多頭領頭羊)' if row_data['RS優於大盤'] == 1 else '弱於大盤走勢'}
-                            {position_ctx}
+                            你是一位資深量化分析師。請用繁體中文寫一份約 150 字的專業診斷，不要使用 Markdown。
+                            股票:{sid} {sname}
+                            總分:{row_data['總分']}/10
                             """)
-
-                        # 決定要試的模型清單:
-                        # - 自動輪替 → models=None,讓 ai_helper 套 PREFERRED_AI 環境變數排序
-                        # - 指定單一模型 → 傳 [單一 dict] 強制只試這個
-                        if selected_model == "自動輪替 (推薦)":
-                            models_to_try = None
-                            spinner_msg = "AI 分析師正在輪替模型中,請稍候..."
-                        else:
-                            models_to_try = [m for m in AI_MODELS if m["name"] == selected_model]
-                            spinner_msg = f"{selected_model} 分析師正在閱讀籌碼數據..."
-
-                        with st.spinner(spinner_msg):
-                            model_name, result = call_openrouter_ai(
-                                prompt, models=models_to_try, max_tokens=400
-                            )
-
-                        if model_name:
-                            st.session_state.ai_cache[cache_key] = (model_name, result)
+                        with st.spinner("AI 分析中..."):
+                            m_try = None if selected_model == "自動輪替 (推薦)" else [m for m in AI_MODELS if m["name"] == selected_model]
+                            m_name, res = call_openrouter_ai(prompt, models=m_try, max_tokens=400)
+                        if m_name:
+                            st.session_state.ai_cache[cache_key] = (m_name, res)
                             st.rerun()
-                        else:
-                            st.error("❌ 所有 AI 模型皆失敗,請稍後再試。原因請看終端機 log。")
 
         with tab4:
             st.subheader("📝 交易筆記")
-            st.caption("內容自動儲存，切換股票或刷新頁面後皆不會遺失。")
+            st.text_area(f"對 {sid} 的看法…", value=st.session_state.trading_notes.get(sid, ""), key=f"note_input_{sid}", on_change=_note_on_change_cb, args=(sid,), height=180)
             
-            st.text_area(
-                f"紀錄對 {sid} {sname} 的看法…",
-                value=st.session_state.trading_notes.get(sid, ""),
-                key=f"note_input_{sid}",
-                on_change=_note_on_change_cb,
-                args=(sid,),
-                height=180,
-            )
+        # 🚀 升級：資金管理計算器
+        with tab5:
+            st.subheader("🧮 固定風險資金管理計算器")
+            st.caption("根據您願意承受的單筆虧損，計算出合理的買進張數。")
+            st.markdown("公式： $$買進張數 = \\frac{總資金 \\times (風險\\% \\div 100)}{(買進價 - 停損價) \\times 1000}$$")
             
-            st.divider()
-            st.subheader("💾 筆記資料庫管理")
-            notes_json_str = json.dumps(st.session_state.trading_notes, ensure_ascii=False, indent=2)
-            st.download_button(
-                label="📥 一鍵匯出/下載所有交易筆記 (JSON)",
-                data=notes_json_str,
-                file_name=f"taiwan_stock_notes_{pd.Timestamp.now().strftime('%Y%m%d')}.json",
-                mime="application/json",
-                use_container_width=True
-            )
+            latest_price = hist_daily['close'].iloc[-1] if not hist_daily.empty else 0.0
+            
+            calc_c1, calc_c2 = st.columns(2)
+            capital = calc_c1.number_input("總操作資金 (元)", min_value=10000, value=1000000, step=100000)
+            risk_pct = calc_c2.number_input("單筆最大風險 (%)", min_value=0.1, max_value=10.0, value=2.0, step=0.1)
+            
+            buy_price = calc_c1.number_input("預計買進價", value=float(latest_price))
+            stop_loss = calc_c2.number_input("防守停損價", value=float(latest_price * 0.95))
+            
+            if buy_price > stop_loss:
+                risk_amount = capital * (risk_pct / 100)
+                risk_per_share = buy_price - stop_loss
+                shares_to_buy = risk_amount / (risk_per_share * 1000)
+                
+                st.success(f"🛡️ 單筆允許虧損金額：**{risk_amount:,.0f} 元**")
+                st.info(f"📦 建議買進張數：**{shares_to_buy:.2f} 張** (約需投入 {shares_to_buy * buy_price * 1000:,.0f} 元)")
+            else:
+                st.error("停損價必須低於買進價！")
