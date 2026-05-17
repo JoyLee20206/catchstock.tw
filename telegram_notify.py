@@ -6,6 +6,7 @@ import tempfile
 import html
 from pathlib import Path
 from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS, CACHE_DIR
+from picks_history import load_history, save_history, compute_streak, build_picks_from_df
 
 # 共用模組
 from ai_helper import call_openrouter_ai
@@ -178,9 +179,14 @@ def main():
 
         send_telegram_message(header + ai_comment + content + watchlist_msg)
 
-        cur_sids = df['代號'].astype(str).tolist() if (df is not None and not df.empty) else []
+        # ✅ 替換成以下這段新邏輯：
+        cur_picks = build_picks_from_df(df) if (df is not None and not df.empty) else []       
+        
+        # 移除舊的今天紀錄與 legacy
         history = [h for h in history if h.get("date") not in (today_str, "legacy")]
-        history.append({"date": today_str, "sids": cur_sids})
+        
+        # 以 "picks" 的新格式存入，保留當日 close / score / industry
+        history.append({"date": today_str, "picks": cur_picks})
         save_history(history)
 
     except Exception as e:
