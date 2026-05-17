@@ -336,8 +336,6 @@ def main():
 
                 if row.get(breakout_col) == 1:
                     tags += " <code>[突破]</code>"
-                if row.get("★籌碼共振(大戶↑散戶↓)") == 1:
-                    tags += " <code>[共振]</code>"
 
                 # 防禦 ETF 名稱含 &/< 等字元;名稱缺失時用代號當替身,避免顯示「nan」
                 _raw = row['名稱']
