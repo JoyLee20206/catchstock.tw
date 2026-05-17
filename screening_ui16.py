@@ -521,13 +521,14 @@ with col_chart:
                 fig.update_xaxes(
                     rangeselector=dict(
                         buttons=[
-                            dict(count=30, label="1月", step="day", stepmode="backward"), 
-                            dict(count=90, label="3月", step="day", stepmode="backward"), 
-                            dict(count=180, label="半年", step="day", stepmode="backward"), 
+                            # 改用 step="month"：避免 count=30 起始日撞到 rangebreaks 隱藏的週末/假日
+                            dict(count=1, label="1月",  step="month", stepmode="backward"),
+                            dict(count=3, label="3月",  step="month", stepmode="backward"),
+                            dict(count=6, label="半年", step="month", stepmode="backward"),
                             dict(step="all", label="全部")
                         ],
                         bgcolor='#333' if theme_choice == "深色" else '#EEE'
-                    ), 
+                    ),
                     row=1, col=1
                 )
                 
