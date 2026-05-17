@@ -28,61 +28,15 @@ from screening0515 import (
     CACHE_DIR,
 )
 
+# 共用模組(與 telegram_notify.py 共用同一份邏輯)
+from ai_helper import call_openrouter_ai, AI_MODELS
+from cache_status import cache_freshness
+from picks_history import load_history, compute_hot_picks
+
 # ── 自選股與交易筆記持久化 ────────────────────────────────────────────────
 # 🐛 已修正：路徑改為 cache 資料夾，確保網頁與 Telegram 小助理資料完全同步！
 WATCHLIST_FILE = "cache/watchlist.json"
 NOTES_FILE = "cache/notes.json"
-
-# ── AI 模型清單（與 telegram_notify.py 保持一致） ─────────────────────────
-AI_MODELS = [
-    # 換上 Google 最新開放的免費實驗版
-    {"id": "google/gemini-2.0-pro-exp-02-05:free",    "name": "Gemini 2.0 Pro"},
-    {"id": "meta-llama/llama-3.3-70b-instruct:free",  "name": "Llama 3.3"},  # 偶爾塞車，保留著當備胎
-    {"id": "openai/gpt-oss-20b:free",                 "name": "GPT-OSS 20B"}, # 你的神救援 MVP
-]
-
-
-def call_openrouter_ai(api_key: str, prompt: str, models: list, timeout: int = 20):
-    """依序嘗試 models 清單，回傳 (model_name, ai_text)；全部失敗回傳 (None, error_msg)。
-
-    models 為 [{"id": ..., "name": ...}, ...]；若只放一個就等同單模型呼叫。
-    """
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    errors = []
-    for m in models:
-        try:
-            payload = {
-                "model": m["id"],
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "max_tokens": 400,   # UI 點評允許略長（~150 字）
-            }
-            resp = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers, json=payload, timeout=timeout
-            )
-            resp.raise_for_status()
-            j = resp.json()
-
-            if "choices" in j and j["choices"]:
-                text = j["choices"][0]["message"]["content"].strip()
-                # 清掉 Markdown 殘渣（長 token 優先）
-                for tok in ("###", "##", "**", "*", "`"):
-                    text = text.replace(tok, "")
-                text = text.strip()
-                if text:
-                    return m["name"], text
-            elif "error" in j:
-                errors.append(f"{m['name']}: {j['error'].get('message', '')[:80]}")
-        except requests.exceptions.Timeout:
-            errors.append(f"{m['name']}: 逾時")
-        except Exception as e:
-            errors.append(f"{m['name']}: {str(e)[:80]}")
-
-    return None, " / ".join(errors) if errors else "所有模型均無回應"
 
 def load_watchlist() -> list:
     if Path(WATCHLIST_FILE).exists():
@@ -181,27 +135,18 @@ def _get_cache_max_date():
     except Exception: return None
 
 _cache_date = _get_cache_max_date()
-if _cache_date is None:
-    st.error("⚠ 找不到 daily 快取，請先執行 `python fetch_cache.py` 拉資料")
-else:
-    _today = pd.Timestamp.now(tz="Asia/Taipei").replace(tzinfo=None).normalize()
-    _age        = (_today - _cache_date.normalize()).days
-    _date_str   = _cache_date.strftime('%Y-%m-%d')
-    _is_weekend = _today.weekday() >= 5  # 5=週六, 6=週日
+_freshness = cache_freshness(_cache_date)
+# Level → Streamlit 顯示元件對映(顏色一致由 cache_status 控制)
+_level_fn = {
+    "missing": st.error,
+    "ok":      st.success,
+    "info":    st.info,
+    "warn":    st.warning,
+    "error":   st.error,
+}
+_level_fn[_freshness["level"]](f"📅 {_freshness['msg']}")
 
-    # 增加一個「收盤後」的判斷 (15:00 之後才算真正的今天)
-    now_hour = pd.Timestamp.now(tz="Asia/Taipei").hour    
-    if _age == 0:
-        if now_hour < 15:
-            st.info(f"📅 目前資料為 {_date_str}。今日盤後數據預計 15:30 自動更新。")
-        else:
-            st.success(f"📅 cache 最新日期: {_date_str} (今日最新數據)")           
-    elif _is_weekend and _age <= 2:
-        st.success(f"📅 cache 最新日期: {_date_str} (週末未開盤，此已為最新交易日)")
-    elif _age <= 5:
-        st.info(f"📅 cache 最新日期: {_date_str} ({_age} 天前 - 註：若遇國定假日未開盤，此即為最新資料)")
-    else:
-        st.error(f"📅 cache 最新日期: {_date_str} ({_age} 天前) ⚠ 過舊，請先更新")
+if _freshness["level"] != "missing":
 
     # 雲端更新按鈕區塊
     st.markdown("#### 🔄 資料更新") 
@@ -396,6 +341,33 @@ files_bytes = st.session_state.result_files or {}
 meta = st.session_state.result_meta
 
 if meta: show_market_banner(meta)
+
+# ── 7 日入選熱度榜(資料來自 cache/previous_picks.json,由 Telegram 每日推播寫入) ──
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_hot_picks_cached(top_n: int = 10):
+    """快取 5 分鐘,避免每次 rerun 都重讀 JSON。"""
+    hist = load_history()
+    return compute_hot_picks(hist, top_n=top_n), len(hist)
+
+_hot, _hist_days = _load_hot_picks_cached(top_n=10)
+if _hot:
+    with st.expander(f"🔥 過去 {_hist_days} 日入選熱度榜(TOP 10)", expanded=False):
+        st.caption("追蹤近期持續上榜的強勢股 — 連續出現次數越多,代表趨勢延續性越強。")
+        # 用 dataframe 顯示,讓使用者可以排序與複製
+        hot_rows = []
+        for r in _hot:
+            sid_str = str(r["sid"])
+            name = ui_name_map.get(sid_str, "")
+            hot_rows.append({
+                "★今日": "✅" if r["in_latest"] else "",
+                "代號":  sid_str,
+                "名稱":  name,
+                "入選天數":   f"{r['hits']} / {r['total_days']}",
+                "最長連續":   f"{r['max_streak']} 日",
+                "目前連續":   f"{r['active_streak']} 日" if r['active_streak'] >= 1 else "—",
+            })
+        st.dataframe(pd.DataFrame(hot_rows), use_container_width=True, hide_index=True)
+
 st.divider()
 
 col_list, col_chart = st.columns([0.45, 0.55])
@@ -428,12 +400,22 @@ with col_list:
             else:
                 dl_cols[i].button(LABELS[ftype] + " (無)", disabled=True, use_container_width=True)
 
+        # 一鍵複製股號清單(套用篩選後,可直接貼進券商看盤軟體的群組建立)
+        codes_csv = ",".join(filtered['代號'].astype(str).tolist())
+        if codes_csv:
+            st.caption(f"📋 已篩選 {len(filtered)} 檔 — 點右上角圖示一鍵複製,可貼進券商看盤軟體建立群組")
+            st.code(codes_csv, language=None)
+
         current_sel = event.selection.rows
         if current_sel != st.session_state.last_df_selection:
             st.session_state.last_df_selection = current_sel
             if current_sel: st.session_state.target_sid = str(filtered.iloc[current_sel[0]]['代號'])
 
 # ── K 線與技術圖表區 ────────────────────────────────────────────────────────
+# 若有選股結果但 target_sid 還沒設,預設指向第一檔(總分最高),讓使用者一進來就有東西看
+if (not st.session_state.target_sid) and (df is not None) and (len(df) > 0):
+    st.session_state.target_sid = str(df.iloc[0]['代號'])
+
 with col_chart:
     if not st.session_state.target_sid:
         st.info("👈 請點擊左側列表或自選股，開始量化決策分析。")
@@ -607,7 +589,7 @@ with col_chart:
                 c2.write(f"**📈 基本與波動**\n- 產業: {row_data['產業']}\n- 營收增率: {row_data['最新月營收增率(%)']}%\n- ATR%: {row_data['ATR%']}%")
             else: st.info("💡 該股未出現在本次選股名單中，暫無籌碼與評分數據。")
 
-        # 🧠 第三個分頁的 AI 深度診斷邏輯（多模型可選 + 自動 fallback）
+        # 🧠 第三個分頁的 AI 深度診斷邏輯(多模型可選 + 自動 fallback)
         with tab3:
             st.subheader("🧠 OpenRouter AI 虛擬操盤分析師")
 
@@ -624,58 +606,90 @@ with col_chart:
                     "🤖 選擇 AI 模型",
                     model_options,
                     key=f"ai_model_{sid}",
-                    help="選「自動輪替」時，會依序試 DeepSeek → Qwen → Gemini → Llama → GPT-OSS，第一個成功的就用。"
+                    help="選「自動輪替」會依序試 DeepSeek → Qwen → Gemini → Llama → GPT-OSS,第一個成功的就用。"
                 )
 
-                # cache 用 (sid, model) 當 key，換模型可重新生成而不必清舊的
+                # cache 用 (sid, model) 當 key,換模型可重新生成而不必清舊的
                 cache_key = (sid, selected_model)
 
                 if cache_key in st.session_state.ai_cache:
                     cached_model, cached_text = st.session_state.ai_cache[cache_key]
-                    st.markdown(f"### 📋 診斷報告（{cached_model}）")
+                    st.markdown(f"### 📋 診斷報告({cached_model})")
                     st.info(cached_text)
                     if st.button("🔄 重新生成", key=f"re_ai_{sid}_{selected_model}"):
                         del st.session_state.ai_cache[cache_key]
                         st.rerun()
                 else:
-                    st.caption("把系統算出的 10 大量化雷達數據餵給 OpenRouter 免費模型，產生 ~150 字投資診斷。")
+                    st.caption("把系統算出的量化雷達數據與技術位階一起餵給免費模型,產生 ~150 字深度診斷。")
                     if st.button("🚀 啟動 AI 深度量化解析", key=f"btn_ai_{sid}_{selected_model}", use_container_width=True):
+
+                        # ── 技術位階:從 hist_daily 算 MA20 / MA60 / K 值,讓 AI 點評更具體 ──
+                        position_ctx = ""
+                        if hist_daily is not None and not hist_daily.empty and len(hist_daily) >= 20:
+                            try:
+                                high_col_ai = 'max' if 'max' in hist_daily.columns else 'high'
+                                low_col_ai  = 'min' if 'min' in hist_daily.columns else 'low'
+                                close_s     = hist_daily['close']
+                                latest_p    = float(close_s.iloc[-1])
+                                ma20_p      = float(close_s.tail(20).mean())
+                                ma60_p      = float(close_s.tail(60).mean()) if len(close_s) >= 60 else None
+
+                                # K 值(略過 None 取最近一個有效值)
+                                k_last_p = None
+                                try:
+                                    k_list, _ = _calc_kd_series(hist_daily[high_col_ai], hist_daily[low_col_ai], close_s)
+                                    k_last_p = next((k for k in reversed(k_list) if k is not None), None)
+                                except Exception:
+                                    pass
+
+                                parts = [f"目前股價 {latest_p:.1f}"]
+                                parts.append(f"{'站上' if latest_p > ma20_p else '跌破'} MA20({ma20_p:.1f})")
+                                if ma60_p is not None:
+                                    parts.append(f"{'站上' if latest_p > ma60_p else '跌破'} MA60({ma60_p:.1f})")
+                                if k_last_p is not None:
+                                    k_desc = "超買" if k_last_p > 80 else ("超賣" if k_last_p < 20 else "中性")
+                                    parts.append(f"K值 {k_last_p:.0f}({k_desc})")
+                                position_ctx = "技術位階:" + "、".join(parts) + "。"
+                            except Exception as _pe:
+                                print(f"位階計算失敗(忽略): {_pe}")
+
                         prompt = f"""
-                        你是一位台灣股市的資深量化操盤分析師。請根據以下這檔個股由系統算出的核心籌碼與技術數據，用繁體中文寫出一份約 150 字的專業投資診斷。
-                        一針見血指出當前籌碼面（法人大戶）與技術基本面的優缺點，並給出具體的短線操盤與策略建議（多空方向）。
-                        請不要使用 Markdown 語法中的星號 (**) 加粗，以純文字順暢表達即可。
+                        你是一位台灣股市的資深量化操盤分析師。請根據以下這檔個股由系統算出的核心籌碼與技術數據,用繁體中文寫出一份約 150 字的專業投資診斷。
+                        一針見血指出當前籌碼面(法人大戶)與技術基本面的優缺點,並給出具體的短線操盤與策略建議(多空方向)。
+                        請不要使用 Markdown 語法,以純文字順暢表達即可。
 
                         【個股數據報告】
-                        股票標的：{sid} {sname}
-                        當前股價：{row_data['現價']} 元
-                        綜合量化總分：{row_data['總分']} / 10 分
-                        產業板塊：{row_data['產業']}
-                        20日均成交量：{row_data['20日均量(張)']} 張
-                        歷史波動度 (ATR%)：{row_data['ATR%']}%
-                        三大法人5日籌碼：投信總計 {row_data['投信5日淨額(張)']} 張 / 外資總計 {row_data['外資5日淨額(張)']} 張
-                        主力與散戶狀態：{'主力大戶吃貨且散戶退場（籌碼共振成立）' if row_data['★籌碼共振(大戶↑散戶↓)'] == 1 else '籌碼尚未集中（共振未成立）'}
-                        最新營收表現：年增/月增率 {row_data['最新月營收增率(%)']}% (採用模式: {row_data['營收模式']})
-                        相對大盤強度 (RS)：{'表現超越大盤（多頭領頭羊）' if row_data['RS優於大盤'] == 1 else '弱於大盤走勢'}
+                        股票標的:{sid} {sname}
+                        當前股價:{row_data['現價']} 元
+                        綜合量化總分:{row_data['總分']} / 10 分
+                        產業板塊:{row_data['產業']}
+                        20日均成交量:{row_data['20日均量(張)']} 張
+                        歷史波動度 (ATR%):{row_data['ATR%']}%
+                        三大法人5日籌碼:投信總計 {row_data['投信5日淨額(張)']} 張 / 外資總計 {row_data['外資5日淨額(張)']} 張
+                        主力與散戶狀態:{'主力大戶吃貨且散戶退場(籌碼共振成立)' if row_data['★籌碼共振(大戶↑散戶↓)'] == 1 else '籌碼尚未集中(共振未成立)'}
+                        最新營收表現:年增/月增率 {row_data['最新月營收增率(%)']}% (採用模式: {row_data['營收模式']})
+                        相對大盤強度 (RS):{'表現超越大盤(多頭領頭羊)' if row_data['RS優於大盤'] == 1 else '弱於大盤走勢'}
+                        {position_ctx}
                         """
 
-                        # 決定要試的模型清單：自動輪替 = 全部；指定 = 只試該一個
+                        # 決定要試的模型清單:自動輪替 = 全部;指定 = 只試該一個
                         if selected_model == "自動輪替 (推薦)":
                             models_to_try = AI_MODELS
-                            spinner_msg = "AI 分析師正在輪替模型中，請稍候..."
+                            spinner_msg = "AI 分析師正在輪替模型中,請稍候..."
                         else:
                             models_to_try = [m for m in AI_MODELS if m["name"] == selected_model]
                             spinner_msg = f"{selected_model} 分析師正在閱讀籌碼數據..."
 
                         with st.spinner(spinner_msg):
                             model_name, result = call_openrouter_ai(
-                                OPENROUTER_API_KEY, prompt, models_to_try
+                                prompt, models=models_to_try, max_tokens=400
                             )
 
                         if model_name:
                             st.session_state.ai_cache[cache_key] = (model_name, result)
                             st.rerun()
                         else:
-                            st.error(f"❌ AI 呼叫失敗：{result}")
+                            st.error("❌ 所有 AI 模型皆失敗,請稍後再試。原因請看終端機 log。")
 
         with tab4:
             st.subheader("📝 交易筆記")
