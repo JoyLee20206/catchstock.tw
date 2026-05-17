@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
+import requests
 import yfinance as yf
 import plotly.graph_objects as go
 import streamlit as st
@@ -31,6 +32,58 @@ from screening0515 import (
 # 🐛 已修正：路徑改為 cache 資料夾，確保網頁與 Telegram 小助理資料完全同步！
 WATCHLIST_FILE = "cache/watchlist.json"
 NOTES_FILE = "cache/notes.json"
+
+# ── AI 模型清單（與 telegram_notify.py 保持一致） ─────────────────────────
+AI_MODELS = [
+    {"id": "deepseek/deepseek-chat-v3-0324:free",     "name": "DeepSeek V3"},
+    {"id": "qwen/qwen-2.5-72b-instruct:free",         "name": "Qwen 2.5"},
+    {"id": "google/gemini-2.0-flash-exp:free",        "name": "Gemini 2.0"},
+    {"id": "meta-llama/llama-3.3-70b-instruct:free",  "name": "Llama 3.3"},
+    {"id": "openai/gpt-oss-20b:free",                 "name": "GPT-OSS 20B"},
+]
+
+
+def call_openrouter_ai(api_key: str, prompt: str, models: list, timeout: int = 20):
+    """依序嘗試 models 清單，回傳 (model_name, ai_text)；全部失敗回傳 (None, error_msg)。
+
+    models 為 [{"id": ..., "name": ...}, ...]；若只放一個就等同單模型呼叫。
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    errors = []
+    for m in models:
+        try:
+            payload = {
+                "model": m["id"],
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 400,   # UI 點評允許略長（~150 字）
+            }
+            resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers, json=payload, timeout=timeout
+            )
+            resp.raise_for_status()
+            j = resp.json()
+
+            if "choices" in j and j["choices"]:
+                text = j["choices"][0]["message"]["content"].strip()
+                # 清掉 Markdown 殘渣（長 token 優先）
+                for tok in ("###", "##", "**", "*", "`"):
+                    text = text.replace(tok, "")
+                text = text.strip()
+                if text:
+                    return m["name"], text
+            elif "error" in j:
+                errors.append(f"{m['name']}: {j['error'].get('message', '')[:80]}")
+        except requests.exceptions.Timeout:
+            errors.append(f"{m['name']}: 逾時")
+        except Exception as e:
+            errors.append(f"{m['name']}: {str(e)[:80]}")
+
+    return None, " / ".join(errors) if errors else "所有模型均無回應"
 
 def load_watchlist() -> list:
     if Path(WATCHLIST_FILE).exists():
@@ -392,7 +445,12 @@ with col_chart:
             if sid in df['代號'].astype(str).values:
                 row_data = df[df['代號'].astype(str) == sid].iloc[0]
 
-        sname = row_data['名稱'] if row_data is not None else ui_name_map.get(sid, "")
+        # Issue 2 修正：名稱為 NaN 時 fallback 到 ui_name_map，避免顯示「nan」穿透到圖表/AI/筆記
+        if row_data is not None:
+            _raw_name = row_data['名稱']
+            sname = str(_raw_name) if pd.notna(_raw_name) else ui_name_map.get(sid, "")
+        else:
+            sname = ui_name_map.get(sid, "")
         
         # 🧠 修改處：新增第四個 AI 分頁
         tab1, tab2, tab3, tab4 = st.tabs(["📈 技術分析", "📊 籌碼/基本面", "🧠 AI 虛擬點評", "📝 交易筆記"])
@@ -454,9 +512,15 @@ with col_chart:
                     if len(m_close) > 0 and m_close.iloc[0] > 0: hist['Market_Norm'] = m_close.values / m_close.iloc[0] * 100
 
                 hist['MA5'], hist['MA20'], hist['MA60'] = hist['close'].rolling(5).mean(), hist['close'].rolling(20).mean(), hist['close'].rolling(60).mean()
+                # Bug 1 修正：_calc_kd_series 在歷史不足 10 筆時回傳 (None, None),
+                # 不防護的話新股或剛恢復交易股會讓 list comprehension 拋 TypeError
                 k_list, d_list = _calc_kd_series(hist['max'], hist['min'], hist['close'])
-                hist['K'] = [x if x is not None else float('nan') for x in k_list]
-                hist['D'] = [x if x is not None else float('nan') for x in d_list]
+                if k_list is None:
+                    hist['K'] = float('nan')
+                    hist['D'] = float('nan')
+                else:
+                    hist['K'] = [x if x is not None else float('nan') for x in k_list]
+                    hist['D'] = [x if x is not None else float('nan') for x in d_list]
 
                 kd_low_thr = st.session_state.kd_low_from
                 kd_cross = ((hist['K'] > hist['D']) & (hist['K'].shift(1) <= hist['D'].shift(1)) & (hist['K'] < kd_low_thr))
@@ -485,7 +549,9 @@ with col_chart:
                     fig.add_trace(go.Scatter(x=signal_dates, y=signal_prices, mode='markers', marker=dict(symbol='triangle-up', color='lime', size=12, line=dict(width=1, color='darkgreen')), name='KD金叉訊號'), row=1, col=1)
 
                 if len(hist) > 60:
-                    fig.add_hline(y=hist['max'].iloc[-61:-1].max(), line_dash="dot", line_color="orange", annotation_text="60日壓", annotation_position="top left", row=1, col=1)
+                    # Issue 3 修正：週K 模式下實際是 60 週(~1.2 年)而非 60 日,正確標示避免誤導
+                    pressure_label = "60週壓" if timeframe == "週K" else "60日壓"
+                    fig.add_hline(y=hist['max'].iloc[-61:-1].max(), line_dash="dot", line_color="orange", annotation_text=pressure_label, annotation_position="top left", row=1, col=1)
                 
                 # 新股防護：MA20 NaN 防呆
                 ma20_last = hist['MA20'].iloc[-1]
@@ -542,76 +608,75 @@ with col_chart:
                 c2.write(f"**📈 基本與波動**\n- 產業: {row_data['產業']}\n- 營收增率: {row_data['最新月營收增率(%)']}%\n- ATR%: {row_data['ATR%']}%")
             else: st.info("💡 該股未出現在本次選股名單中，暫無籌碼與評分數據。")
 
-        # 🧠 新增：第三個分頁的 AI 深度診斷邏輯 (OpenRouter 免綁卡版)
+        # 🧠 第三個分頁的 AI 深度診斷邏輯（多模型可選 + 自動 fallback）
         with tab3:
             st.subheader("🧠 OpenRouter AI 虛擬操盤分析師")
-            
-            # 從環境變數或 Streamlit Secrets 讀取 OpenRouter Key
+
             OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
-            
+
             if not OPENROUTER_API_KEY:
                 st.warning("⚠️ 網頁系統未偵測到環境變數 `OPENROUTER_API_KEY`。請先在 Streamlit Cloud Secrets 設定金鑰！")
             elif row_data is None:
                 st.info("💡 該股未出現在本次排行榜中（未達過關門檻），暫無量化核心數據供 AI 進行深度點評。")
             else:
-                if sid in st.session_state.ai_cache:
-                    st.markdown("### 📋 歷史診斷報告記憶檔")
-                    st.info(st.session_state.ai_cache[sid])
-                    if st.button("🔄 重新生成最新點評", key=f"re_ai_{sid}"):
-                        del st.session_state.ai_cache[sid]
+                # 模型選擇下拉選單：「自動輪替」優先，再列出個別模型
+                model_options = ["自動輪替 (推薦)"] + [m["name"] for m in AI_MODELS]
+                selected_model = st.selectbox(
+                    "🤖 選擇 AI 模型",
+                    model_options,
+                    key=f"ai_model_{sid}",
+                    help="選「自動輪替」時，會依序試 DeepSeek → Qwen → Gemini → Llama → GPT-OSS，第一個成功的就用。"
+                )
+
+                # cache 用 (sid, model) 當 key，換模型可重新生成而不必清舊的
+                cache_key = (sid, selected_model)
+
+                if cache_key in st.session_state.ai_cache:
+                    cached_model, cached_text = st.session_state.ai_cache[cache_key]
+                    st.markdown(f"### 📋 診斷報告（{cached_model}）")
+                    st.info(cached_text)
+                    if st.button("🔄 重新生成", key=f"re_ai_{sid}_{selected_model}"):
+                        del st.session_state.ai_cache[cache_key]
                         st.rerun()
                 else:
-                    st.caption("點擊下方按鈕將會把本系統算出的 10 大雷達數據餵給免綁卡的 OpenRouter 免費模型。")
-                    if st.button("🚀 啟動 AI 深度量化解析", key=f"btn_ai_{sid}", use_container_width=True):
-                        with st.spinner("AI 分析師正在閱讀籌碼量化數據中，請稍候..."):
-                            try:
-                                import requests
-                                prompt = f"""
-                                你是一位台灣股市的資深量化操盤分析師。請根據以下這檔個股由系統算出的核心籌碼與技術數據，用繁體中文寫出一份約 150 字的專業投資診斷。
-                                一針見血指出當前籌碼面（法人大戶）與技術基本面的優缺點，並給出具體的短線操盤與策略建議（多空方向）。
-                                請不要使用 Markdown 語法中的星號 (**) 加粗，以純文字順暢表達即可。
-                                
-                                【個股數據報告】
-                                股票標的：{sid} {sname}
-                                當前股價：{row_data['現價']} 元
-                                綜合量化總分：{row_data['總分']} / 10 分
-                                產業板塊：{row_data['產業']}
-                                20日均成交量：{row_data['20日均量(張)']} 張
-                                歷史波動度 (ATR%)：{row_data['ATR%']}%
-                                三大法人5日籌碼：投信總計 {row_data['投信5日淨額(張)']} 張 / 外資總計 {row_data['外資5日淨額(張)']} 張
-                                主力與散戶狀態：{'主力大戶吃貨且散戶退場（籌碼共振成立）' if row_data['★籌碼共振(大戶↑散戶↓)'] == 1 else '籌碼尚未集中（共振未成立）'}
-                                最新營收表現：年增/月增率 {row_data['最新月營收增率(%)']}% (採用模式: {row_data['營收模式']})
-                                相對大盤強度 (RS)：{'表現超越大盤（多頭領頭羊）' if row_data['RS優於大盤'] == 1 else '弱於大盤走勢'}
-                                """
-                                
-                                headers = {
-                                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                                    "Content-Type": "application/json"
-                                }
-                                
-                                # 🎯 1. 換成速度極快、不塞車的 Llama 3.3 大腦
-                                payload = {
-                                    "model": "openai/gpt-oss-20b:free",  # 🎯 OpenAI 官方最新下放的免費版
-                                    "messages": [{"role": "user", "content": prompt}],
-                                    "temperature": 0.3
-                                }
-                                
-                                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=20)
-                                resp.raise_for_status()   # ← 加這一行
-                                resp_json = resp.json()
-                                
-                                # 🛡️ 2. 鋼鐵防禦機制：有拿到 choices 才解包，沒拿到就印出真實錯誤
-                                if 'choices' in resp_json:
-                                    ai_result = resp_json['choices'][0]['message']['content'].strip()
-                                    st.session_state.ai_cache[sid] = ai_result
-                                    st.rerun()
-                                elif 'error' in resp_json:
-                                    st.error(f"❌ OpenRouter 拒絕請求原因：{resp_json['error'].get('message')}")
-                                else:
-                                    st.error(f"❌ 發生未知異常，完整回應內容：{resp_json}")
-                                    
-                            except Exception as e:
-                                st.error(f"❌ 呼叫 OpenRouter AI 發生異常：{str(e)}")
+                    st.caption("把系統算出的 10 大量化雷達數據餵給 OpenRouter 免費模型，產生 ~150 字投資診斷。")
+                    if st.button("🚀 啟動 AI 深度量化解析", key=f"btn_ai_{sid}_{selected_model}", use_container_width=True):
+                        prompt = f"""
+                        你是一位台灣股市的資深量化操盤分析師。請根據以下這檔個股由系統算出的核心籌碼與技術數據，用繁體中文寫出一份約 150 字的專業投資診斷。
+                        一針見血指出當前籌碼面（法人大戶）與技術基本面的優缺點，並給出具體的短線操盤與策略建議（多空方向）。
+                        請不要使用 Markdown 語法中的星號 (**) 加粗，以純文字順暢表達即可。
+
+                        【個股數據報告】
+                        股票標的：{sid} {sname}
+                        當前股價：{row_data['現價']} 元
+                        綜合量化總分：{row_data['總分']} / 10 分
+                        產業板塊：{row_data['產業']}
+                        20日均成交量：{row_data['20日均量(張)']} 張
+                        歷史波動度 (ATR%)：{row_data['ATR%']}%
+                        三大法人5日籌碼：投信總計 {row_data['投信5日淨額(張)']} 張 / 外資總計 {row_data['外資5日淨額(張)']} 張
+                        主力與散戶狀態：{'主力大戶吃貨且散戶退場（籌碼共振成立）' if row_data['★籌碼共振(大戶↑散戶↓)'] == 1 else '籌碼尚未集中（共振未成立）'}
+                        最新營收表現：年增/月增率 {row_data['最新月營收增率(%)']}% (採用模式: {row_data['營收模式']})
+                        相對大盤強度 (RS)：{'表現超越大盤（多頭領頭羊）' if row_data['RS優於大盤'] == 1 else '弱於大盤走勢'}
+                        """
+
+                        # 決定要試的模型清單：自動輪替 = 全部；指定 = 只試該一個
+                        if selected_model == "自動輪替 (推薦)":
+                            models_to_try = AI_MODELS
+                            spinner_msg = "AI 分析師正在輪替模型中，請稍候..."
+                        else:
+                            models_to_try = [m for m in AI_MODELS if m["name"] == selected_model]
+                            spinner_msg = f"{selected_model} 分析師正在閱讀籌碼數據..."
+
+                        with st.spinner(spinner_msg):
+                            model_name, result = call_openrouter_ai(
+                                OPENROUTER_API_KEY, prompt, models_to_try
+                            )
+
+                        if model_name:
+                            st.session_state.ai_cache[cache_key] = (model_name, result)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ AI 呼叫失敗：{result}")
 
         with tab4:
             st.subheader("📝 交易筆記")
