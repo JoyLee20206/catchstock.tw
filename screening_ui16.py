@@ -250,7 +250,12 @@ def show_market_banner(meta: dict) -> None:
     twii_ma_s    = f"{twii_ma_raw:,.0f}"  if pd.notna(twii_ma_raw)  else "N/A"
     thr_txt = f"過關門檻 {base} → **{eff}**" if base != eff else f"過關門檻 {base}"
     msg = f"{state_txt}  |  {thr_txt}  |  TWII {twii_now_s} / MA60 {twii_ma_s} | 近 20 日 {change:+.2f}%"
-    st.success(msg) if bullish else st.warning(msg)
+    
+    # 💡 修正處：改回標準的 if-else 寫法，避免觸發 Streamlit Magic 的解析 Bug
+    if bullish:
+        st.success(msg)
+    else:
+        st.warning(msg)
 
 if run_clicked:
     with st.spinner("選股中..."):
