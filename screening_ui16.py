@@ -298,10 +298,22 @@ def show_market_banner(meta: dict) -> None:
     if not meta.get('market_data_ok'):
         st.warning(f"🟡 大盤資料抓取失敗，本次無 RS 計分 | 過關門檻 {base} → **{eff}**")
         return
-    bullish, twii_now, twii_ma, change = meta.get('market_bullish', True), meta.get('twii_now'), meta.get('twii_ma'), meta.get('twii_lookback_change', 0.0)
-    state_txt = "🟢 多頭(站上季線)" if bullish else "🔴 空頭(跌破季線)"
-    thr_txt   = f"過關門檻 {base}" if base == eff else f"過關門檻 {base} → **{eff}**"
-    msg = f"{state_txt}  |  {thr_txt}  |  TWII {twii_now:,.0f} / MA60 {twii_ma:,.0f} | 近 20 日 {change:+.2f}%"
+    bullish      = meta.get('market_bullish', True)
+    twii_now_raw = meta.get('twii_now')
+    twii_ma_raw  = meta.get('twii_ma')
+    change_raw   = meta.get('twii_lookback_change')
+    # Bug B 修正：用 pd.notna 同時擋 None 與 NaN
+    change       = float(change_raw) if pd.notna(change_raw) else 0.0
+    state_txt    = "🟢 多頭(站上季線)" if bullish else "🔴 空頭(跌破季線)"
+    twii_now_s   = f"{twii_now_raw:,.0f}" if pd.notna(twii_now_raw) else "N/A"
+    twii_ma_s    = f"{twii_ma_raw:,.0f}"  if pd.notna(twii_ma_raw)  else "N/A"
+    if base is None or eff is None:
+        thr_txt = "過關門檻未知"
+    elif base == eff:
+        thr_txt = f"過關門檻 {base}"
+    else:
+        thr_txt = f"過關門檻 {base} → **{eff}**"
+    msg = f"{state_txt}  |  {thr_txt}  |  TWII {twii_now_s} / MA60 {twii_ma_s} | 近 20 日 {change:+.2f}%"
     if bullish:
         st.success(msg)
     else:

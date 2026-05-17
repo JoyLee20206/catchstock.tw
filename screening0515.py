@@ -124,7 +124,7 @@ def _norm_stock_code(c):
     - 純數字: 補回 4 位 leading zero (int 50 → "0050", str "0050" 原樣)
     - 含字母 (特別股 2881A): 原樣返回
     - 6 位數海外股 (910482) / 5 位 ETF (00878): zfill 不會截短,保留原長度
-    write_xq_dsl 和 write_khsg_xls 都用同一份,避免兩處規則不同步 (Bug #3 修正)
+    write_xq_dsl 和 write_precision_xls 都用同一份,避免兩處規則不同步 (Bug #3 修正)
     """
     s = str(c).strip()
     return s.zfill(4) if s.isdigit() else s
@@ -276,9 +276,9 @@ def write_xq_dsl(stock_codes, output_path, template_path='自選二.dsl'):
         print(f"   群組名已自動加 _1 / _2 / ... 後綴,避免 XQ 匯入後同名互覆蓋")
 
 
-def write_khsg_xls(stock_codes, name_map, output_path):
+def write_precision_xls(stock_codes, name_map, output_path):
     """
-    產生康和「全都賺」可匯入的 .xls 自選股檔。
+    產生精誠「HiStock」可匯入的 .xls 自選股檔。
     格式：第一列 header (商品名稱 / 代碼)，之後每列一檔。
     代碼欄以數值格式寫入 (和原始檔一致)；ETF / 特別股等非純數字代號則以字串寫入。
     依賴：xlwt (pip install xlwt)
@@ -429,18 +429,28 @@ def run_screening(
                 twii.index = twii.index.tz_localize(None)
             daily_max_date = daily_df["date"].max()
             twii = twii[twii.index <= daily_max_date]
+        twii_candidate = None
         if not twii.empty and 'Close' in twii.columns and len(twii) >= MARKET_MA_DAYS:
-            twii_close = twii['Close']
-            if isinstance(twii_close, pd.DataFrame):
-                twii_close = twii_close.squeeze()
-            twii_close = twii_close.sort_index()   # 確保 asof() 查表正確
+            twii_candidate = twii['Close']
+            if isinstance(twii_candidate, pd.DataFrame):
+                twii_candidate = twii_candidate.squeeze()
+            # Bug C 修正：先過濾 NaN，避免 float(NaN) 污染 market_bullish 判斷
+            twii_candidate = twii_candidate.sort_index().dropna()
+            if len(twii_candidate) < MARKET_MA_DAYS:
+                print("   [警告] ^TWII 去除 NaN 後資料不足,跳過大盤過濾與 RS 計分")
+                twii_candidate = None
+
+        if twii_candidate is not None:
+            twii_close = twii_candidate
             twii_now   = float(twii_close.iloc[-1])
             twii_ma    = float(twii_close.tail(MARKET_MA_DAYS).mean())
             market_bullish = twii_now > twii_ma
             if len(twii_close) > RS_LOOKBACK:
-                twii_lookback_change = float(
-                    (twii_close.iloc[-1] / twii_close.iloc[-RS_LOOKBACK - 1] - 1) * 100
-                )
+                ref = twii_close.iloc[-RS_LOOKBACK - 1]
+                if pd.notna(ref) and ref > 0:
+                    twii_lookback_change = float(
+                        (twii_close.iloc[-1] / ref - 1) * 100
+                    )
             market_data_ok = True
             print(f"   大盤 {twii_now:.0f} / MA{MARKET_MA_DAYS} {twii_ma:.0f} → "
                   f"{'多頭(站上季線)' if market_bullish else '空頭(跌破季線)'};"
@@ -615,8 +625,12 @@ def run_screening(
             # 避免新掛牌股繞過流動性檢查、僅靠法人+籌碼分數蒙混過關
             if vols is not None and len(vols) >= 20:
                 avg_vol_lots = vols.tail(20).mean() / 1000.0
-                avg_vol_map[sid] = int(avg_vol_lots)
-                if avg_vol_lots < MIN_AVG_VOL_LOTS:
+                # Bug D 修正：vols 全為 NaN 時 mean=NaN → int(NaN) 拋 ValueError 整個流程崩潰
+                if pd.notna(avg_vol_lots):
+                    avg_vol_map[sid] = int(avg_vol_lots)
+                    if avg_vol_lots < MIN_AVG_VOL_LOTS:
+                        reject_vol.add(sid)
+                else:
                     reject_vol.add(sid)
             else:
                 reject_vol.add(sid)
@@ -939,7 +953,7 @@ def run_screening(
         dsl_out = output_dir / f"嘉實自選股匯入檔_{stamp}.dsl"
         write_xq_dsl(df["代號"].tolist(), str(dsl_out))
         khsg_out = output_dir / f"精誠自選股匯入檔_{stamp}.xls"
-        write_khsg_xls(df["代號"].tolist(), name_map, str(khsg_out))
+        write_precision_xls(df["代號"].tolist(), name_map, str(khsg_out))
         print("=" * 60)
         file_paths = {'xlsx': out, 'dsl': dsl_out, 'xls': khsg_out}
     else:
@@ -973,12 +987,13 @@ def run_screening(
         'market_status':         "偏多操作" if market_bullish else "謹慎保守",
         'twii_now':              twii_now,
         'twii_ma':               twii_ma,
-        'twii_pct':              twii_pct,      # 👈 推播需要：漲跌幅
-        'twii_bias':             bias_ma60,     # 👈 推播需要：乖離率
-        'score_note':            score_note,    # 👈 推播需要：警示文字
+        'twii_pct':              twii_pct,
+        'twii_bias':             bias_ma60,
+        'score_note':            score_note,
+        'base_pass_score':       pass_score,           # Bug 1 修正：原始門檻（調整前）
         'effective_pass_score':  effective_pass_score,
         'cache_max_date':        cache_max_date,
-        'rs_trend':              twii_lookback_change,
+        'twii_lookback_change':  twii_lookback_change, # Bug 2 修正：key 名稱與 UI 對齊
     }
     return (df, file_paths, meta)
 

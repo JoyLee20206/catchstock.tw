@@ -51,22 +51,39 @@ if __name__ == "__main__":
         date_str = pd.Timestamp.now(tz="Asia/Taipei").strftime("%m/%d")
         
         # 3. 安全提取 meta 變數
-        twii_now      = meta.get('twii_now', 0) if meta.get('twii_now') is not None else 0
-        twii_pct      = meta.get('twii_pct', 0.0) if meta.get('twii_pct') is not None else 0.0
-        twii_bias     = meta.get('twii_bias', 0.0) if meta.get('twii_bias') is not None else 0.0
+        # Bug A 修正：用 pd.notna 同時擋 None 與 NaN（NaN 在 Python 是 truthy，`or 0.0` 抓不到）
+        def _safe_num(v, default=0.0):
+            return float(v) if pd.notna(v) else default
+
+        market_data_ok = meta.get('market_data_ok', False)
+        twii_now_raw  = meta.get('twii_now')
+        twii_pct      = _safe_num(meta.get('twii_pct'))
+        twii_bias     = _safe_num(meta.get('twii_bias'))
         score_note    = meta.get('score_note', "")
         market_status = meta.get('market_status', '未知')
-        
+        twii_now      = twii_now_raw if pd.notna(twii_now_raw) else None
+
         # 4. 根據數據動態決定漲跌與位階圖示
-        icon = "🔴" if twii_pct < 0 else "🟢"
-        bias_icon = "📈" if twii_bias >= 0 else "📉"
-        
+        # 市場資料失效時使用灰色圖示，避免 0 值誤導為真實報價
+        if not market_data_ok or twii_now is None:
+            icon      = "⚪"
+            bias_icon = "⚪"
+            twii_now_str  = "N/A"
+            twii_pct_str  = "N/A"
+            twii_bias_str = "N/A"
+        else:
+            icon          = "🔴" if twii_pct < 0 else "🟢"
+            bias_icon     = "📈" if twii_bias >= 0 else "📉"
+            twii_now_str  = f"{twii_now:,.0f}"
+            twii_pct_str  = f"{twii_pct:+.2f}%"
+            twii_bias_str = f"{twii_bias:+.2f}%"
+
         # 5. 組裝【大盤戰情摘要儀表板】
         header = (
             f"🚀 <b>台股戰情摘要 ({date_str})</b>\n"
             f"━━━━━━━━━━━━━━\n"
-            f"📈 指數：{twii_now:,.0f} ({icon}{twii_pct:+.2f}%)\n"
-            f"📐 乖離：{bias_icon}{twii_bias:+.2f}% (位階)\n"
+            f"📈 指數：{twii_now_str} ({icon}{twii_pct_str})\n"
+            f"📐 乖離：{bias_icon}{twii_bias_str} (位階)\n"
             f"🌡️ 盤勢：<b>{market_status}</b>\n"
         )
         if score_note:
