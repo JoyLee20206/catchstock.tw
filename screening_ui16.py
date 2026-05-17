@@ -58,7 +58,7 @@ def call_openrouter_ai(api_key: str, prompt: str, models: list, timeout: int = 2
             payload = {
                 "model": m["id"],
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
+                "temperature": 0.2,
                 "max_tokens": 400,   # UI 點評允許略長（~150 字）
             }
             resp = requests.post(

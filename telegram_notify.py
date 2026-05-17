@@ -121,7 +121,7 @@ def call_openrouter_ai(prompt: str, timeout: int = 20):
             payload = {
                 "model": m["id"],
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
+                "temperature": 0.2,
                 "max_tokens": 250,   # 限長,避免免費模型話癆把 TG 訊息撐爆
             }
             resp = requests.post(
