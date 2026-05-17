@@ -399,10 +399,12 @@ with col_chart:
         hist_daily = _cached_stock_history(sid)
 
         with tab1:
-            tcol1, tcol2, tcol3 = st.columns([2, 1.5, 1])
+            tcol1, tcol2, tcol3, tcol4 = st.columns([1.5, 1.5, 1.5, 1])
             tcol1.markdown(f"### {sid} {sname}")
             timeframe = tcol2.radio("週期", ["日K", "週K"], horizontal=True, label_visibility="collapsed")
-            theme_choice = tcol3.radio("主題", ["深色", "淺色"], horizontal=True, label_visibility="collapsed")
+            # 改用 Streamlit radio 控制縮放範圍，繞開 Plotly rangeselector + rangebreaks 的相容性問題
+            zoom_choice = tcol3.radio("縮放", ["1月", "3月", "半年", "全部"], horizontal=True, index=3, label_visibility="collapsed", key=f"zoom_{sid}")
+            theme_choice = tcol4.radio("主題", ["深色", "淺色"], horizontal=True, label_visibility="collapsed")
 
             is_in_watchlist = sid in st.session_state.watchlist
             if tcol1.button("⭐ 移除自選" if is_in_watchlist else "⭐ 加入自選", key=f"add_{sid}"):
@@ -516,21 +518,14 @@ with col_chart:
                     hovermode='x unified', showlegend=False, barmode='group' 
                 )
                 fig.update_xaxes(gridcolor=grid_color, rangebreaks=[dict(values=missing_dates)], type="date")
-                
-                # Plotly rangeselector dict 修正
-                fig.update_xaxes(
-                    rangeselector=dict(
-                        buttons=[
-                            # 改用 step="month"：避免 count=30 起始日撞到 rangebreaks 隱藏的週末/假日
-                            dict(count=1, label="1月",  step="month", stepmode="backward"),
-                            dict(count=3, label="3月",  step="month", stepmode="backward"),
-                            dict(count=6, label="半年", step="month", stepmode="backward"),
-                            dict(step="all", label="全部")
-                        ],
-                        bgcolor='#333' if theme_choice == "深色" else '#EEE'
-                    ),
-                    row=1, col=1
-                )
+
+                # 用 Streamlit radio 控制縮放：直接設定 xaxis range，
+                # 比 Plotly 內建 rangeselector 可靠（rangeselector + rangebreaks 在 Plotly 有已知 bug）
+                if zoom_choice != "全部":
+                    days_map = {"1月": 30, "3月": 90, "半年": 180}
+                    end_date   = pd.to_datetime(hist['date'].iloc[-1])
+                    start_date = end_date - pd.Timedelta(days=days_map[zoom_choice])
+                    fig.update_xaxes(range=[start_date, end_date])
                 
                 fig.update_yaxes(gridcolor=grid_color, side='right')
                 fig.update_yaxes(fixedrange=False, row=1, col=1)
