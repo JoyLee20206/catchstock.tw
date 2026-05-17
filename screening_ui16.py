@@ -30,7 +30,7 @@ from screening0515 import (
 )
 
 # 共用模組(與 telegram_notify.py 共用同一份邏輯)
-from ai_helper import call_openrouter_ai, AI_MODELS
+from ai_helper import call_openrouter_ai, AI_MODELS, get_api_key
 from cache_status import cache_freshness
 from picks_history import load_history, compute_hot_picks
 
@@ -302,7 +302,7 @@ def show_market_banner(meta: dict) -> None:
     change_raw   = meta.get('twii_lookback_change')
     # Bug B 修正：用 pd.notna 同時擋 None 與 NaN
     change       = float(change_raw) if pd.notna(change_raw) else 0.0
-    state_txt    = "🟢 多頭(站上季線)" if bullish else "🔴 空頭(跌破季線)"
+    state_txt    = "📈 多頭(站上季線)" if bullish else "📉 空頭(跌破季線)"
     twii_now_s   = f"{twii_now_raw:,.0f}" if pd.notna(twii_now_raw) else "N/A"
     twii_ma_s    = f"{twii_ma_raw:,.0f}"  if pd.notna(twii_ma_raw)  else "N/A"
     if base is None or eff is None:
@@ -594,10 +594,11 @@ with col_chart:
         with tab3:
             st.subheader("🧠 OpenRouter AI 虛擬操盤分析師")
 
-            OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+            # 共用 ai_helper 的 key 讀取邏輯,確保「警告偵測」與「實際呼叫」用同一把 key
+            _has_api_key = bool(get_api_key())
 
-            if not OPENROUTER_API_KEY:
-                st.warning("⚠️ 網頁系統未偵測到環境變數 `OPENROUTER_API_KEY`。請先在 Streamlit Cloud Secrets 設定金鑰！")
+            if not _has_api_key:
+                st.warning("⚠️ 網頁系統未偵測到環境變數 `OPENROUTER_API_KEY`。請先在 Streamlit Cloud Secrets 設定金鑰!")
             elif row_data is None:
                 st.info("💡 該股未出現在本次排行榜中（未達過關門檻），暫無量化核心數據供 AI 進行深度點評。")
             else:

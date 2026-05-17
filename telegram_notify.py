@@ -136,11 +136,13 @@ def fmt_change_pct(pct) -> str:
     2.34  → '🔴+2.3%'
     -0.55 → '🟢-0.6%'
     0.0   → '⚪0.0%'
+    0.03  → '⚪0.0%'   (四捨五入到 .1f 仍是 0,顯示為平盤避免「🔴+0.0%」這種矛盾)
     None  → ''
     """
     if pct is None or pd.isna(pct):
         return ""
-    if abs(pct) < 0.01:
+    # 平盤閾值對齊顯示精度(.1f);避免出現「🔴+0.0%」(0.03% 漲但顯示 0% 看起來矛盾)
+    if abs(pct) < 0.05:
         return "⚪0.0%"
     icon = "🔴" if pct > 0 else "🟢"   # 台股:紅漲 / 綠跌
     return f"{icon}{pct:+.1f}%"
