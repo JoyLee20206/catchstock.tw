@@ -1,32 +1,56 @@
-"""多日入選歷史共用模組
+"""多日入選歷史共用模組(v2)
 
-讀寫 cache/previous_picks.json,並提供 streak 統計給 UI 熱度榜使用。
-向下相容舊的 flat list 格式([sid, sid, ...]),自動轉新格式。
+Schema v2:[{"date": "YYYY-MM-DD", "picks": [{"sid", "score", "close", "industry"}, ...]}]
+Schema v1:[{"date": "YYYY-MM-DD", "sids": ["2330", ...]}]  ← 向下相容
+Legacy:   ["2330", ...]                                    ← 向下相容
+
+新增 close / score / industry 欄位後可支援:
+- 策略績效追蹤(performance.py 需要 close)
+- 產業輪動(industry_rotation.py 需要 industry)
+- 分數區間勝率分析(需要 score)
+
+寫入永遠用 v2;讀取自動偵測格式並提供統一存取介面。
 """
 import os
 import json
 
 
 HISTORY_FILE = "cache/previous_picks.json"
-HISTORY_DAYS = 7  # 保留最近 N 天
+HISTORY_DAYS = 30  # 績效追蹤需要 N 天歷史,擴大到 30 天(原 7 天)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 統一存取介面(處理 v1/v2/legacy 三種格式)
+# ══════════════════════════════════════════════════════════════════════
+def get_sids(entry: dict) -> list:
+    """從 entry 提取 sid 字串清單,自動處理新舊格式。"""
+    if "picks" in entry:
+        return [str(p["sid"]) for p in entry["picks"] if "sid" in p]
+    return [str(s) for s in entry.get("sids", [])]
+
+
+def get_picks(entry: dict) -> list:
+    """從 entry 提取 picks dict 清單(含 score/close/industry)。
+    若 entry 是舊版只有 sids,回傳 [{"sid": ..., "score": None, ...}] 補空。
+    """
+    if "picks" in entry:
+        return entry["picks"]
+    return [{"sid": str(s), "score": None, "close": None, "industry": None}
+            for s in entry.get("sids", [])]
 
 
 # ══════════════════════════════════════════════════════════════════════
 # 讀寫
 # ══════════════════════════════════════════════════════════════════════
 def load_history() -> list:
-    """讀取多日歷史。
-
-    新格式: [{"date": "YYYY-MM-DD", "sids": ["2330", ...]}, ...]  依日期遞增排序
-    舊格式: ["2330", ...]                                       自動包成單筆 "legacy"
-    """
+    """讀取多日歷史。回傳混合 v1/v2 entries 也保留原樣,讀取端用 get_sids/get_picks 抽取。"""
     if not os.path.exists(HISTORY_FILE):
         return []
     try:
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, list) and data and isinstance(data[0], str):
-            # 舊版 flat list → 包成單筆 legacy,下次寫入時會被剔除
+            # legacy flat list → 包成單筆,下次寫入會被剔除
             return [{"date": "legacy", "sids": data}]
         if isinstance(data, list):
             return data
@@ -43,18 +67,41 @@ def save_history(history: list) -> None:
         json.dump(trimmed, f, ensure_ascii=False, indent=2)
 
 
+def build_picks_from_df(df) -> list:
+    """從 screening DataFrame 抽出 picks list(v2 schema)。
+    df 預期含欄位:代號、總分、現價、產業
+    """
+    if df is None or df.empty:
+        return []
+    import pandas as pd
+    picks = []
+    for _, row in df.iterrows():
+        try:
+            sid = str(row['代號'])
+            score_val = row.get('總分')
+            close_val = row.get('現價')
+            ind_val   = row.get('產業')
+            picks.append({
+                "sid": sid,
+                "score": int(score_val) if pd.notna(score_val) else None,
+                "close": float(close_val) if pd.notna(close_val) else None,
+                "industry": str(ind_val) if pd.notna(ind_val) and str(ind_val).strip() else None,
+            })
+        except Exception:
+            continue
+    return picks
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 統計
 # ══════════════════════════════════════════════════════════════════════
 def compute_streak(sid: str, history: list) -> int:
     """計算 sid 從今日往前推的連續入選天數。
-
-    使用前提:history 尚未加入今日的 entry(否則會多算 1 天)。
-    回傳值 = 1 表示今天才出現(新進),>= 3 才有持續性意義。
+    使用前提:history 尚未加入今日 entry。
     """
     streak = 1  # 今天本來就含此 sid(呼叫端責任)
     for entry in reversed(history):
-        if sid in entry.get("sids", []):
+        if sid in get_sids(entry):
             streak += 1
         else:
             break
@@ -64,39 +111,28 @@ def compute_streak(sid: str, history: list) -> int:
 def compute_hot_picks(history: list, top_n: int = 10) -> list:
     """過去 N 天的入選熱度榜。
 
-    Args:
-        history: load_history() 的結果(可含今日,也可不含,皆會正確處理)
-        top_n: 回傳前幾名
-
     Returns:
         [{
-            "sid": str,
-            "hits": int,            # 期間內總入選天數
-            "max_streak": int,      # 期間內最長連續天數
-            "active_streak": int,   # 期間結尾的連續天數(若最後一日未入選 = 0)
-            "in_latest": bool,      # 是否在最後一筆中(用於 UI 標「★ 今日」)
+            "sid", "hits", "max_streak", "active_streak",
+            "in_latest": bool,
+            "total_days": int,
         }, ...]
-
-        排序鍵: hits desc, max_streak desc, sid asc
     """
     if not history:
         return []
 
-    # 蒐集所有出現過的 sid
     all_sids = set()
     for entry in history:
-        all_sids.update(entry.get("sids", []))
+        all_sids.update(get_sids(entry))
 
-    latest_set = set(history[-1].get("sids", [])) if history else set()
+    latest_set = set(get_sids(history[-1])) if history else set()
     n_entries = len(history)
     results = []
 
     for sid in all_sids:
-        # 把每日入選與否轉成 boolean list
-        per_day = [sid in entry.get("sids", []) for entry in history]
+        per_day = [sid in get_sids(entry) for entry in history]
         hits = sum(per_day)
 
-        # 期間內最長連續
         max_streak = 0
         cur = 0
         for v in per_day:
@@ -104,7 +140,6 @@ def compute_hot_picks(history: list, top_n: int = 10) -> list:
             if cur > max_streak:
                 max_streak = cur
 
-        # 期間結尾的連續(從尾往前數)
         active = 0
         for v in reversed(per_day):
             if v:
