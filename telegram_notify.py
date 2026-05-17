@@ -131,12 +131,18 @@ def load_change_pct_map() -> dict:
 
 
 def fmt_change_pct(pct) -> str:
-    """格式化漲跌幅: 2.34 → '🟢+2.3%' / -0.55 → '🔴-0.6%' / None → ''"""
+    """格式化漲跌幅(台股慣例:紅漲綠跌)
+
+    2.34  → '🔴+2.3%'
+    -0.55 → '🟢-0.6%'
+    0.0   → '⚪0.0%'
+    None  → ''
+    """
     if pct is None or pd.isna(pct):
         return ""
     if abs(pct) < 0.01:
         return "⚪0.0%"
-    icon = "🟢" if pct > 0 else "🔴"
+    icon = "🔴" if pct > 0 else "🟢"   # 台股:紅漲 / 綠跌
     return f"{icon}{pct:+.1f}%"
 
 
@@ -180,7 +186,7 @@ def main():
             twii_pct_str  = "N/A"
             twii_bias_str = "N/A"
         else:
-            icon          = "🔴" if twii_pct < 0 else "🟢"
+            icon          = "🔴" if twii_pct > 0 else ("🟢" if twii_pct < 0 else "⚪")  # 台股:紅漲綠跌
             bias_icon     = "📈" if twii_bias >= 0 else "📉"
             twii_now_str  = f"{twii_now:,.0f}"
             twii_pct_str  = f"{twii_pct:+.2f}%"

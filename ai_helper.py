@@ -88,7 +88,8 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
             if "choices" in j and j["choices"]:
                 text = j["choices"][0]["message"]["content"].strip()
                 # 強制清掉殘留 Markdown(免費模型常常不聽 prompt 指令)
-                for tok in ("**", "##", "###", "*", "`"):
+                # ⚠️ 順序重要:長 token 必須先清,否則 "###" 會先被 "##" 部份吃掉留下殘渣
+                for tok in ("###", "##", "**", "*", "`"):
                     text = text.replace(tok, "")
                 text = text.strip()
                 if text:

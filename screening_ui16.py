@@ -8,6 +8,7 @@
 import os
 import json
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pandas as pd
@@ -653,28 +654,32 @@ with col_chart:
                             except Exception as _pe:
                                 print(f"位階計算失敗(忽略): {_pe}")
 
-                        prompt = f"""
-                        你是一位台灣股市的資深量化操盤分析師。請根據以下這檔個股由系統算出的核心籌碼與技術數據,用繁體中文寫出一份約 150 字的專業投資診斷。
-                        一針見血指出當前籌碼面(法人大戶)與技術基本面的優缺點,並給出具體的短線操盤與策略建議(多空方向)。
-                        請不要使用 Markdown 語法,以純文字順暢表達即可。
+                        # 用 textwrap.dedent 清掉每行開頭的縮排,避免 24 spaces 進入 prompt
+                        # 浪費 token 並可能影響 AI 對結構的理解
+                        prompt = textwrap.dedent(f"""\
+                            你是一位台灣股市的資深量化操盤分析師。請根據以下這檔個股由系統算出的核心籌碼與技術數據,用繁體中文寫出一份約 150 字的專業投資診斷。
+                            一針見血指出當前籌碼面(法人大戶)與技術基本面的優缺點,並給出具體的短線操盤與策略建議(多空方向)。
+                            請不要使用 Markdown 語法,以純文字順暢表達即可。
 
-                        【個股數據報告】
-                        股票標的:{sid} {sname}
-                        當前股價:{row_data['現價']} 元
-                        綜合量化總分:{row_data['總分']} / 10 分
-                        產業板塊:{row_data['產業']}
-                        20日均成交量:{row_data['20日均量(張)']} 張
-                        歷史波動度 (ATR%):{row_data['ATR%']}%
-                        三大法人5日籌碼:投信總計 {row_data['投信5日淨額(張)']} 張 / 外資總計 {row_data['外資5日淨額(張)']} 張
-                        主力與散戶狀態:{'主力大戶吃貨且散戶退場(籌碼共振成立)' if row_data['★籌碼共振(大戶↑散戶↓)'] == 1 else '籌碼尚未集中(共振未成立)'}
-                        最新營收表現:年增/月增率 {row_data['最新月營收增率(%)']}% (採用模式: {row_data['營收模式']})
-                        相對大盤強度 (RS):{'表現超越大盤(多頭領頭羊)' if row_data['RS優於大盤'] == 1 else '弱於大盤走勢'}
-                        {position_ctx}
-                        """
+                            【個股數據報告】
+                            股票標的:{sid} {sname}
+                            當前股價:{row_data['現價']} 元
+                            綜合量化總分:{row_data['總分']} / 10 分
+                            產業板塊:{row_data['產業']}
+                            20日均成交量:{row_data['20日均量(張)']} 張
+                            歷史波動度 (ATR%):{row_data['ATR%']}%
+                            三大法人5日籌碼:投信總計 {row_data['投信5日淨額(張)']} 張 / 外資總計 {row_data['外資5日淨額(張)']} 張
+                            主力與散戶狀態:{'主力大戶吃貨且散戶退場(籌碼共振成立)' if row_data['★籌碼共振(大戶↑散戶↓)'] == 1 else '籌碼尚未集中(共振未成立)'}
+                            最新營收表現:年增/月增率 {row_data['最新月營收增率(%)']}% (採用模式: {row_data['營收模式']})
+                            相對大盤強度 (RS):{'表現超越大盤(多頭領頭羊)' if row_data['RS優於大盤'] == 1 else '弱於大盤走勢'}
+                            {position_ctx}
+                            """)
 
-                        # 決定要試的模型清單:自動輪替 = 全部;指定 = 只試該一個
+                        # 決定要試的模型清單:
+                        # - 自動輪替 → models=None,讓 ai_helper 套 PREFERRED_AI 環境變數排序
+                        # - 指定單一模型 → 傳 [單一 dict] 強制只試這個
                         if selected_model == "自動輪替 (推薦)":
-                            models_to_try = AI_MODELS
+                            models_to_try = None
                             spinner_msg = "AI 分析師正在輪替模型中,請稍候..."
                         else:
                             models_to_try = [m for m in AI_MODELS if m["name"] == selected_model]

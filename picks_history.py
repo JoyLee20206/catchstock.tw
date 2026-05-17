@@ -5,7 +5,6 @@
 """
 import os
 import json
-from collections import Counter
 
 
 HISTORY_FILE = "cache/previous_picks.json"
