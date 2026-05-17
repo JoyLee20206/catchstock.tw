@@ -35,8 +35,6 @@ NOTES_FILE = "cache/notes.json"
 
 # ── AI 模型清單（與 telegram_notify.py 保持一致） ─────────────────────────
 AI_MODELS = [
-    # 換上目前最新的 DeepSeek R1 免費版
-    {"id": "deepseek/deepseek-r1:free",               "name": "DeepSeek R1"},
     # 換上 Google 最新開放的免費實驗版
     {"id": "google/gemini-2.0-pro-exp-02-05:free",    "name": "Gemini 2.0 Pro"},
     {"id": "meta-llama/llama-3.3-70b-instruct:free",  "name": "Llama 3.3"},  # 偶爾塞車，保留著當備胎
