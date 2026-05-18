@@ -583,9 +583,9 @@ if _hist_days >= 5:  # 至少有 5 天歷史才有意義
 
 
 # ── 訊號回測:對 daily/法人 parquet 掃描三大技術訊號歷史報酬 ─────────────
-@st.cache_data(ttl=900, show_spinner="跑回測中(計算大盤 Alpha 與動態停損)…")
-def _run_backtest_cached(signals: tuple, hold_days: int, sl_pct: float, date_filter: str):
-    """將 list 轉 tuple 以支援 st.cache_data, date_filter: 'all' / '90d' / '30d'"""
+@st.cache_data(ttl=900, show_spinner="跑回測中(掃描 180 天歷史訊號)…")
+def _run_backtest_cached(signal: str, hold_days: int, date_filter: str):
+    """date_filter: 'all' / '90d' / '30d'"""
     if date_filter == "all":
         date_range = None
     else:
@@ -593,116 +593,144 @@ def _run_backtest_cached(signals: tuple, hold_days: int, sl_pct: float, date_fil
         end = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
         start = end - pd.Timedelta(days=ndays)
         date_range = (start, end)
-    # 將 tuple 還原為 list 傳入核心
-    return run_backtest(CACHE_DIR, signals=list(signals), hold_days=hold_days, sl_pct=sl_pct, date_range=date_range)
+    return run_backtest(CACHE_DIR, signal=signal, hold_days=hold_days, date_range=date_range)
 
-with st.expander("🔬 訊號回測(PRO升級版：含 Alpha 與動態停損)", expanded=False):
+
+with st.expander("🔬 訊號回測(過去 180 天歷史掃描)", expanded=False):
     st.caption(
-        "對快取資料掃描技術訊號的歷史觸發點。新增：真實動態停損、最大區間回檔(MDD)，以及對比大盤的超額報酬(Alpha)。"
+        "對 daily 快取掃描三大技術訊號的歷史觸發點,算「進場後 N 日報酬」── "
+        "回答「哪個訊號真的有 alpha?該在計分系統加重?」"
     )
 
-    bc1, bc2, bc3, bc4 = st.columns(4)
+    bc1, bc2, bc3 = st.columns(3)
     sig_options = list(SIGNAL_LABELS.keys())
-    
-    # 支援複選(AND)
-    sig_choices = bc1.multiselect(
-        "選擇訊號 (可複選交集)", sig_options, default=[sig_options[0]],
-        format_func=lambda k: SIGNAL_LABELS[k], key="bt_signal"
+    sig_choice = bc1.selectbox(
+        "選擇訊號", sig_options,
+        format_func=lambda k: SIGNAL_LABELS[k],
+        key="bt_signal"
     )
     hold_choice = bc2.selectbox(
         "持有天數", [5, 10, 20], index=1, key="bt_hold",
         help="進場後幾個交易日賣出"
     )
-    sl_choice = bc3.number_input(
-        "停損設定 (%)", min_value=1.0, max_value=20.0, value=7.0, step=0.5,
-        help="期間內只要盤中最低價跌破此 % 數，立即以停損價出場。"
-    )
-    period_choice = bc4.selectbox(
-        "樣本期間", ["all", "90d", "30d"],
+    period_choice = bc3.selectbox(
+        "樣本期間",
+        ["all", "90d", "30d"],
         format_func=lambda k: {"all": "全部(~180 日)", "90d": "近 90 日", "30d": "近 30 日"}[k],
         key="bt_period"
     )
 
-    if not sig_choices:
-        st.warning("請至少選擇一個訊號進行回測。")
+    _bt = _run_backtest_cached(sig_choice, hold_choice, period_choice)
+
+    if _bt.get("error"):
+        st.error(f"⚠️ {_bt['error']}")
+    elif _bt['stats'].get('n', 0) == 0:
+        st.info("此訊號在所選期間內無觸發紀錄。試試擴大期間或換訊號。")
     else:
-        _bt = _run_backtest_cached(tuple(sig_choices), hold_choice, sl_choice, period_choice)
+        stats = _bt['stats']
+        # ── 4 張指標卡 ──
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("樣本數", f"{stats['n']:,}", "次觸發")
+        # 台股慣例:勝率紅色、平均報酬看正負決定紅綠
+        m2.metric("勝率", f"{stats['win_rate']*100:.0f}%",
+                  f"{int(stats['win_rate']*stats['n'])} 賺")
+        avg = stats['avg_return']
+        # 用 delta 顯示中位數;台股紅漲綠跌,但 streamlit metric 預設綠正紅負,改 inverse 反轉
+        m3.metric("平均報酬", f"{avg:+.2f}%",
+                  f"中位數 {stats['median_return']:+.2f}%",
+                  delta_color="inverse")
+        m4.metric("最差單筆", f"{stats['min_return']:+.2f}%",
+                  f"最佳 {stats['max_return']:+.2f}%",
+                  delta_color="inverse")
 
-        if _bt.get("error"):
-            st.error(f"⚠️ {_bt['error']}")
-        elif _bt['stats'].get('n', 0) == 0:
-            st.info("此訊號組合在所選期間內無觸發紀錄。試試放寬期間或減少條件。")
-        else:
-            stats = _bt['stats']
-            
-            # ── 5 張高級指標卡 ──
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("樣本數", f"{stats['n']:,} 次", f"停損機率 {stats['sl_rate']*100:.0f}%", delta_color="inverse")
-            m2.metric("勝率", f"{stats['win_rate']*100:.0f}%", f"{int(stats['win_rate']*stats['n'])} 筆獲利")
-            m3.metric("平均報酬", f"{stats['avg_return']:+.2f}%", f"平均最大回檔 {stats['avg_mdd']:+.2f}%", delta_color="inverse")
-            
-            # Alpha 為正表示策略優於大盤
-            alpha = stats.get('avg_alpha', 0)
-            m4.metric("相對大盤 (Alpha)", f"{alpha:+.2f}%", delta_color="normal" if alpha > 0 else "inverse")
-            m5.metric("最差單筆", f"{stats['min_return']:+.2f}%", f"最佳 {stats['max_return']:+.2f}%", delta_color="normal")
+        # ── 三訊號對照圖 ──
+        st.divider()
+        st.markdown(f"**三訊號 {hold_choice} 日勝率 / 平均報酬對照**")
+        st.caption("紅色 = 勝率(左軸,%) / 灰色 = 平均報酬(右軸,%)")
 
-            # ── 單一訊號對照圖 (僅作為參考對比) ──
+        all_stats = _bt['all_signals_stats']
+        # 整理成 DataFrame 給 plotly 雙軸
+        chart_data = []
+        for sig_key in sig_options:
+            s = all_stats.get(sig_key, {"n": 0})
+            if s.get('n', 0) > 0:
+                chart_data.append({
+                    "訊號": SIGNAL_LABELS[sig_key].split('(')[0],  # 簡短名稱
+                    "勝率": s['win_rate'] * 100,
+                    "平均報酬": s['avg_return'],
+                    "樣本數": s['n'],
+                })
+        if chart_data:
+            chart_df = pd.DataFrame(chart_data)
+            fig_bt = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_bt.add_trace(
+                go.Bar(name="勝率", x=chart_df['訊號'], y=chart_df['勝率'],
+                       marker_color='#A32D2D',
+                       text=[f"{v:.0f}%" for v in chart_df['勝率']],
+                       textposition='outside'),
+                secondary_y=False
+            )
+            fig_bt.add_trace(
+                go.Bar(name="平均報酬", x=chart_df['訊號'], y=chart_df['平均報酬'],
+                       marker_color='#888780',
+                       text=[f"{v:+.1f}%" for v in chart_df['平均報酬']],
+                       textposition='outside'),
+                secondary_y=True
+            )
+            fig_bt.update_layout(
+                barmode='group',
+                height=320,
+                margin=dict(l=10, r=10, t=20, b=10),
+                showlegend=False,
+                template=chart_theme if 'chart_theme' in dir() else 'plotly',
+            )
+            fig_bt.update_yaxes(title_text="勝率 (%)", secondary_y=False, range=[0, max(chart_df['勝率'].max()*1.15, 70)])
+            fig_bt.update_yaxes(title_text="平均報酬 (%)", secondary_y=True)
+            st.plotly_chart(fig_bt, use_container_width=True)
+
+            # ── 提示:哪個訊號最強 ──
+            best_wr = max(all_stats.items(),
+                          key=lambda kv: kv[1].get('win_rate', 0) if kv[1].get('n', 0) > 0 else -1)
+            best_ret = max(all_stats.items(),
+                           key=lambda kv: kv[1].get('avg_return', -999) if kv[1].get('n', 0) > 0 else -999)
+            if best_wr[1].get('n', 0) > 0:
+                hints = []
+                hints.append(f"勝率最高 — **{SIGNAL_LABELS[best_wr[0]].split('(')[0]}** ({best_wr[1]['win_rate']*100:.0f}%)")
+                if best_ret[0] != best_wr[0]:
+                    hints.append(f"報酬最高 — **{SIGNAL_LABELS[best_ret[0]].split('(')[0]}** ({best_ret[1]['avg_return']:+.2f}%)")
+                st.info("💡 " + " / ".join(hints) + " — 可考慮在計分系統內加重對應訊號的權重。")
+
+        # ── 觸發明細表 ──
+        trades = _bt['trades']
+        if not trades.empty:
             st.divider()
-            st.markdown(f"**各單一訊號 {hold_choice} 日勝率 / 平均報酬對照**")
-            all_stats = _bt['all_signals_stats']
-            chart_data = []
-            for sig_key in sig_options:
-                s = all_stats.get(sig_key, {"n": 0})
-                if s.get('n', 0) > 0:
-                    chart_data.append({
-                        "訊號": SIGNAL_LABELS[sig_key].split('(')[0],
-                        "勝率": s['win_rate'] * 100,
-                        "平均報酬": s['avg_return'],
-                        "樣本數": s['n'],
-                    })
-            if chart_data:
-                chart_df = pd.DataFrame(chart_data)
-                fig_bt = make_subplots(specs=[[{"secondary_y": True}]])
-                fig_bt.add_trace(go.Bar(name="勝率", x=chart_df['訊號'], y=chart_df['勝率'], marker_color='#A32D2D', text=[f"{v:.0f}%" for v in chart_df['勝率']], textposition='outside'), secondary_y=False)
-                fig_bt.add_trace(go.Bar(name="平均報酬", x=chart_df['訊號'], y=chart_df['平均報酬'], marker_color='#888780', text=[f"{v:+.1f}%" for v in chart_df['平均報酬']], textposition='outside'), secondary_y=True)
-                fig_bt.update_layout(barmode='group', height=320, margin=dict(l=10, r=10, t=20, b=10), showlegend=False, template=chart_theme if 'chart_theme' in dir() else 'plotly')
-                fig_bt.update_yaxes(title_text="勝率 (%)", secondary_y=False, range=[0, max(chart_df['勝率'].max()*1.15, 70)])
-                fig_bt.update_yaxes(title_text="平均報酬 (%)", secondary_y=True)
-                st.plotly_chart(fig_bt, use_container_width=True)
+            top_n_bt = min(50, len(trades))
+            st.markdown(f"**觸發明細(顯示前 {top_n_bt} 筆 / 共 {len(trades):,} 筆)**")
 
-            # ── 觸發明細表 (加入 Alpha 與 停損標示) ──
-            trades = _bt['trades']
-            if not trades.empty:
-                st.divider()
-                top_n_bt = min(50, len(trades))
-                st.markdown(f"**觸發明細(顯示前 {top_n_bt} 筆 / 共 {len(trades):,} 筆)**")
+            display_df = trades.head(top_n_bt).copy()
+            display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
+            display_df['名稱'] = display_df['stock_id'].map(ui_name_map).fillna('')
+            display_df['進場'] = display_df['entry_close'].apply(lambda x: f"{x:,.1f}")
+            display_df['出場'] = display_df['exit_close'].apply(lambda x: f"{x:,.1f}")
+            # 台股紅漲綠跌的著色用 emoji 代替(streamlit dataframe 著色需 styler 較重)
+            display_df['報酬'] = display_df['return_pct'].apply(
+                lambda x: f"🔴 {x:+.2f}%" if x > 0.05 else (f"🟢 {x:+.2f}%" if x < -0.05 else f"⚪ {x:+.2f}%")
+            )
+            st.dataframe(
+                display_df[['date', 'stock_id', '名稱', '進場', '出場', '報酬']]
+                    .rename(columns={'date': '觸發日', 'stock_id': '代號'}),
+                use_container_width=True, hide_index=True,
+            )
 
-                display_df = trades.head(top_n_bt).copy()
-                display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
-                display_df['名稱'] = display_df['stock_id'].map(ui_name_map).fillna('')
-                display_df['進場'] = display_df['entry_close'].apply(lambda x: f"{x:,.1f}")
-                display_df['出場'] = display_df['exit_close'].apply(lambda x: f"{x:,.1f}")
-                
-                # 若觸發停損，加上🛑標籤
-                display_df['實際報酬'] = display_df.apply(
-                    lambda x: f"{'🛑停損 ' if x['hit_sl'] else ''}{x['return_pct']:+.2f}%", axis=1
-                )
-                display_df['超額(Alpha)'] = display_df['alpha'].apply(lambda x: f"{x:+.2f}%" if pd.notna(x) else "-")
-                display_df['最大回檔'] = display_df['mdd'].apply(lambda x: f"{x:+.2f}%" if pd.notna(x) else "-")
-
-                st.dataframe(
-                    display_df[['date', 'stock_id', '名稱', '進場', '出場', '實際報酬', '超額(Alpha)', '最大回檔']]
-                        .rename(columns={'date': '觸發日', 'stock_id': '代號'}),
-                    use_container_width=True, hide_index=True,
-                )
-
-                # CSV 下載
-                csv_bytes = trades.to_csv(index=False).encode('utf-8-sig')
-                st.download_button(
-                    "📥 下載完整明細 CSV", csv_bytes,
-                    file_name=f"backtest_multi_{hold_choice}d.csv",
-                    mime="text/csv", use_container_width=False,
-                )
+            # CSV 下載
+            csv_bytes = trades.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                "📥 下載完整明細 CSV",
+                csv_bytes,
+                file_name=f"backtest_{sig_choice}_{hold_choice}d.csv",
+                mime="text/csv",
+                use_container_width=False,
+            )
 
 
 # ── 資料健康度警告(只在 warn/error 級才顯示) ──
