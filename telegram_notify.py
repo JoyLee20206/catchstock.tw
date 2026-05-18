@@ -6,12 +6,16 @@ import tempfile
 import html
 from pathlib import Path
 from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS, CACHE_DIR
-from watchlist_alerts import check_watchlist, format_alerts_for_tg
 
 # 共用模組
 from ai_helper import call_openrouter_ai
 from cache_status import cache_freshness
-from picks_history import load_history, save_history, compute_streak, build_picks_from_df, get_sids
+from picks_history import load_history, save_history, compute_streak, build_picks_from_df
+from data_health import check_data_health, format_health_for_tg
+from watchlist_alerts import check_watchlist, format_alerts_for_tg
+from performance import compute_performance, format_performance_summary
+
+WATCHLIST_FILE = "cache/watchlist.json"  # 由 UI 寫入,TG 讀取做警示
 
 # ── 環境變數 ───────────────────────────────────────────────────────────
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -21,14 +25,7 @@ CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 TG_MAX_LEN = 4000          # Telegram 單訊息上限為 4096,留 96 字餘裕
 TOP_N_DISPLAY = 15         # 訊息列出前 N 檔
 
-# 新增讀取自選股的 Helper 函數
-def _load_watchlist():
-    wl_path = Path("cache/watchlist.json")
-    if wl_path.exists():
-        with open(wl_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
-  
+
 # ══════════════════════════════════════════════════════════════════════
 # Telegram 送訊息(自動分段)
 # ══════════════════════════════════════════════════════════════════════
@@ -157,37 +154,43 @@ def fmt_change_pct(pct) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# 自選股 & 名稱對映
+# ══════════════════════════════════════════════════════════════════════
+def load_watchlist() -> list:
+    """讀 UI 寫入的自選股清單。"""
+    if not os.path.exists(WATCHLIST_FILE):
+        return []
+    try:
+        with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return [str(s) for s in data if str(s).strip()]
+    except Exception as e:
+        print(f"⚠ 讀取自選股失敗: {e}")
+        return []
+
+
+def load_name_map() -> dict:
+    """從 daily parquet 拉 sid → 簡稱對映。"""
+    try:
+        files = sorted(CACHE_DIR.glob('daily_*.parquet'))
+        if not files:
+            return {}
+        df = pd.read_parquet(files[-1], columns=['stock_id'])
+        # daily 沒有 name 欄,改從 ID 對照(若有 name 欄會自動 fallback)
+        # 實際上 screening0515 有 STOCK_NAMES 全域 dict,但為避免循環 import,這裡只做防護
+        return {}
+    except Exception:
+        return {}
+
+
+# ══════════════════════════════════════════════════════════════════════
 # 主流程
 # ══════════════════════════════════════════════════════════════════════
 def main():
     try:
         # ── 0. 讀取歷史 ─────────────────────────────────────
         history = load_history()
-        
-        # ── 0.5 資料健康度自檢 ─────────────────────────────────
-        health_warnings = []
-        try:
-            files = sorted(CACHE_DIR.glob('daily_*.parquet'))
-            if files:
-                df_daily = pd.read_parquet(files[-1], columns=['stock_id', 'date', 'close', 'Trading_Volume'])
-                # 檢查 1: 是否有收盤價為 0 的異常
-                if (df_daily['close'] == 0).any():
-                    health_warnings.append("發現個股收盤價為 0 的異常數據")
-                
-                # 檢查 2: 今日大盤總量異常縮水 (簡單判斷: 總筆數或總量過低，代表可能漏資料)
-                # 這裡簡化為確認資料筆數是否少於 1500 檔
-                if len(df_daily['stock_id'].unique()) < 1500:
-                    health_warnings.append("今日日線資料檔數異常減少，可能漏抓資料")
-                
-            files_inst = sorted(CACHE_DIR.glob('institutional_*.parquet'))
-            if files_inst:
-                df_inst = pd.read_parquet(files_inst[-1])
-                # 檢查 3: 簡單的 NaN 或極端值檢查
-                if df_inst['buy'].isna().all():
-                    health_warnings.append("法人買賣超數據完全空缺")
-        except Exception as e:
-            health_warnings.append(f"健康度檢查執行失敗: {e}")
-            
+
         # ── 1. 執行選股 ─────────────────────────────────────
         with tempfile.TemporaryDirectory() as tmpdir:
             df, _, meta = run_screening(pass_score=PASS_SCORE, output_dir=Path(tmpdir))
@@ -199,8 +202,7 @@ def main():
 
         # 同日重跑保護:剔除 history 中「今日」的項目,避免污染 yesterday_sids/streak/退場偵測
         history = [h for h in history if h.get("date") != today_str]
-        # ✅ 修改為（透過 get_sids 函式安全提取，自動兼容新舊格式）：
-        yesterday_sids = set(get_sids(history[-1])) if history else set()
+        yesterday_sids = set(history[-1]["sids"]) if history else set()
 
         def _safe_num(v, default=0.0):
             return float(v) if pd.notna(v) else default
@@ -235,11 +237,6 @@ def main():
             f"📐 乖離:{bias_icon}{twii_bias_str} (位階)\n"
             f"🌡️ 盤勢:<b>{market_status}</b>\n"
         )
-        # 插入健康度警告
-        if health_warnings:
-            for w in health_warnings:
-                header += f"🚨 <b>資料異常警告: {w}</b>\n"
-                
         if score_note:
             header += f"❗ <b>{score_note}</b>\n"
 
@@ -247,6 +244,15 @@ def main():
         freshness = cache_freshness(cache_max_date)
         if freshness["level"] in ("warn", "error", "missing"):
             header += f"⚠️ <b>{freshness['msg']},僅供參考</b>\n"
+
+        # 資料健康度檢查:總量、close、chips、法人筆數異常
+        try:
+            health = check_data_health(CACHE_DIR)
+            health_text = format_health_for_tg(health)
+            if health_text:
+                header += health_text
+        except Exception as e:
+            print(f"⚠ 健康度檢查失敗(略過): {e}")
 
         header += "━━━━━━━━━━━━━━\n\n"
 
@@ -348,45 +354,53 @@ def main():
                     content += f" ({', '.join(sorted(exited))})"
                 content += "\n"
 
+        # ── 6b. 自選股警示(MA20/MA60 跌破 / KD 死叉 / 外資連賣) ──
+        try:
+            watchlist = load_watchlist()
+            if watchlist:
+                # 用 df 的「代號→名稱」當作 name_map(自選股若不在今日 df 裡就只顯示代號)
+                name_map = {}
+                if df is not None and not df.empty and '名稱' in df.columns:
+                    name_map = {str(r['代號']): str(r['名稱']) for _, r in df.iterrows()}
+                alerts = check_watchlist(CACHE_DIR, watchlist)
+                alerts_text = format_alerts_for_tg(alerts, name_map=name_map)
+                if alerts_text:
+                    content += alerts_text
+        except Exception as e:
+            print(f"⚠ 自選股警示產生失敗(略過): {e}")
+
+        # ── 6c. 近 30 日策略績效摘要(在 history 累積足夠後才會有數字) ──
+        try:
+            # 用「不含今日」的 history 算,避免今日資料尚未有後續報酬干擾
+            perf = compute_performance(history, CACHE_DIR, n_days_list=(5,))
+            perf_text = format_performance_summary(perf)
+            if perf_text:
+                content += f"\n{perf_text}\n"
+        except Exception as e:
+            print(f"⚠ 績效摘要產生失敗(略過): {e}")
+
         content += (
             f"\n🌐 <b>"
             f"<a href='https://catchstocktw.streamlit.app/'>開啟我的全自動選股儀表板</a>"
             f"</b>"
         )
-        # --- 加入自選股告警 ---
-        watchlist = _load_watchlist()
-        watchlist_msg = ""
-        if watchlist:
-            alerts = check_watchlist(CACHE_DIR, watchlist)
-            
-            # 從 daily_info 取出名稱對應 (簡易寫法)
-            name_map = {}
-            info_files = sorted(CACHE_DIR.glob('info_*.parquet'))
-            if info_files:
-                df_info = pd.read_parquet(info_files[-1])
-                name_map = df_info.set_index('stock_id')['stock_name'].astype(str).to_dict()
 
-            watchlist_msg = format_alerts_for_tg(alerts, name_map)
-            
         # ── 7. 合體並發送(自動分段) ──────────────────────
-        send_ok = send_telegram_message(header + ai_comment + content + watchlist_msg)
+        send_ok = send_telegram_message(header + ai_comment + content)
         n_hit = len(df) if df is not None else 0
         if send_ok:
             print(f"✅ 推播完成!今日共 {n_hit} 檔達標。")
         else:
             print(f"⚠️ 推播失敗或部分失敗(已寫入歷史),今日 {n_hit} 檔達標。")
 
-        # ── 8. 更新歷史 ─────────────────────────────────────
-        cur_picks = build_picks_from_df(df) if (df is not None and not df.empty) else []
-        
+        # ── 8. 更新歷史(v2 schema:寫入完整 picks 含 score/close/industry) ─
+        picks_today = build_picks_from_df(df)
         # 同一天重跑會覆蓋(取最後一次),legacy 也順便清掉
         history = [
             h for h in history
             if h.get("date") not in (today_str, "legacy")
         ]
-        
-        # 改用 "picks" 格式存入，保留當日 close / score / industry
-        history.append({"date": today_str, "picks": cur_picks})
+        history.append({"date": today_str, "picks": picks_today})
         save_history(history)
 
     except Exception as e:
