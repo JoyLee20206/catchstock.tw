@@ -670,7 +670,36 @@ with col_chart:
             sname = str(_raw_name) if pd.notna(_raw_name) else ui_name_map.get(sid, "")
         else:
             sname = ui_name_map.get(sid, "")
-        
+
+        # ── 📌 進場節奏快速判斷(純量化規則,不打 AI) ──
+        # 從 hist_daily 即時算 K 值與近 5 日漲幅,直接給出三檔節奏 pill:
+        #   🟢 可進場   — K<70 且 5 日漲幅 <8% 且站上 MA20
+        #   🟡 拉回再進 — K>80 或 5 日漲幅 >10%(短線過熱)
+        #   🔵 觀察     — 其他(訊號模糊、跌破 MA20)
+        _hist_quick = _cached_stock_history(sid)
+        _verdict_quick = None
+        if _hist_quick is not None and not _hist_quick.empty and len(_hist_quick) >= 20:
+            try:
+                _high_c = 'max' if 'max' in _hist_quick.columns else 'high'
+                _low_c  = 'min' if 'min' in _hist_quick.columns else 'low'
+                _close_s = _hist_quick['close']
+                _latest  = float(_close_s.iloc[-1])
+                _ma20    = float(_close_s.tail(20).mean())
+                _gain5   = (_latest / float(_close_s.iloc[-6]) - 1) * 100 if len(_close_s) >= 6 else 0.0
+                _k_list, _ = _calc_kd_series(_hist_quick[_high_c], _hist_quick[_low_c], _close_s)
+                _k_last = next((k for k in reversed(_k_list) if k is not None), None) if _k_list else None
+
+                if _k_last is not None and (_k_last > 80 or _gain5 > 10):
+                    _verdict_quick = "拉回再進"
+                elif (_k_last is None or _k_last < 70) and _gain5 < 8 and _latest > _ma20:
+                    _verdict_quick = "可進場"
+                else:
+                    _verdict_quick = "觀察"
+            except Exception:
+                pass
+
+        if _verdict_quick:
+            render_verdict_pill(_verdict_quick)
         # 🧠 修改處：新增第四個 AI 分頁
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "📈 技術分析", "📊 籌碼/基本面", "🧠 AI 虛擬點評", "📝 交易筆記", "💰 資金管理"
