@@ -811,13 +811,18 @@ with col_chart:
 
                 if row_data is not None:
                     _signal_date = hist['date'].iloc[-1]
-                    fig.add_vline(
-                        x=_signal_date, line_dash="solid", line_color="#FF6B00", line_width=2,
-                        annotation_text="🔥 訊號觸發",
-                        annotation_position="top",
-                        annotation_font=dict(size=13, color="white"),
-                        annotation_bgcolor="rgba(255,107,0,0.9)",
-                        annotation_bordercolor="#FF6B00",
+                    fig.add_shape(
+                        type="line", xref="x", yref="paper",
+                        x0=_signal_date, x1=_signal_date, y0=0, y1=1,
+                        line=dict(color="#FF6B00", width=2),
+                        row=1, col=1,
+                    )
+                    fig.add_annotation(
+                        x=_signal_date, y=hist['max'].max() * 1.02,
+                        text="🔥 訊號觸發", showarrow=False,
+                        font=dict(size=13, color="white"),
+                        bgcolor="rgba(255,107,0,0.9)",
+                        bordercolor="#FF6B00", borderwidth=1, borderpad=4,
                         row=1, col=1,
                     )
 
