@@ -809,22 +809,6 @@ with col_chart:
                 defense_label = "🚨 防守(週MA20)" if timeframe == "週K" else "🚨 防守(MA20)"
                 fig.add_hline(y=defense_y, line_dash="dash", line_color="red", annotation_text=defense_label, annotation_position="bottom right", row=1, col=1)
 
-                if row_data is not None:
-                    _signal_date = hist['date'].iloc[-1]
-                    fig.add_vline(
-                        x=_signal_date, line_dash="solid",
-                        line_color="#FF6B00", line_width=2,
-                        row=1, col=1,
-                    )
-                    fig.add_annotation(
-                        x=_signal_date, y=hist['max'].max() * 1.02,
-                        text="🔥 訊號觸發", showarrow=False,
-                        font=dict(size=13, color="white"),
-                        bgcolor="rgba(255,107,0,0.9)",
-                        bordercolor="#FF6B00", borderwidth=1, borderpad=4,
-                        row=1, col=1,
-                    )
-
                 # ── ⭐ 大量警示:成交量 > 5 期均量 * 2 倍時在 K 棒上方標 ★ ──
                 _vol5 = hist[vol_col].rolling(5).mean()
                 _big_vol_mask = (hist[vol_col] > _vol5 * 2) & _vol5.notna()
