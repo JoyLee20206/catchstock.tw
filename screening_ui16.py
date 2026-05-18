@@ -806,7 +806,8 @@ with col_chart:
                 # 新股防護：MA20 NaN 防呆
                 ma20_last = hist['MA20'].iloc[-1]
                 defense_y = hist['min'].tail(10).min() if pd.isna(ma20_last) else max(ma20_last * 0.98, hist['min'].tail(10).min())
-                fig.add_hline(y=defense_y, line_dash="dash", line_color="red", annotation_text="🚨 防守", annotation_position="bottom right", row=1, col=1)
+                defense_label = "🚨 防守(週MA20)" if timeframe == "週K" else "🚨 防守(MA20)"
+                fig.add_hline(y=defense_y, line_dash="dash", line_color="red", annotation_text=defense_label, annotation_position="bottom right", row=1, col=1)
 
                 if row_data is not None:
                     fig.add_annotation(x=hist['date'].iloc[-1], y=hist['min'].iloc[-1], text="🔥 訊號觸發", showarrow=True, arrowhead=1, arrowcolor="red", ay=30, row=1, col=1)
