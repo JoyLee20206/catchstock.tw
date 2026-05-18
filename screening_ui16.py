@@ -763,24 +763,14 @@ with col_chart:
 
                 hist['MA5'], hist['MA20'], hist['MA60'] = hist['close'].rolling(5).mean(), hist['close'].rolling(20).mean(), hist['close'].rolling(60).mean()
 
-                # ── 🎨 MA 多頭/空頭排列背景染色:綠=多頭(MA5>MA20>MA60),紅=空頭(MA5<MA20<MA60) ──
-                # 連續同狀態的 bar 合併成同一個 rect,避免畫面爆量 shape
+                # ── 🎨 MA 多頭/空頭排列狀態(實際 add_vrect 染色延後到 fig 建立後) ──
                 _ma_state = pd.Series('flat', index=hist.index)
                 _bull = (hist['MA5'] > hist['MA20']) & (hist['MA20'] > hist['MA60'])
                 _bear = (hist['MA5'] < hist['MA20']) & (hist['MA20'] < hist['MA60'])
                 _ma_state[_bull] = 'bull'
                 _ma_state[_bear] = 'bear'
-                # 偵測連續區段
                 _state_change = (_ma_state != _ma_state.shift(1)).cumsum()
-                for _, _seg in hist.groupby(_state_change):
-                    _s = _ma_state.loc[_seg.index[0]]
-                    if _s == 'flat':
-                        continue
-                    _fill = "rgba(76,175,80,0.10)" if _s == 'bull' else "rgba(244,67,54,0.10)"
-                    _x0 = _seg['date'].iloc[0]
-                    _x1 = _seg['date'].iloc[-1]
-                    fig.add_vrect(x0=_x0, x1=_x1, fillcolor=_fill,
-                                  line_width=0, layer="below", row=1, col=1)
+
                 # Bug 1 修正：_calc_kd_series 在歷史不足 10 筆時回傳 (None, None),
                 # 不防護的話新股或剛恢復交易股會讓 list comprehension 拋 TypeError
                 k_list, d_list = _calc_kd_series(hist['max'], hist['min'], hist['close'])
@@ -808,6 +798,15 @@ with col_chart:
                 fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.42, 0.12, 0.18, 0.28])
 
                 fig.add_trace(go.Candlestick(x=hist['date'], open=hist['open'], high=hist['max'], low=hist['min'], close=hist['close'], name='K線', increasing_fillcolor='red', increasing_line_color='red', decreasing_fillcolor='green', decreasing_line_color='green'), row=1, col=1)
+
+                # ── 🎨 MA 多頭/空頭背景染色(連續同狀態 bar 合併成同一塊,layer=below 在燭線下方) ──
+                for _, _seg in hist.groupby(_state_change):
+                    _s = _ma_state.loc[_seg.index[0]]
+                    if _s == 'flat':
+                        continue
+                    _fill = "rgba(76,175,80,0.10)" if _s == 'bull' else "rgba(244,67,54,0.10)"
+                    fig.add_vrect(x0=_seg['date'].iloc[0], x1=_seg['date'].iloc[-1],
+                                  fillcolor=_fill, line_width=0, layer="below", row=1, col=1)
                 if 'Market_Norm' in hist.columns:
                     fig.add_trace(go.Scatter(x=hist['date'], y=hist['Market_Norm'] * (hist['close'].iloc[0] / 100), line=dict(color='rgba(150,150,150,0.5)', width=1, dash='dot'), name='大盤 RS'), row=1, col=1)
 
