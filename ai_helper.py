@@ -21,12 +21,6 @@ PREFERRED_AI = os.environ.get("PREFERRED_AI_MODEL", "").strip().lower()
 #   3. 把「實際最常成功且中文好」的排前面,fallback 速度才快
 AI_MODELS = [
     {"id": "openai/gpt-oss-20b:free",                    "name": "GPT-OSS 20B"},
-    {"id": "deepseek/deepseek-v4-flash:free",            "name": "DeepSeek V4 Flash"},
-    {"id": "deepseek/deepseek-r1:free",                  "name": "DeepSeek R1"},
-    {"id": "deepseek/deepseek-chat-v3.1:free",           "name": "DeepSeek V3.1"},
-    {"id": "qwen/qwen3-coder:free",                      "name": "Qwen3 Coder"},
-    {"id": "qwen/qwq-32b:free",                          "name": "QwQ 32B"},
-    {"id": "z-ai/glm-4.5-air:free",                      "name": "GLM 4.5 Air"},
     {"id": "meta-llama/llama-3.3-70b-instruct:free",     "name": "Llama 3.3"},
 ]
 
