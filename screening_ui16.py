@@ -208,8 +208,8 @@ if _freshness["level"] != "missing":
     try:
         daily_files = sorted(CACHE_DIR.glob('daily_*.parquet'))
         if daily_files:
-            _daily_mtime = datetime.fromtimestamp(daily_files[-1].stat().st_mtime)
-            st.caption(f"📅 日 K 最後抓取:**{_daily_mtime.strftime('%m/%d %H:%M')}**")
+            _daily_mtime = pd.Timestamp(daily_files[-1].stat().st_mtime, unit='s', tz='UTC').tz_convert('Asia/Taipei')
+            st.caption(f"📅 日 K 最後抓取:**{_daily_mtime.strftime('%m/%d %H:%M')} (台北時間)**")
     except Exception:
         pass
 
