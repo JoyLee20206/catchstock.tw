@@ -810,13 +810,14 @@ with col_chart:
                 fig.add_hline(y=defense_y, line_dash="dash", line_color="red", annotation_text=defense_label, annotation_position="bottom right", row=1, col=1)
 
                 if row_data is not None:
-                    fig.add_annotation(
-                        x=hist['date'].iloc[-1], y=hist['min'].iloc[-1],
-                        text="🔥 訊號觸發",
-                        showarrow=True, arrowhead=3, arrowsize=1.2, arrowwidth=2, arrowcolor="#FF6B00",
-                        ax=-40, ay=60,
-                        font=dict(size=13, color="white"),
-                        bgcolor="rgba(255,107,0,0.85)", bordercolor="#FF6B00", borderwidth=1, borderpad=4,
+                    _signal_date = hist['date'].iloc[-1]
+                    fig.add_vline(
+                        x=_signal_date, line_dash="solid", line_color="#FF6B00", line_width=2,
+                        annotation_text="🔥 訊號觸發",
+                        annotation_position="top",
+                        annotation_font=dict(size=13, color="white"),
+                        annotation_bgcolor="rgba(255,107,0,0.9)",
+                        annotation_bordercolor="#FF6B00",
                         row=1, col=1,
                     )
 
