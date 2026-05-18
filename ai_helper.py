@@ -14,12 +14,20 @@ PREFERRED_AI = os.environ.get("PREFERRED_AI_MODEL", "").strip().lower()
 
 # 模型清單(依優先序排列,前面失敗就試下一個)
 # ⚠️ 免費模型可用性會變動,部署前建議到 https://openrouter.ai/models?max_price=0 確認
+# ⚠️ 免費模型 ID 在 OpenRouter 上會被悄悄下架/改名,失效就會 404
+# 維護要點:
+#   1. 每 1~2 個月回 https://openrouter.ai/models?max_price=0 確認此清單
+#   2. 中文語意能力概略順序:DeepSeek ≈ Qwen ≈ GLM > Llama > Mistral
+#   3. 把「實際最常成功且中文好」的排前面,fallback 速度才快
 AI_MODELS = [
-    {"id": "deepseek/deepseek-chat-v3-0324:free",     "name": "DeepSeek V3"},
-    {"id": "qwen/qwen-2.5-72b-instruct:free",         "name": "Qwen 2.5"},
-    {"id": "google/gemini-2.0-flash-exp:free",        "name": "Gemini 2.0"},
-    {"id": "meta-llama/llama-3.3-70b-instruct:free",  "name": "Llama 3.3"},
-    {"id": "openai/gpt-oss-20b:free",                 "name": "GPT-OSS 20B"},
+    {"id": "openai/gpt-oss-20b:free",                    "name": "GPT-OSS 20B"},
+    {"id": "deepseek/deepseek-v4-flash:free",            "name": "DeepSeek V4 Flash"},
+    {"id": "deepseek/deepseek-r1:free",                  "name": "DeepSeek R1"},
+    {"id": "deepseek/deepseek-chat-v3.1:free",           "name": "DeepSeek V3.1"},
+    {"id": "qwen/qwen3-coder:free",                      "name": "Qwen3 Coder"},
+    {"id": "qwen/qwq-32b:free",                          "name": "QwQ 32B"},
+    {"id": "z-ai/glm-4.5-air:free",                      "name": "GLM 4.5 Air"},
+    {"id": "meta-llama/llama-3.3-70b-instruct:free",     "name": "Llama 3.3"},
 ]
 
 
