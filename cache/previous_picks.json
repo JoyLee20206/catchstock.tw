@@ -99,81 +99,99 @@
     "picks": [
       {
         "sid": "3624",
-        "score": 8,
+        "score": 7,
         "close": 83.8,
         "industry": "電子零組件業"
       },
       {
+        "sid": "1582",
+        "score": 7,
+        "close": 106.5,
+        "industry": "電子零組件業"
+      },
+      {
         "sid": "5347",
-        "score": 8,
+        "score": 7,
         "close": 159.0,
         "industry": "半導體業"
       },
       {
         "sid": "3481",
-        "score": 7,
-        "close": 36.9,
+        "score": 6,
+        "close": 38.7,
         "industry": "光電業"
       },
       {
         "sid": "2344",
-        "score": 7,
-        "close": 123.0,
+        "score": 6,
+        "close": 130.5,
         "industry": "半導體業"
       },
       {
         "sid": "8069",
-        "score": 7,
-        "close": 214.5,
+        "score": 6,
+        "close": 219.0,
         "industry": "光電業"
       },
       {
+        "sid": "2481",
+        "score": 6,
+        "close": 129.0,
+        "industry": "半導體業"
+      },
+      {
         "sid": "2542",
-        "score": 7,
+        "score": 6,
         "close": 44.6,
         "industry": "建材營造業"
       },
       {
         "sid": "3034",
-        "score": 7,
-        "close": 469.0,
+        "score": 6,
+        "close": 475.5,
         "industry": "半導體業"
       },
       {
+        "sid": "1605",
+        "score": 6,
+        "close": 34.7,
+        "industry": "電器電纜"
+      },
+      {
         "sid": "2376",
-        "score": 7,
-        "close": 341.0,
+        "score": 6,
+        "close": 330.5,
         "industry": "電腦及週邊設備業"
       },
       {
         "sid": "5536",
-        "score": 7,
-        "close": 994.0,
+        "score": 6,
+        "close": 985.0,
         "industry": "其他電子業"
       },
       {
         "sid": "6831",
-        "score": 7,
-        "close": 710.0,
+        "score": 6,
+        "close": 732.0,
         "industry": "電腦及週邊設備業"
       },
       {
+        "sid": "2727",
+        "score": 6,
+        "close": 233.0,
+        "industry": "觀光餐旅"
+      },
+      {
         "sid": "3227",
-        "score": 7,
-        "close": 223.5,
+        "score": 6,
+        "close": 221.0,
         "industry": "半導體業"
       },
       {
         "sid": "6223",
-        "score": 7,
-        "close": 6110.0,
+        "score": 6,
+        "close": 6135.0,
         "industry": "半導體業"
-      },
-      {
-        "sid": "1582",
-        "score": 7,
-        "close": 107.0,
-        "industry": "電子零組件業"
       }
     ]
   }
