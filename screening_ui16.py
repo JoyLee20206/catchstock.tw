@@ -685,16 +685,22 @@ with col_chart:
                 _close_s = _hist_quick['close']
                 _latest  = float(_close_s.iloc[-1])
                 _ma20    = float(_close_s.tail(20).mean())
-                _gain5   = (_latest / float(_close_s.iloc[-6]) - 1) * 100 if len(_close_s) >= 6 else 0.0
-                _k_list, _ = _calc_kd_series(_hist_quick[_high_c], _hist_quick[_low_c], _close_s)
-                _k_last = next((k for k in reversed(_k_list) if k is not None), None) if _k_list else None
 
-                if _k_last is not None and (_k_last > 80 or _gain5 > 10):
-                    _verdict_quick = "拉回再進"
-                elif (_k_last is None or _k_last < 70) and _gain5 < 8 and _latest > _ma20:
-                    _verdict_quick = "可進場"
-                else:
+                # 資料長度防護:近 5 日漲幅 需要 6 筆 close;新股/恢復交易股若不足,
+                # 直接標「觀察」(避免 _gain5=0.0 而被誤判成「可進場」)
+                if len(_close_s) < 6:
                     _verdict_quick = "觀察"
+                else:
+                    _gain5 = (_latest / float(_close_s.iloc[-6]) - 1) * 100
+                    _k_list, _ = _calc_kd_series(_hist_quick[_high_c], _hist_quick[_low_c], _close_s)
+                    _k_last = next((k for k in reversed(_k_list) if k is not None), None) if _k_list else None
+
+                    if _k_last is not None and (_k_last > 80 or _gain5 > 10):
+                        _verdict_quick = "拉回再進"
+                    elif (_k_last is None or _k_last < 70) and _gain5 < 8 and _latest > _ma20:
+                        _verdict_quick = "可進場"
+                    else:
+                        _verdict_quick = "觀察"
             except Exception:
                 pass
 

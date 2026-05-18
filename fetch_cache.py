@@ -1,6 +1,9 @@
 import os, sys, warnings, time, requests, io, random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# 固定用台北時區,避免雲端 (UTC) 跨日時檔名與 cache_status / telegram_notify (TPE) 不一致
+TPE_TZ = timezone(timedelta(hours=8))
 import pandas as pd
 import yfinance as yf
 from io import StringIO
@@ -62,11 +65,13 @@ _request_counter = {"n": 0}
 
 CACHE_DIR.mkdir(exist_ok=True)
 
-today = datetime.now().strftime("%Y-%m-%d")
-d20   = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+# 全部用台北時區計算,確保檔名與 TPE 推播/UI 日期一致
+_now_tpe = datetime.now(TPE_TZ)
+today = _now_tpe.strftime("%Y-%m-%d")
+d20   = (_now_tpe - timedelta(days=20)).strftime("%Y-%m-%d")
 # 180 calendar days ≈ 128 trading days,給 MA60 / 60日新高約 68 天緩衝
 # (原 d120 ≈ 86 trading days,連假月份會緊到不足 60 → 部分股票指標漏判)
-d180  = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
+d180  = (_now_tpe - timedelta(days=180)).strftime("%Y-%m-%d")
 
 def path_for(name):   return CACHE_DIR / f"{name}_{today}.parquet"
 
@@ -136,7 +141,7 @@ def _trim_by_retention(df, label=""):
     回傳截斷後的 df,並在實際截斷時印出統計。"""
     if df is None or df.empty or "date" not in df.columns:
         return df
-    cutoff = (datetime.now() - timedelta(days=CACHE_RETAIN_DAYS)).strftime("%Y-%m-%d")
+    cutoff = (datetime.now(TPE_TZ) - timedelta(days=CACHE_RETAIN_DAYS)).strftime("%Y-%m-%d")
     before = len(df)
     df_trim = df[df["date"] >= cutoff].reset_index(drop=True)
     after = len(df_trim)
