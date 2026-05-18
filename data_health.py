@@ -64,6 +64,30 @@ def check_data_health(cache_dir) -> dict:
             )
             level = "error" if len(bad_close) > 10 else ("warn" if level == "ok" else level)
 
+        # ── 2b. 日期一致性:檢查多少股票卡在舊日期(部分 yfinance 漏抓的徵兆) ──
+        # 每檔股票的最新一筆日期,理論上應該都 = dates[-1]
+        # 若大量股票卡在舊日期,代表抓取過程有缺漏
+        per_stock_latest = df.groupby('stock_id')['date'].max()
+        global_latest = dates[-1]
+        stuck = per_stock_latest[per_stock_latest < global_latest]
+        total_stocks = len(per_stock_latest)
+        if total_stocks > 0:
+            stuck_ratio = len(stuck) / total_stocks
+            if stuck_ratio > 0.5:
+                stuck_sample = stuck.index.astype(str).tolist()[:5]
+                issues.append(
+                    f"{len(stuck)}/{total_stocks} 檔股票最新日期非 {global_latest.strftime('%Y-%m-%d')}"
+                    f"(占 {stuck_ratio*100:.0f}%,例:{', '.join(stuck_sample)})"
+                )
+                level = "error"
+            elif stuck_ratio > 0.2:
+                stuck_sample = stuck.index.astype(str).tolist()[:5]
+                issues.append(
+                    f"{len(stuck)}/{total_stocks} 檔股票最新日期非 {global_latest.strftime('%Y-%m-%d')}"
+                    f"(占 {stuck_ratio*100:.0f}%,例:{', '.join(stuck_sample)})"
+                )
+                level = "warn" if level == "ok" else level
+
     except Exception as e:
         issues.append(f"daily 健康度檢查失敗: {str(e)[:80]}")
         level = "warn" if level == "ok" else level
