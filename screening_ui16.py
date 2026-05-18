@@ -810,9 +810,72 @@ with col_chart:
                 fig.add_hline(y=defense_y, line_dash="dash", line_color="red", annotation_text=defense_label, annotation_position="bottom right", row=1, col=1)
 
                 if row_data is not None:
-                    fig.add_annotation(x=hist['date'].iloc[-1], y=hist['min'].iloc[-1], text="🔥 訊號觸發", showarrow=True, arrowhead=1, arrowcolor="red", ay=30, row=1, col=1)
+                    fig.add_annotation(
+                        x=hist['date'].iloc[-1], y=hist['min'].iloc[-1],
+                        text="🔥 訊號觸發",
+                        showarrow=True, arrowhead=3, arrowsize=1.2, arrowwidth=2, arrowcolor="#FF6B00",
+                        ax=-40, ay=60,
+                        font=dict(size=13, color="white"),
+                        bgcolor="rgba(255,107,0,0.85)", bordercolor="#FF6B00", borderwidth=1, borderpad=4,
+                        row=1, col=1,
+                    )
 
-                # 第二層：成交量
+                # ── ⭐ 大量警示:成交量 > 5 期均量 * 2 倍時在 K 棒上方標 ★ ──
+                _vol5 = hist[vol_col].rolling(5).mean()
+                _big_vol_mask = (hist[vol_col] > _vol5 * 2) & _vol5.notna()
+                if _big_vol_mask.any():
+                    _bv = hist[_big_vol_mask]
+                    fig.add_trace(go.Scatter(
+                        x=_bv['date'], y=_bv['max'] * 1.015,
+                        mode='markers+text', text='★', textposition='top center',
+                        textfont=dict(size=14, color='gold'),
+                        marker=dict(size=1, color='rgba(0,0,0,0)'),
+                        name='爆量', hovertext=[f"爆量 (量{int(v/1000)}張, 約 5 期均量 {r:.1f}x)"
+                                              for v, r in zip(_bv[vol_col], _bv[vol_col]/_vol5[_big_vol_mask])],
+                        hoverinfo='text',
+                    ), row=1, col=1)
+
+                # ── 🚀💧 20/60 日新高新低標記(週 K 模式對應 20/60 週) ──
+                if len(hist) >= 21:
+                    _hi20 = hist['max'].shift(1).rolling(20).max()
+                    _new_hi20 = (hist['max'] > _hi20) & _hi20.notna()
+                    if _new_hi20.any():
+                        _nh = hist[_new_hi20]
+                        fig.add_trace(go.Scatter(
+                            x=_nh['date'], y=_nh['max'] * 1.025,
+                            mode='text', text='🚀', textfont=dict(size=12),
+                            name='20期新高', hovertext='突破 20 期新高',
+                            hoverinfo='text',
+                        ), row=1, col=1)
+                if len(hist) >= 21:
+                    _lo20 = hist['min'].shift(1).rolling(20).min()
+                    _new_lo20 = (hist['min'] < _lo20) & _lo20.notna()
+                    if _new_lo20.any():
+                        _nl = hist[_new_lo20]
+                        fig.add_trace(go.Scatter(
+                            x=_nl['date'], y=_nl['min'] * 0.975,
+                            mode='text', text='💧', textfont=dict(size=12),
+                            name='20期新低', hovertext='跌破 20 期新低',
+                            hoverinfo='text',
+                        ), row=1, col=1)
+
+                # ── 📐 跳空缺口:今日 low > 昨日 high(向上跳空) 或 今日 high < 昨日 low(向下跳空) ──
+                _prev_high = hist['max'].shift(1)
+                _prev_low  = hist['min'].shift(1)
+                _gap_up   = hist['min'] > _prev_high
+                _gap_down = hist['max'] < _prev_low
+                for _, _row in hist[_gap_up].iterrows():
+                    fig.add_shape(type="rect",
+                        x0=_row['date'] - pd.Timedelta(hours=12), x1=_row['date'] + pd.Timedelta(hours=12),
+                        y0=_prev_high.loc[_row.name], y1=_row['min'],
+                        fillcolor="rgba(255,99,71,0.25)", line=dict(width=0), row=1, col=1)
+                for _, _row in hist[_gap_down].iterrows():
+                    fig.add_shape(type="rect",
+                        x0=_row['date'] - pd.Timedelta(hours=12), x1=_row['date'] + pd.Timedelta(hours=12),
+                        y0=_row['max'], y1=_prev_low.loc[_row.name],
+                        fillcolor="rgba(60,179,113,0.25)", line=dict(width=0), row=1, col=1)
+
+                # 第二層:成交量
                 vol_colors = ['red' if c >= o else 'green' for c, o in zip(hist['close'], hist['open'])]
                 fig.add_trace(go.Bar(x=hist['date'], y=hist[vol_col], marker_color=vol_colors, name='成交量'), row=2, col=1)
 
