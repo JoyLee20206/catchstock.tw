@@ -804,7 +804,8 @@ with col_chart:
                     _s = _ma_state.loc[_seg.index[0]]
                     if _s == 'flat':
                         continue
-                    _fill = "rgba(76,175,80,0.10)" if _s == 'bull' else "rgba(244,67,54,0.10)"
+                    # 台股慣例:紅漲綠跌 → 多頭排列用紅,空頭排列用綠
+                    _fill = "rgba(244,67,54,0.10)" if _s == 'bull' else "rgba(76,175,80,0.10)"
                     fig.add_vrect(x0=_seg['date'].iloc[0], x1=_seg['date'].iloc[-1],
                                   fillcolor=_fill, line_width=0, layer="below", row=1, col=1)
                 if 'Market_Norm' in hist.columns:
