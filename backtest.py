@@ -23,6 +23,9 @@ SIGNAL_LABELS = {
     "breakout": "量價齊揚突破(60 日新高)",
     "foreign":  "外資連 5 日買超",
     "kd_cross": "KD 低檔金叉",
+    "it_buy":   "投信連續買超(內資作帳)",
+    "ma_bull":  "均線多頭排列(趨勢成型)",
+    "bias_low": "負乖離過大反彈(跌深搶反彈)",
 }
 
 # ══════════════════════════════════════════════════════════════════════
@@ -138,6 +141,49 @@ def detect_kd_cross_signals(matrices):
     had_low_cross = low_cross_event.shift(1).rolling(window=KD_LOOKBACK, min_periods=1).sum() > 0
     return cross_now & not_overbought & had_low_cross & K.notna()
 
+def _load_it_net_matrix(cache_dir):
+    """讀取投信每日淨買超矩陣"""
+    try:
+        files = sorted(cache_dir.glob('institutional_*.parquet'))
+        if not files: return None
+        df = pd.read_parquet(files[-1])
+        if df.empty: return None
+        mask = df['name'].str.contains('Investment_Trust|投信', na=False)
+        it = df[mask].copy()
+        if it.empty: return None
+        it['date'] = pd.to_datetime(it['date'])
+        it['stock_id'] = it['stock_id'].astype(str)
+        it['net'] = it['buy'] - it['sell']
+        it = it.groupby(['date', 'stock_id'], as_index=False)['net'].sum()
+        return it.pivot(index='date', columns='stock_id', values='net')
+    except Exception as e:
+        print(f"⚠ 讀取投信 matrix 失敗: {e}")
+        return None
+
+def detect_it_signals(matrices, it_matrix):
+    """投信近 3 日內至少買超 2 日，且今日為淨買超"""
+    close = matrices['close']
+    if it_matrix is None: return pd.DataFrame(False, index=close.index, columns=close.columns)
+    it_aligned = it_matrix.reindex(index=close.index, columns=close.columns)
+    rolling_pos = (it_aligned > 0).rolling(window=3, min_periods=1).sum()
+    return (rolling_pos >= 2) & (it_aligned > 0)
+
+def detect_ma_bull_signals(matrices):
+    """均線多頭排列: 收盤 > MA5 > MA20 > MA60"""
+    close = matrices['close']
+    ma5 = close.rolling(window=5, min_periods=5).mean()
+    ma20 = close.rolling(window=20, min_periods=20).mean()
+    ma60 = close.rolling(window=60, min_periods=60).mean()
+    return (close > ma5) & (ma5 > ma20) & (ma20 > ma60)
+
+def detect_bias_low_signals(matrices):
+    """跌深反彈: 股價低於 MA20 超過 10%，且今日收盤高於昨日 (止跌)"""
+    close = matrices['close']
+    ma20 = close.rolling(window=20, min_periods=20).mean()
+    bias20 = (close - ma20) / ma20 * 100
+    is_bounce = close > close.shift(1)
+    return (bias20 < -10) & is_bounce
+
 # ══════════════════════════════════════════════════════════════════════
 # 動態停損與報酬計算
 # ══════════════════════════════════════════════════════════════════════
@@ -212,11 +258,15 @@ def run_backtest(cache_dir, signals: list, hold_days: int = 10, sl_pct: float = 
     if matrices is None: return {"error": "無法讀取 daily 快取", "trades": pd.DataFrame(), "stats": {"n": 0}}
 
     fi_matrix = _load_foreign_net_matrix(cache_dir)
-
+    it_matrix = _load_it_net_matrix(cache_dir) # ✅ 新增：讀取投信
+    
     sig_matrices = {
         "breakout": detect_breakout_signals(matrices),
         "foreign":  detect_foreign_signals(matrices, fi_matrix),
         "kd_cross": detect_kd_cross_signals(matrices),
+        "it_buy":   detect_it_signals(matrices, it_matrix),     # ✅ 新增投信
+        "ma_bull":  detect_ma_bull_signals(matrices),           # ✅ 新增多頭排列
+        "bias_low": detect_bias_low_signals(matrices),          # ✅ 新增跌深反彈
     }
 
     # 多條件組合 (AND 邏輯)
