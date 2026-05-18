@@ -762,6 +762,25 @@ with col_chart:
                     if len(m_close) > 0 and m_close.iloc[0] > 0: hist['Market_Norm'] = m_close.values / m_close.iloc[0] * 100
 
                 hist['MA5'], hist['MA20'], hist['MA60'] = hist['close'].rolling(5).mean(), hist['close'].rolling(20).mean(), hist['close'].rolling(60).mean()
+
+                # ── 🎨 MA 多頭/空頭排列背景染色:綠=多頭(MA5>MA20>MA60),紅=空頭(MA5<MA20<MA60) ──
+                # 連續同狀態的 bar 合併成同一個 rect,避免畫面爆量 shape
+                _ma_state = pd.Series('flat', index=hist.index)
+                _bull = (hist['MA5'] > hist['MA20']) & (hist['MA20'] > hist['MA60'])
+                _bear = (hist['MA5'] < hist['MA20']) & (hist['MA20'] < hist['MA60'])
+                _ma_state[_bull] = 'bull'
+                _ma_state[_bear] = 'bear'
+                # 偵測連續區段
+                _state_change = (_ma_state != _ma_state.shift(1)).cumsum()
+                for _, _seg in hist.groupby(_state_change):
+                    _s = _ma_state.loc[_seg.index[0]]
+                    if _s == 'flat':
+                        continue
+                    _fill = "rgba(76,175,80,0.10)" if _s == 'bull' else "rgba(244,67,54,0.10)"
+                    _x0 = _seg['date'].iloc[0]
+                    _x1 = _seg['date'].iloc[-1]
+                    fig.add_vrect(x0=_x0, x1=_x1, fillcolor=_fill,
+                                  line_width=0, layer="below", row=1, col=1)
                 # Bug 1 修正：_calc_kd_series 在歷史不足 10 筆時回傳 (None, None),
                 # 不防護的話新股或剛恢復交易股會讓 list comprehension 拋 TypeError
                 k_list, d_list = _calc_kd_series(hist['max'], hist['min'], hist['close'])
