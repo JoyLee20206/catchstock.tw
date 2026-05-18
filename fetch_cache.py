@@ -13,7 +13,13 @@ if hasattr(sys.stdout, 'reconfigure'):
 # 參數設定區 (100% 零 API 金鑰)
 # ==========================================
 CACHE_DIR = Path("cache")
-FORCE     = "--force" in sys.argv
+
+# 旗標:
+#   --force        無視所有 cache,全部重抓(info/法人/融資券/daily/大戶/營收)
+#   --force-daily  只強制重抓 daily K 線,其他資源若有當日 cache 仍略過
+#                  典型用途:盤中跑過後,收盤再按一次重抓「真實收盤價」
+FORCE       = "--force" in sys.argv
+FORCE_DAILY = "--force-daily" in sys.argv
 
 # 爬蟲延遲設定 (秒)
 TWSE_DELAY = 3.0
@@ -63,7 +69,18 @@ d20   = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
 d180  = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
 
 def path_for(name):   return CACHE_DIR / f"{name}_{today}.parquet"
-def need_fetch(name): return FORCE or not path_for(name).exists()
+
+def need_fetch(name):
+    """判斷是否需要重抓。
+    - FORCE: 全部資源強制重抓
+    - FORCE_DAILY: 只有 'daily' 強制重抓,其他資源若已有當日檔仍略過
+    - 預設: 沒當日檔就抓
+    """
+    if FORCE:
+        return True
+    if FORCE_DAILY and name == "daily":
+        return True
+    return not path_for(name).exists()
 
 def cleanup_old_cache(name):
     """刪除同類型的舊快取,只保留今日這份。
@@ -813,6 +830,10 @@ def fetch_twse_openapi_revenue():
 # ==========================================
 print("=" * 65)
 print(f">>> 官方直連版快取系統 v2 (含 IP 防護強化) | {today}")
+if FORCE:
+    print(">>> ⚠️  --force 模式:無視所有當日 cache,全部重抓")
+elif FORCE_DAILY:
+    print(">>> 🔄 --force-daily 模式:只強制重抓 daily K 線,其他資源沿用當日 cache")
 print("=" * 65)
 
 # [1] 股票清單

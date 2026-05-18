@@ -6,10 +6,14 @@
 
 # ── 頂層 import ───────────────────────────────────────────────────────────
 import os
+import sys
 import json
 import re
+import time
+import subprocess
 import tempfile
 import textwrap
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -198,27 +202,106 @@ if _freshness["level"] != "missing":
 
     # 雲端更新按鈕區塊
     st.markdown("#### 🔄 資料更新") 
-    st.caption("雲端環境專用：點擊後從網路抓取最新台股資料。")
+    st.caption("雲端環境專用:點擊後從網路抓取最新台股資料。")
+
+    # ── 顯示 daily 快取的「實際抓取時間」(mtime),讓使用者判斷需不需要重抓 ──
+    try:
+        daily_files = sorted(CACHE_DIR.glob('daily_*.parquet'))
+        if daily_files:
+            _daily_mtime = datetime.fromtimestamp(daily_files[-1].stat().st_mtime)
+            st.caption(f"📅 日 K 最後抓取:**{_daily_mtime.strftime('%m/%d %H:%M')}**")
+    except Exception:
+        pass
+
+    # ── 盤中提醒:< 14:00 抓的是即時價,警告使用者 ──
+    _now = datetime.now()
+    _is_market_hours = (
+        _now.weekday() < 5 and
+        ((_now.hour == 9 and _now.minute >= 0) or
+         (10 <= _now.hour < 13) or
+         (_now.hour == 13 and _now.minute <= 30))
+    )
+    if _is_market_hours:
+        st.warning(
+            "⏰ **目前盤中**,抓的會是『即時價』而非『收盤價』。\n"
+            "**建議 14:00 後再強制重抓**,才會拿到完整收盤資料。"
+        )
 
     if st.session_state.get('show_update_success'):
-        st.toast("✅ 雲端資料檢查/更新完成！", icon="🎉")
+        st.toast("✅ 雲端資料檢查/更新完成!", icon="🎉")
         st.session_state.show_update_success = False
+    if st.session_state.get('show_force_daily_success'):
+        st.toast("✅ 日 K 強制更新完成!", icon="🔄")
+        st.session_state.show_force_daily_success = False
 
-    if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True):
-        st.toast("⏳ 系統已收到請求，開始比對資料...", icon="🤖") 
-        with st.spinner("正在執行資料更新... (若轉圈超過 2 分鐘，可能是主機記憶體不足崩潰)"):
+    # ── 按鈕 1:標準抓取(略過已有當日 cache) ──
+    if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True,
+                 help="標準模式:若各類資源今天已抓過就略過。預設排程跑的就是這個。"):
+        st.toast("⏳ 系統已收到請求,開始比對資料...", icon="🤖")
+        with st.spinner("正在執行資料更新... (若轉圈超過 2 分鐘,可能是主機記憶體不足崩潰)"):
             try:
-                import subprocess
-                import sys
-                result = subprocess.run([sys.executable, "fetch_cache.py"], capture_output=True, text=True, check=True)
+                result = subprocess.run([sys.executable, "fetch_cache.py"],
+                                        capture_output=True, text=True, check=True)
                 st.cache_data.clear()
                 st.session_state.show_update_success = True
                 st.rerun()
             except subprocess.CalledProcessError as e:
-                st.error("❌ 雲端腳本執行失敗！")
+                st.error("❌ 雲端腳本執行失敗!")
                 st.code(e.stderr)
             except Exception as e:
-                st.error(f"❌ 發生未知的錯誤：{e}")
+                st.error(f"❌ 發生未知的錯誤:{e}")
+
+    # ── 按鈕 2:強制更新日 K(無視 cache,只重抓 daily) ──
+    # 冷卻保護:避免狂按耗 API 額度
+    FORCE_DAILY_COOLDOWN = 120  # 2 分鐘
+    _last_force_ts = st.session_state.get('last_force_daily_ts', 0)
+    _elapsed = time.time() - _last_force_ts
+    _on_cooldown = _elapsed < FORCE_DAILY_COOLDOWN
+
+    if _on_cooldown:
+        _remaining = int(FORCE_DAILY_COOLDOWN - _elapsed)
+        st.button(
+            f"🔄 強制更新日 K(冷卻 {_remaining} 秒)",
+            disabled=True, use_container_width=True
+        )
+    else:
+        if st.button(
+            "🔄 強制更新日 K", type="primary", use_container_width=True,
+            help=(
+                "無視當日 cache,重新抓取**所有股票**的日 K 資料。\n\n"
+                "**用途**:盤中已經跑過、要拿到真正收盤價時(14:00 後再按)。\n"
+                "**只重抓 daily**:法人/融資券/營收/大戶 仍沿用今日 cache,不浪費 API 額度。\n"
+                "**冷卻**:2 分鐘內只能按一次。"
+            )
+        ):
+            with st.status("正在強制重抓 daily K 線...", expanded=True) as _status:
+                try:
+                    st.write("⏳ 啟動 `fetch_cache.py --force-daily`,預估 1~3 分鐘...")
+                    result = subprocess.run(
+                        [sys.executable, "fetch_cache.py", "--force-daily"],
+                        capture_output=True, text=True, timeout=600
+                    )
+                    if result.returncode == 0:
+                        # 只顯示最後 8 行 log,避免訊息太長
+                        _last_lines = result.stdout.strip().split('\n')[-8:]
+                        st.code('\n'.join(_last_lines))
+                        st.session_state.last_force_daily_ts = time.time()
+                        st.session_state.show_force_daily_success = True
+                        # 清掉所有 cache_data,讓 UI 重新讀新檔
+                        st.cache_data.clear()
+                        _status.update(label="✅ daily K 線已更新", state="complete")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(f"❌ 抓取失敗(returncode={result.returncode})")
+                        st.code(result.stderr[-500:] if result.stderr else "(無錯誤輸出)")
+                        _status.update(label="❌ 失敗", state="error")
+                except subprocess.TimeoutExpired:
+                    st.error("⏱️ 抓取逾時(超過 10 分鐘),已中止。可能是 yfinance 異常。")
+                    _status.update(label="❌ 逾時", state="error")
+                except Exception as e:
+                    st.error(f"❌ 例外:{e}")
+                    _status.update(label="❌ 例外", state="error")
 
 # ── 策略邏輯導覽 (FAQ) ─────────────────────────────────────────────────────
 with st.expander("💡 策略邏輯導覽 (FAQ) — 核心量化規則說明", expanded=False):
@@ -498,50 +581,6 @@ if _hist_days >= 5:  # 至少有 5 天歷史才有意義
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-# ── 資金管理計算器(凱利公式 + 固定風險法) ───────────────────────────────
-with st.expander("💰 資金管理計算器", expanded=False):
-    st.caption("輸入總資金與停損點,自動算出該買幾張避免單筆風險過大。")
-    fc1, fc2, fc3 = st.columns(3)
-    fund_total   = fc1.number_input("總資金(萬)", min_value=10.0, max_value=10000.0, value=100.0, step=10.0)
-    risk_pct     = fc2.number_input("單筆風險 %", min_value=0.5, max_value=10.0, value=2.0, step=0.5,
-                                    help="單筆交易最多虧損占總資金的比例。\n保守:1~2%,積極:3~5%")
-    stop_loss_pct = fc3.number_input("停損 %",      min_value=2.0, max_value=20.0, value=7.0, step=0.5,
-                                    help="從進場價跌到停損價的百分比")
-    fc4, fc5 = st.columns(2)
-    entry_price = fc4.number_input("進場價(元)", min_value=1.0, max_value=10000.0, value=100.0, step=1.0)
-    use_default_lot = fc5.checkbox("整張交易(1 張 = 1000 股)", value=True)
-
-    # 計算邏輯:單筆容忍虧損金額 / 每股虧損 = 可買股數
-    risk_amount = fund_total * 10000 * (risk_pct / 100)              # 元
-    loss_per_share = entry_price * (stop_loss_pct / 100)             # 元/股
-    if loss_per_share > 0:
-        max_shares = risk_amount / loss_per_share
-        if use_default_lot:
-            max_lots = int(max_shares // 1000)
-            actual_position = max_lots * 1000 * entry_price
-            actual_risk = max_lots * 1000 * loss_per_share
-        else:
-            max_lots = max_shares
-            actual_position = max_shares * entry_price
-            actual_risk = max_shares * loss_per_share
-
-        position_pct = actual_position / (fund_total * 10000) * 100 if fund_total > 0 else 0
-
-        st.divider()
-        rc1, rc2, rc3 = st.columns(3)
-        if use_default_lot:
-            rc1.metric("建議買進", f"{max_lots} 張", f"= {max_lots*1000:,} 股")
-        else:
-            rc1.metric("建議買進", f"{max_shares:.0f} 股")
-        rc2.metric("動用資金", f"{actual_position:,.0f} 元", f"占總資金 {position_pct:.1f}%")
-        rc3.metric("最大虧損", f"{actual_risk:,.0f} 元", f"= {risk_pct:.1f}% 總資金")
-
-        if max_lots == 0 and use_default_lot:
-            st.warning("⚠️ 依此風險設定無法買進 1 張完整持股。建議降低停損 %、提高單筆風險 %,或選擇零股交易。")
-        elif position_pct > 50:
-            st.warning(f"⚠️ 單檔部位占比 {position_pct:.0f}% 過高,建議分散到 2-3 檔。")
-
-
 # ── 資料健康度警告(只在 warn/error 級才顯示) ──
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_health_cached():
@@ -625,7 +664,9 @@ with col_chart:
             sname = ui_name_map.get(sid, "")
         
         # 🧠 修改處：新增第四個 AI 分頁
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 技術分析", "📊 籌碼/基本面", "🧠 AI 虛擬點評", "📝 交易筆記"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📈 技術分析", "📊 籌碼/基本面", "🧠 AI 虛擬點評", "📝 交易筆記", "💰 資金管理"
+        ])
         hist_daily = _cached_stock_history(sid)
 
         with tab1:
@@ -921,3 +962,134 @@ with col_chart:
                 mime="application/json",
                 use_container_width=True
             )
+
+        # ── tab5 資金管理計算器 ─ 進場價預設帶該股現價 ──
+        with tab5:
+            st.subheader(f"💰 {sid} {sname} 部位計算")
+            st.caption("先決定能虧多少 → 反推該買幾張。避免憑感覺下單導致單筆風險過大。")
+
+            # 進場價預設值:row_data 有就用現價,沒有就 fallback 100
+            try:
+                _default_entry = float(row_data['現價']) if row_data is not None and pd.notna(row_data.get('現價')) else 100.0
+            except Exception:
+                _default_entry = 100.0
+
+            # 把使用者「總資金/單筆風險/整張交易」三個偏好存進 session,
+            # 切換不同股票時設定維持,只有「進場價」會隨股票變
+            if 'fund_total' not in st.session_state:
+                st.session_state.fund_total = 100.0
+            if 'fund_risk_pct' not in st.session_state:
+                st.session_state.fund_risk_pct = 2.0
+            if 'fund_use_lot' not in st.session_state:
+                st.session_state.fund_use_lot = True
+
+            fc1, fc2, fc3 = st.columns(3)
+            fund_total = fc1.number_input(
+                "總資金(萬)", min_value=10.0, max_value=10000.0,
+                value=st.session_state.fund_total, step=10.0, key="fund_total_input",
+                help="你拿來操作股票的本金總額(不是身家)"
+            )
+            st.session_state.fund_total = fund_total
+
+            risk_pct = fc2.number_input(
+                "單筆風險 %", min_value=0.5, max_value=10.0,
+                value=st.session_state.fund_risk_pct, step=0.5, key="fund_risk_input",
+                help="這一筆交易最多容忍虧損占總資金的比例。\n保守:1~2%,積極:3~5%。\n**這是你的紀律,不該隨股票改變。**"
+            )
+            st.session_state.fund_risk_pct = risk_pct
+
+            stop_loss_pct = fc3.number_input(
+                "停損 %", min_value=2.0, max_value=20.0,
+                value=7.0, step=0.5, key=f"fund_stop_{sid}",
+                help="從進場價跌多少 % 認賠出場。\n建議參考:跌破 MA20 通常 5~8%、跌破 MA60 通常 10~12%"
+            )
+
+            fc4, fc5 = st.columns(2)
+            entry_price = fc4.number_input(
+                "進場價(元)", min_value=1.0, max_value=100000.0,
+                value=_default_entry, step=0.5, key=f"fund_entry_{sid}",
+                help=f"預設帶入 {sid} 目前現價 {_default_entry:.1f} 元"
+            )
+
+            use_default_lot = fc5.checkbox(
+                "整張交易(1 張 = 1000 股)", value=st.session_state.fund_use_lot,
+                key="fund_lot_check"
+            )
+            st.session_state.fund_use_lot = use_default_lot
+
+            # ── 計算 ──
+            risk_amount = fund_total * 10000 * (risk_pct / 100)      # 容忍虧損金額(元)
+            loss_per_share = entry_price * (stop_loss_pct / 100)     # 每股虧損(元)
+
+            if loss_per_share > 0:
+                max_shares = risk_amount / loss_per_share
+                if use_default_lot:
+                    max_lots = int(max_shares // 1000)
+                    actual_position = max_lots * 1000 * entry_price
+                    actual_risk = max_lots * 1000 * loss_per_share
+                else:
+                    max_lots = max_shares
+                    actual_position = max_shares * entry_price
+                    actual_risk = max_shares * loss_per_share
+
+                position_pct = actual_position / (fund_total * 10000) * 100 if fund_total > 0 else 0
+                stop_price = entry_price * (1 - stop_loss_pct / 100)
+
+                st.divider()
+                st.markdown("##### 📋 建議部位")
+                rc1, rc2, rc3 = st.columns(3)
+                if use_default_lot:
+                    rc1.metric("建議買進", f"{max_lots} 張", f"= {max_lots*1000:,} 股" if max_lots > 0 else "資金不足")
+                else:
+                    rc1.metric("建議買進", f"{max_shares:.0f} 股")
+                rc2.metric("動用資金", f"{actual_position:,.0f} 元", f"占總資金 {position_pct:.1f}%")
+                rc3.metric("最大虧損", f"{actual_risk:,.0f} 元", f"= {risk_pct:.1f}% 總資金")
+
+                st.markdown(
+                    f"📍 進場價 **{entry_price:.1f}** 元 → 停損價 **{stop_price:.1f}** 元 "
+                    f"(跌幅 {stop_loss_pct:.1f}%)"
+                )
+
+                # ── 警示 ──
+                if use_default_lot and max_lots == 0:
+                    needed_capital = (1000 * entry_price) / (position_pct / 100 if position_pct > 0 else 0.5)
+                    st.warning(
+                        f"⚠️ 依此風險設定無法買進 1 整張(需動用 {1000 * entry_price:,.0f} 元 "
+                        f"= {1000 * entry_price / (fund_total * 10000) * 100:.1f}% 總資金,超出風險上限)。\n\n"
+                        f"建議:**提高單筆風險**、**縮小停損**、或**勾掉整張交易改買零股**。"
+                    )
+                elif position_pct > 50:
+                    st.warning(
+                        f"⚠️ 單檔部位占比 {position_pct:.0f}% 過高,建議分散到 2~3 檔以降低集中度風險。"
+                    )
+                elif use_default_lot and max_lots > 0:
+                    st.success(
+                        f"✅ 部位符合紀律,可下單。"
+                        f"記得設定停損價 **{stop_price:.1f}** 元,跌破即出場不戀棧。"
+                    )
+
+                # ── 小教學 ──
+                with st.expander("💡 看不懂?資金管理 1 分鐘速懂", expanded=False):
+                    st.markdown(
+                        f"""
+**為什麼要算這個?**
+
+很多人是這樣決定的:「我有 50 萬,2603 一張 7.5 萬,我來個 5 張好了!」── 完全沒考慮「**萬一跌了會虧多少**」。
+
+資金管理計算器**反過來算**:**先決定能虧多少,反推該買幾張**。
+
+**3 個關鍵概念**
+
+1. **單筆風險 %**(填 {risk_pct}%)= 這筆交易最多虧總資金的多少%。**這是紀律,不該隨股票改變**。保守 1~2%,積極 3~5%。
+2. **停損 %**(填 {stop_loss_pct}%)= 從進場價跌多少 % 出場。跟單筆風險不同 ── 一個是**佔本金**,一個是**佔股價**。
+3. **進場價**(填 {entry_price:.1f})= 你打算買的價位。**預設帶入這檔股票的現價**。
+
+**讀懂建議部位**
+
+- **{max_lots if use_default_lot else int(max_shares)} 張**:在你的紀律內最多能買的量
+- **動用資金 {actual_position:,.0f} 元**:這筆要花多少錢
+- **最大虧損 {actual_risk:,.0f} 元**:最壞情況虧多少(就是 {risk_pct}% 總資金)
+
+**新手心法**:**永遠把單筆風險設 2%**,其他照實填,**計算器叫你買幾張就買幾張**,不要硬加碼。長期下來才能活到大勝那一次。
+                        """
+                    )
