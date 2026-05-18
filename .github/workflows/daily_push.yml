@@ -4,7 +4,7 @@ name: Daily Stock Push
 # 兩段式排程設計
 #
 # 16:05 (台北) = UTC 08:05 ── 收盤後第一輪
-#   只執行 fetch_cache,讓 Streamlit 網頁能看到當日 K 線、法人、TWSE 資券
+#   只執行 fetch_cache,讓 Streamlit 網頁能看到當日 K 線、法人、TWSE 
 #   不發 TG(因 TPEx 資券要等 18:00 後才公告,此時資料不完整)
 #
 # 21:05 (台北) = UTC 13:05 ── 完整資料就緒
@@ -63,8 +63,6 @@ jobs:
   # ════════════════════════════════════════════════════════════════
   # Job 2: 21:05 + 手動觸發 — 完整流程
   # 此時 TPEx 資券已公告(18:00 後),所有資料都齊,正式推播
-  # 注意:21:05 時 daily 已有 16:05 cache,故必須 --force-daily 重抓
-  #       才能拿到收盤後可能微調的價量資料
   # ════════════════════════════════════════════════════════════════
   full-push:
     # 21:05 排程 或 手動觸發 都跑這個
@@ -86,9 +84,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 執行完整資料抓取(此時 TPEx 資券已公告)
-        # 16:05 已抓過 daily,21:05 用 --force-daily 確保拿到完整收盤後 K 線
-        # 其他資源若已有當日 cache 仍會略過,不浪費 API 額度
-        run: python -u fetch_cache.py --force-daily
+        # 16:05 已抓過 daily 且收盤價穩定,不需重抓。
+        # margin 的 batch 邏輯會自動偵測「今天不在 existing_dates」並補抓 TPEx 資券。
+        # 其他資源已有當日 cache 也會略過,只跑必要的補抓,通常 1~2 分鐘搞定。
+        run: python -u fetch_cache.py
 
       - name: 發送 Telegram 推播
         if: success()
