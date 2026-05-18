@@ -10,7 +10,7 @@ from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS, CACHE_DIR
 # 共用模組
 from ai_helper import call_openrouter_ai
 from cache_status import cache_freshness
-from picks_history import load_history, save_history, compute_streak, build_picks_from_df
+from picks_history import load_history, save_history, compute_streak, build_picks_from_df, get_sids
 from data_health import check_data_health, format_health_for_tg
 from watchlist_alerts import check_watchlist, format_alerts_for_tg
 from performance import compute_performance, format_performance_summary
@@ -202,7 +202,7 @@ def main():
 
         # 同日重跑保護:剔除 history 中「今日」的項目,避免污染 yesterday_sids/streak/退場偵測
         history = [h for h in history if h.get("date") != today_str]
-        yesterday_sids = set(history[-1]["sids"]) if history else set()
+        yesterday_sids = set(get_sids(history[-1])) if history else set()
 
         def _safe_num(v, default=0.0):
             return float(v) if pd.notna(v) else default
@@ -404,13 +404,21 @@ def main():
         save_history(history)
 
     except Exception as e:
-        safe_error = html.escape(str(e))
+        import traceback
+        tb_str = traceback.format_exc()
+        # 從 traceback 抽出最後一個 frame(實際出錯的檔案:行號)
+        tb_lines = [ln for ln in tb_str.strip().split("\n") if ln.strip().startswith("File ")]
+        last_frame = tb_lines[-1] if tb_lines else "(無 frame)"
+        safe_error = html.escape(f"{type(e).__name__}: {e}")
+        safe_frame = html.escape(last_frame)
         error_msg = (
             f"❌ <b>選股機器人罷工求救!</b>\n\n"
-            f"系統發生致命錯誤,請至 GitHub 檢查:\n<code>{safe_error}</code>"
+            f"系統發生致命錯誤:\n<code>{safe_error}</code>\n\n"
+            f"<b>出錯位置:</b>\n<code>{safe_frame}</code>"
         )
         send_telegram_message(error_msg)
         print(f"❌ 選股推播發生致命錯誤:{e}")
+        print(tb_str)  # 完整 traceback 進 GitHub Actions log,方便事後查
 
 
 if __name__ == "__main__":
