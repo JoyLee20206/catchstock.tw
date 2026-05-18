@@ -234,9 +234,41 @@ if _freshness["level"] != "missing":
         st.toast("✅ 日 K 強制更新完成!", icon="🔄")
         st.session_state.show_force_daily_success = False
 
+    # ── 兩顆按鈕並排顯示(左:標準抓取 / 右:強制更新日 K) ──
+    FORCE_DAILY_COOLDOWN = 120  # 2 分鐘
+    _last_force_ts = st.session_state.get('last_force_daily_ts', 0)
+    _elapsed = time.time() - _last_force_ts
+    _on_cooldown = _elapsed < FORCE_DAILY_COOLDOWN
+
+    _btn_col1, _btn_col2 = st.columns(2)
+
+    with _btn_col1:
+        _click_fetch = st.button(
+            "📥 抓取今日最新資料", type="secondary", use_container_width=True,
+            help="標準模式:若各類資源今天已抓過就略過。預設排程跑的就是這個。"
+        )
+
+    with _btn_col2:
+        if _on_cooldown:
+            _remaining = int(FORCE_DAILY_COOLDOWN - _elapsed)
+            st.button(
+                f"🔄 強制更新日 K(冷卻 {_remaining} 秒)",
+                disabled=True, use_container_width=True
+            )
+            _click_force = False
+        else:
+            _click_force = st.button(
+                "🔄 強制更新日 K", type="primary", use_container_width=True,
+                help=(
+                    "無視當日 cache,重新抓取**所有股票**的日 K 資料。\n\n"
+                    "**用途**:盤中已經跑過、要拿到真正收盤價時(14:00 後再按)。\n"
+                    "**只重抓 daily**:法人/融資券/營收/大戶 仍沿用今日 cache,不浪費 API 額度。\n"
+                    "**冷卻**:2 分鐘內只能按一次。"
+                )
+            )
+
     # ── 按鈕 1:標準抓取(略過已有當日 cache) ──
-    if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True,
-                 help="標準模式:若各類資源今天已抓過就略過。預設排程跑的就是這個。"):
+    if _click_fetch:
         st.toast("⏳ 系統已收到請求,開始比對資料...", icon="🤖")
         with st.spinner("正在執行資料更新... (若轉圈超過 2 分鐘,可能是主機記憶體不足崩潰)"):
             try:
@@ -252,56 +284,33 @@ if _freshness["level"] != "missing":
                 st.error(f"❌ 發生未知的錯誤:{e}")
 
     # ── 按鈕 2:強制更新日 K(無視 cache,只重抓 daily) ──
-    # 冷卻保護:避免狂按耗 API 額度
-    FORCE_DAILY_COOLDOWN = 120  # 2 分鐘
-    _last_force_ts = st.session_state.get('last_force_daily_ts', 0)
-    _elapsed = time.time() - _last_force_ts
-    _on_cooldown = _elapsed < FORCE_DAILY_COOLDOWN
-
-    if _on_cooldown:
-        _remaining = int(FORCE_DAILY_COOLDOWN - _elapsed)
-        st.button(
-            f"🔄 強制更新日 K(冷卻 {_remaining} 秒)",
-            disabled=True, use_container_width=True
-        )
-    else:
-        if st.button(
-            "🔄 強制更新日 K", type="primary", use_container_width=True,
-            help=(
-                "無視當日 cache,重新抓取**所有股票**的日 K 資料。\n\n"
-                "**用途**:盤中已經跑過、要拿到真正收盤價時(14:00 後再按)。\n"
-                "**只重抓 daily**:法人/融資券/營收/大戶 仍沿用今日 cache,不浪費 API 額度。\n"
-                "**冷卻**:2 分鐘內只能按一次。"
-            )
-        ):
-            with st.status("正在強制重抓 daily K 線...", expanded=True) as _status:
-                try:
-                    st.write("⏳ 啟動 `fetch_cache.py --force-daily`,預估 1~3 分鐘...")
-                    result = subprocess.run(
-                        [sys.executable, "fetch_cache.py", "--force-daily"],
-                        capture_output=True, text=True, timeout=600
-                    )
-                    if result.returncode == 0:
-                        # 只顯示最後 8 行 log,避免訊息太長
-                        _last_lines = result.stdout.strip().split('\n')[-8:]
-                        st.code('\n'.join(_last_lines))
-                        st.session_state.last_force_daily_ts = time.time()
-                        st.session_state.show_force_daily_success = True
-                        # 清掉所有 cache_data,讓 UI 重新讀新檔
-                        st.cache_data.clear()
-                        _status.update(label="✅ daily K 線已更新", state="complete")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(f"❌ 抓取失敗(returncode={result.returncode})")
-                        st.code(result.stderr[-500:] if result.stderr else "(無錯誤輸出)")
-                        _status.update(label="❌ 失敗", state="error")
-                except subprocess.TimeoutExpired:
-                    st.error("⏱️ 抓取逾時(超過 10 分鐘),已中止。可能是 yfinance 異常。")
-                    _status.update(label="❌ 逾時", state="error")
-                except Exception as e:
-                    st.error(f"❌ 例外:{e}")
-                    _status.update(label="❌ 例外", state="error")
+    if _click_force:
+        with st.status("正在強制重抓 daily K 線...", expanded=True) as _status:
+            try:
+                st.write("⏳ 啟動 `fetch_cache.py --force-daily`,預估 1~3 分鐘...")
+                result = subprocess.run(
+                    [sys.executable, "fetch_cache.py", "--force-daily"],
+                    capture_output=True, text=True, timeout=600
+                )
+                if result.returncode == 0:
+                    _last_lines = result.stdout.strip().split('\n')[-8:]
+                    st.code('\n'.join(_last_lines))
+                    st.session_state.last_force_daily_ts = time.time()
+                    st.session_state.show_force_daily_success = True
+                    st.cache_data.clear()
+                    _status.update(label="✅ daily K 線已更新", state="complete")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"❌ 抓取失敗(returncode={result.returncode})")
+                    st.code(result.stderr[-500:] if result.stderr else "(無錯誤輸出)")
+                    _status.update(label="❌ 失敗", state="error")
+            except subprocess.TimeoutExpired:
+                st.error("⏱️ 抓取逾時(超過 10 分鐘),已中止。可能是 yfinance 異常。")
+                _status.update(label="❌ 逾時", state="error")
+            except Exception as e:
+                st.error(f"❌ 例外:{e}")
+                _status.update(label="❌ 例外", state="error")
 
 # ── 策略邏輯導覽 (FAQ) ─────────────────────────────────────────────────────
 with st.expander("💡 策略邏輯導覽 (FAQ) — 核心量化規則說明", expanded=False):
