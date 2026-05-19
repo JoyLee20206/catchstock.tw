@@ -225,12 +225,20 @@ if _freshness["level"] != "missing":
     st.markdown("#### 🔄 資料更新") 
     st.caption("雲端環境專用:點擊後從網路抓取最新台股資料。")
 
-    # ── 顯示 daily 快取的「實際抓取時間」(mtime),讓使用者判斷需不需要重抓 ──
+    # ── 顯示 daily 快取的「資料日期」──
+    # 用「檔名內嵌的日期」+「parquet 內最新交易日」,比 OS mtime 可靠
+    # (Streamlit Cloud 每次 git pull 都會重置 mtime,造成「沒更新但時間自己跳」的假象)
     try:
         daily_files = sorted(CACHE_DIR.glob('daily_*.parquet'))
         if daily_files:
-            _daily_mtime = datetime.fromtimestamp(daily_files[-1].stat().st_mtime)
-            st.caption(f"📅 日 K 最後抓取:**{_daily_mtime.strftime('%m/%d %H:%M')}**")
+            # 從檔名 daily_YYYY-MM-DD.parquet 抓出抓取那天的日期
+            _stem = daily_files[-1].stem  # 'daily_2026-05-18'
+            _fetch_day = _stem.replace('daily_', '')
+            _data_max = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "?"
+            if _fetch_day == _data_max:
+                st.caption(f"📅 日 K 檔名/資料日期:**{_fetch_day}**")
+            else:
+                st.caption(f"📅 日 K 檔名:**{_fetch_day}** / 內含最新交易日:**{_data_max}**")
     except Exception:
         pass
 
