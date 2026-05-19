@@ -704,6 +704,14 @@ def fetch_yfinance_daily(info_df, default_start_date, chunk_size=400):
     print(f"   -> 價量快取全量建置完成! (總庫存: {len(df_new):,} 筆)")
     cleanup_old_cache("daily")  # <--- 補上這行
 
+    # 寫入抓取時戳(TPE),供 UI 顯示「資料更新到幾點」── 用內容而非 mtime,避免 git pull 重置
+    try:
+        _now_str = datetime.now(TPE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        (CACHE_DIR / "last_fetch_daily.txt").write_text(_now_str, encoding="utf-8")
+        print(f"   -> 寫入抓取時戳: {_now_str} (台北時間)")
+    except Exception as e:
+        print(f"   ⚠ 寫入時戳失敗(略過): {e}")
+
 # ==========================================
 # [5] TDCC 千張大戶 (增量更新)
 # ==========================================

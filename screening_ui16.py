@@ -221,20 +221,34 @@ _level_fn[_freshness["level"]](f"📅 {_freshness['msg']}")
 
 if _freshness["level"] != "missing":
 
-    # ── 雲端更新按鈕區塊(含資料日期一起在 caption 顯示)──
-    # 把日 K 檔名/資料日期合併到同一行 caption,省一排版面
+    # ── 雲端更新按鈕區塊(含資料日期 + 抓取時戳)──
     st.markdown("#### 🔄 資料更新")
     _caption_parts = ["雲端環境專用:點擊後從網路抓取最新台股資料。"]
     try:
         daily_files = sorted(CACHE_DIR.glob('daily_*.parquet'))
         if daily_files:
-            _stem = daily_files[-1].stem  # 'daily_2026-05-18'
+            _stem = daily_files[-1].stem
             _fetch_day = _stem.replace('daily_', '')
             _data_max = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "?"
             if _fetch_day == _data_max:
                 _caption_parts.append(f"📅 資料日期 **{_fetch_day}**")
             else:
                 _caption_parts.append(f"📅 檔名 **{_fetch_day}** / 最新交易日 **{_data_max}**")
+
+        # ── 抓取時戳:讀 last_fetch_daily.txt 的「內容」,不靠 mtime(git pull 會重置) ──
+        # 含時間才能判斷盤中 (< 14:00) 或盤後 (≥ 14:00)
+        _ts_file = CACHE_DIR / "last_fetch_daily.txt"
+        if _ts_file.exists():
+            _fetch_ts = _ts_file.read_text(encoding="utf-8").strip()
+            # 判斷時段:13:30 後算盤後(收盤),否則算盤中
+            _suffix = ""
+            try:
+                _hh_mm = _fetch_ts.split(" ")[1][:5]   # 'HH:MM'
+                _h, _m = int(_hh_mm.split(":")[0]), int(_hh_mm.split(":")[1])
+                _suffix = " 🌙 盤後" if (_h, _m) >= (13, 30) else " ⏰ 盤中"
+            except Exception:
+                pass
+            _caption_parts.append(f"🕐 抓取於 **{_fetch_ts}**{_suffix}")
     except Exception:
         pass
     st.caption(" · ".join(_caption_parts))
