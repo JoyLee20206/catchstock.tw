@@ -42,16 +42,25 @@ def cache_freshness(cache_date) -> dict:
     now_hour = now_tpe.hour
 
     # 當天資料
+    # 排程說明(daily_push.yml):
+    #   16:05 TPE — 盤後第一輪(K 線 / 三大法人 / TWSE 資券,不發 TG)
+    #   21:05 TPE — 完整資料(含 TPEx 資券於 18:00 後公告)+ TG 正式推播
     if age == 0:
-        if now_hour < 15:
+        if now_hour < 16:
             return {
                 "level": "info",
-                "msg": f"目前資料為 {date_str}。今日盤後數據預計 15:30 自動更新。",
+                "msg": f"目前資料為 {date_str}。今日盤後第一輪預計 16:05、完整資料 21:05 自動更新。",
+                "days": 0,
+            }
+        if now_hour < 21:
+            return {
+                "level": "info",
+                "msg": f"目前資料為 {date_str}(盤後第一輪)。完整資料(含 TPEx 資券)預計 21:05 更新。",
                 "days": 0,
             }
         return {
             "level": "ok",
-            "msg": f"cache 最新日期: {date_str}(今日最新數據)",
+            "msg": f"cache 最新日期: {date_str}(今日完整數據)",
             "days": 0,
         }
 
