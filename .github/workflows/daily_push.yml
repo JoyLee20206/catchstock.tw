@@ -1,36 +1,47 @@
 name: Daily Stock Push
 
 # ──────────────────────────────────────────────────────────────────────
-# 兩段式排程設計
+# 兩段式排程設計(由 cron-job.org 外部觸發 workflow_dispatch)
 #
-# 16:05 (台北) = UTC 08:05 ── 收盤後第一輪
-#   只執行 fetch_cache,讓 Streamlit 網頁能看到當日 K 線、法人、TWSE 
+# 階段 quick (16:10 台北) ── 收盤快照
+#   執行 fetch_cache.py --force-daily 強制重抓 daily,
+#   確保拿到真實收盤價(覆蓋使用者盤中可能按過的「即時價」)
 #   不發 TG(因 TPEx 資券要等 18:00 後才公告,此時資料不完整)
 #
-# 21:05 (台北) = UTC 13:05 ── 完整資料就緒
-#   再次 fetch_cache(此時 TPEx 資券、所有資料都齊),然後發 TG
-#   這是「正式」推播,一天就這一則
+# 階段 full (21:10 台北) ── 完整資料 + 推播
+#   再次 fetch_cache(daily 沿用 16:10 真收盤,只補 TPEx 資券、營收等)
+#   執行完成後發 TG 推播,一天就這一則
 #
-# 手動觸發(workflow_dispatch)預設行為等同 21:05 完整流程
+# cron-job.org body 應傳:
+#   16:10 cronjob → {"ref":"main","inputs":{"phase":"quick"}}
+#   21:10 cronjob → {"ref":"main","inputs":{"phase":"full"}}
+#
+# 手動點擊 GitHub 的 Run workflow 按鈕預設跑 full(完整含推播)
 # ──────────────────────────────────────────────────────────────────────
 
 on:
-  schedule:
-    - cron: '5 13 * * 1-5'   # 21:05 台北 — 完整流程含推播
-  workflow_dispatch:          # 允許手動點擊測試(預設跑完整流程)
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: '階段:quick(僅快照不推播) / full(完整+推播)'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - quick
+          - full
 
-# ── 消除 Node.js 20 警告 ────────────────────
+# ── 消除 Node.js 20 警告 ─────────────────────────────────────────────
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   # ════════════════════════════════════════════════════════════════
-  # Job 1: 16:05 — 收盤快照
-  # 只跑 fetch_cache + commit,讓網頁有最新資料,但不推播
+  # Job 1: quick 階段(16:10) ── 收盤快照,不推播
+  # --force-daily 確保覆蓋盤中可能寫入的即時價,拿真實收盤
   # ════════════════════════════════════════════════════════════════
   cache-only:
-    # 只在 16:05 排程觸發時跑(手動觸發不跑這個 job)
-    if: github.event.schedule == '5 8 * * 1-5'
+    if: ${{ inputs.phase == 'quick' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -47,25 +58,25 @@ jobs:
       - name: 安裝套件
         run: pip install -r requirements.txt
 
-      - name: 執行資料抓取(16:05 收盤快照)
-        run: python fetch_cache.py --force-daily
+      - name: 執行資料抓取(quick 收盤快照,強制重抓 daily)
+        run: python -u fetch_cache.py --force-daily
 
       - name: 將快取存回 GitHub(更新網頁版)
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add cache/
-          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update daily cache (16:05 snapshot)"
+          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update daily cache (quick 16:10 snapshot)"
           git pull --rebase origin main || true
           git push origin HEAD
 
   # ════════════════════════════════════════════════════════════════
-  # Job 2: 21:05 + 手動觸發 — 完整流程
-  # 此時 TPEx 資券已公告(18:00 後),所有資料都齊,正式推播
+  # Job 2: full 階段(21:10 + 手動觸發預設) ── 完整流程 + TG 推播
+  # daily 在 16:10 已抓過真收盤,這裡不再強制重抓
+  # fetch_cache 內部會自動補 TPEx 資券、營收等仍缺的資料
   # ════════════════════════════════════════════════════════════════
   full-push:
-    # 21:05 排程 或 手動觸發 都跑這個
-    if: github.event.schedule == '5 13 * * 1-5' || github.event_name == 'workflow_dispatch'
+    if: ${{ inputs.phase == 'full' || inputs.phase == '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -82,10 +93,7 @@ jobs:
       - name: 安裝套件
         run: pip install -r requirements.txt
 
-      - name: 執行完整資料抓取(此時 TPEx 資券已公告)
-        # 16:05 已抓過 daily 且收盤價穩定,不需重抓。
-        # margin 的 batch 邏輯會自動偵測「今天不在 existing_dates」並補抓 TPEx 資券。
-        # 其他資源已有當日 cache 也會略過,只跑必要的補抓,通常 1~2 分鐘搞定。
+      - name: 執行完整資料抓取(TPEx 資券已公告,daily 沿用 16:10 真收盤)
         run: python -u fetch_cache.py
 
       - name: 發送 Telegram 推播
@@ -96,13 +104,13 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           LINE_NOTIFY_TOKEN: ${{ secrets.LINE_NOTIFY_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-        run: python telegram_notify.py
+        run: python -u telegram_notify.py
 
       - name: 將快取存回 GitHub(更新網頁版)
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add cache/
-          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update daily cache (21:05 full)"
+          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update daily cache (full 21:10)"
           git pull --rebase origin main || true
           git push origin HEAD
