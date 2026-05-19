@@ -16,8 +16,8 @@ name: Daily Stock Push
 
 on:
   schedule:
-    - cron: '5 8 * * 1-5'    # 16:05 台北 — 只更新 cache,不推播
-    - cron: '5 13 * * 1-5'   # 21:05 台北 — 完整流程含推播
+   # - cron: '5 8 * * 1-5'    # 16:05 台北 — 只更新 cache,不推播
+   # - cron: '5 13 * * 1-5'   # 21:05 台北 — 完整流程含推播
   workflow_dispatch:          # 允許手動點擊測試(預設跑完整流程)
 
 # ── 消除 Node.js 20 警告 ────────────────────
@@ -49,7 +49,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 執行資料抓取(16:05 收盤快照)
-        run: python -u fetch_cache.py
+        run: python fetch_cache.py --force-daily
 
       - name: 將快取存回 GitHub(更新網頁版)
         run: |
