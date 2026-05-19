@@ -15,7 +15,36 @@ from data_health import check_data_health, format_health_for_tg
 from watchlist_alerts import check_watchlist, format_alerts_for_tg
 from performance import compute_performance, format_performance_summary
 
-WATCHLIST_FILE = "cache/watchlist.json"  # 由 UI 寫入,TG 讀取做警示
+WATCHLIST_FILE  = "cache/watchlist.json"  # 由 UI 寫入,TG 讀取做警示
+AI_CACHE_FILE   = CACHE_DIR / "ai_comment_cache.json"  # AI 評論日快取,避免一天內重複打 API
+
+
+# ══════════════════════════════════════════════════════════════════════
+# AI 評論快取(以日期+冠軍標的+分數當 key)
+# ══════════════════════════════════════════════════════════════════════
+def load_ai_cache() -> dict:
+    """讀取 AI 評論快取(同一天若已成功生成則沿用,不重打 API)。"""
+    if not AI_CACHE_FILE.exists():
+        return {}
+    try:
+        with open(AI_CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"⚠ AI cache 讀取失敗(將從空累積): {e}")
+        return {}
+
+
+def save_ai_cache(cache: dict) -> None:
+    """寫回 AI 評論快取,只保留最近 7 個 key(以日期排序)。"""
+    try:
+        # 用 key 字串排序(today_str 在前 → 字典序自然就是時間序)取最後 7 個
+        recent_keys = sorted(cache.keys())[-7:]
+        recent = {k: cache[k] for k in recent_keys}
+        AI_CACHE_FILE.parent.mkdir(exist_ok=True)
+        with open(AI_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(recent, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠ AI cache 寫入失敗(略過): {e}")
 
 # ── 環境變數 ───────────────────────────────────────────────────────────
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -278,7 +307,23 @@ def main():
                 f"直接輸出純文字,絕對不要使用任何 Markdown 語法(不要星號、井號、反引號)。"
             )
 
-            model_name, ai_text = call_openrouter_ai(prompt, max_tokens=250)
+            # ── AI 點評日快取:同日同冠軍同分數視為「同一份評論」,不重打 API ──
+            # key 涵蓋日期 + 冠軍 + 分數,任一變動就重新生成
+            ai_cache = load_ai_cache()
+            ai_cache_key = f"{today_str}|{sid_top}|{int(score_top) if pd.notna(score_top) else 'na'}"
+            cached = ai_cache.get(ai_cache_key)
+
+            if cached and cached.get("text"):
+                model_name = cached.get("model", "cache")
+                ai_text    = cached["text"]
+                print(f"   ♻️  AI 評論沿用今日快取({model_name},不打 API)")
+            else:
+                model_name, ai_text = call_openrouter_ai(prompt, max_tokens=250)
+                # 寫回 cache(僅成功才寫,失敗下次推播再試)
+                if model_name and ai_text:
+                    ai_cache[ai_cache_key] = {"model": model_name, "text": ai_text}
+                    save_ai_cache(ai_cache)
+
             if ai_text:
                 ai_comment = (
                     f"🧠 <b>AI 分析師({model_name}):</b>\n"

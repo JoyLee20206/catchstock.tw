@@ -2,8 +2,17 @@
 
 供 telegram_notify.py 與 screening_ui16.py 共用,
 避免兩邊各維護一份模型清單與呼叫邏輯。
+
+⚠️ OpenRouter 免費帳號限制 (2026):
+- 每日 50 次請求 (帳號內儲值 ≥$10 升級為 1000 次/日)
+- 全帳號每分鐘 20 RPM (requests per minute)
+策略:
+1. 第一順位用 `openrouter/auto:free` 自動路由,讓 OpenRouter 自己挑可用免費模型
+2. 收到 429 (rate limit) 時 retry 同一支等 RPM 恢復,不立刻換下一支耗額度
+3. 累計 N 次 429 後直接放棄,避免一次燒光當日配額
 """
 import os
+import time
 import requests
 
 
@@ -12,14 +21,19 @@ import requests
 # 不設定就照 AI_MODELS 預設順序跑。
 PREFERRED_AI = os.environ.get("PREFERRED_AI_MODEL", "").strip().lower()
 
+# 429 重試設定
+RETRY_429_WAIT  = 15   # 收到 429 等幾秒再 retry 同一支
+RETRY_429_TIMES = 1    # 同一支 429 最多 retry 次數 (1 = 等一次後再試一次)
+MAX_TOTAL_429   = 3    # 跨模型累計 429 上限,超過直接放棄(保護當日配額)
+
 # 模型清單(依優先序排列,前面失敗就試下一個)
 # ⚠️ 免費模型可用性會變動,部署前建議到 https://openrouter.ai/models?max_price=0 確認
-# ⚠️ 免費模型 ID 在 OpenRouter 上會被悄悄下架/改名,失效就會 404
-# 維護要點:
+# ⚠️ 維護要點:
 #   1. 每 1~2 個月回 https://openrouter.ai/models?max_price=0 確認此清單
 #   2. 中文語意能力概略順序:DeepSeek ≈ Qwen ≈ GLM > Llama > Mistral
-#   3. 把「實際最常成功且中文好」的排前面,fallback 速度才快
+#   3. 第一位放 openrouter/auto:free 讓平台自選當下可用免費模型
 AI_MODELS = [
+    {"id": "openrouter/auto:free",                       "name": "Auto Free Router"},
     {"id": "openai/gpt-oss-20b:free",                    "name": "GPT-OSS 20B"},
     {"id": "meta-llama/llama-3.3-70b-instruct:free",     "name": "Llama 3.3"},
 ]
@@ -42,6 +56,12 @@ def get_api_key():
         return None
 
 
+def _is_rate_limit_error(exc) -> bool:
+    """判斷 exception 是不是 429 rate limit。"""
+    msg = str(exc).lower()
+    return "429" in msg or "too many requests" in msg or "rate limit" in msg
+
+
 def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, models: list = None):
     """依序嘗試模型清單,回傳 (model_name, ai_text);全部失敗回傳 (None, None)。
 
@@ -55,6 +75,7 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
     Notes:
         - 函式內會把 Markdown 殘留(**、##、###、*、`)清掉,避免破壞 HTML/UI 顯示
         - 失敗會吞掉例外、改用 print log,呼叫端不必再包 try
+        - 收到 429 時會等 RETRY_429_WAIT 秒後 retry 同一支(等 RPM 恢復)
     """
     api_key = get_api_key()
     if not api_key:
@@ -72,37 +93,55 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
         "Content-Type": "application/json",
     }
 
-    for m in models:
-        try:
-            payload = {
-                "model": m["id"],
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": max_tokens,
-            }
-            resp = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers, json=payload, timeout=timeout
-            )
-            resp.raise_for_status()
-            j = resp.json()
+    total_429 = 0   # 跨模型累計 429 數,達 MAX_TOTAL_429 直接放棄
 
-            if "choices" in j and j["choices"]:
-                text = j["choices"][0]["message"]["content"].strip()
-                # 強制清掉殘留 Markdown(免費模型常常不聽 prompt 指令)
-                # ⚠️ 順序重要:長 token 必須先清,否則 "###" 會先被 "##" 部份吃掉留下殘渣
-                for tok in ("###", "##", "**", "*", "`"):
-                    text = text.replace(tok, "")
-                text = text.strip()
-                if text:
-                    print(f"   ✅ AI 模型 {m['name']} 回應成功")
-                    return m["name"], text
-            elif "error" in j:
-                print(f"   ⚠ {m['name']} 拒絕: {j['error'].get('message', '')[:120]}")
-        except requests.exceptions.Timeout:
-            print(f"   ⚠ {m['name']} 逾時,換下一個")
-        except Exception as e:
-            print(f"   ⚠ {m['name']} 失敗: {str(e)[:120]}")
+    for m in models:
+        payload = {
+            "model": m["id"],
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": max_tokens,
+        }
+        # 同一支最多嘗試 RETRY_429_TIMES + 1 次(首次 + N 次 retry)
+        for attempt in range(RETRY_429_TIMES + 1):
+            try:
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers, json=payload, timeout=timeout
+                )
+                resp.raise_for_status()
+                j = resp.json()
+
+                if "choices" in j and j["choices"]:
+                    text = j["choices"][0]["message"]["content"].strip()
+                    for tok in ("###", "##", "**", "*", "`"):
+                        text = text.replace(tok, "")
+                    text = text.strip()
+                    if text:
+                        print(f"   ✅ AI 模型 {m['name']} 回應成功")
+                        return m["name"], text
+                elif "error" in j:
+                    print(f"   ⚠ {m['name']} 拒絕: {j['error'].get('message', '')[:120]}")
+                break   # 非 429 失敗 → 換下一支
+            except requests.exceptions.Timeout:
+                print(f"   ⚠ {m['name']} 逾時,換下一個")
+                break
+            except Exception as e:
+                if _is_rate_limit_error(e):
+                    total_429 += 1
+                    if total_429 >= MAX_TOTAL_429:
+                        print(f"   ⛔ 累計 {total_429} 次 429,放棄以保護當日配額")
+                        return None, None
+                    if attempt < RETRY_429_TIMES:
+                        print(f"   ⚠ {m['name']} 429 限速,等 {RETRY_429_WAIT}s 再 retry...")
+                        time.sleep(RETRY_429_WAIT)
+                        continue
+                    else:
+                        print(f"   ⚠ {m['name']} 429 retry 後仍失敗,換下一支")
+                        break
+                else:
+                    print(f"   ⚠ {m['name']} 失敗: {str(e)[:120]}")
+                    break
 
     print("   ❌ 所有 AI 模型皆失敗")
     return None, None
