@@ -176,5 +176,88 @@
         "industry": "電子零組件業"
       }
     ]
+  },
+  {
+    "date": "2026-05-19",
+    "picks": [
+      {
+        "sid": "3034",
+        "score": 8,
+        "close": 478.0,
+        "industry": "半導體業"
+      },
+      {
+        "sid": "2376",
+        "score": 8,
+        "close": 323.5,
+        "industry": "電腦及週邊設備業"
+      },
+      {
+        "sid": "3481",
+        "score": 7,
+        "close": 38.65,
+        "industry": "光電業"
+      },
+      {
+        "sid": "2344",
+        "score": 7,
+        "close": 123.0,
+        "industry": "半導體業"
+      },
+      {
+        "sid": "8069",
+        "score": 7,
+        "close": 222.0,
+        "industry": "光電業"
+      },
+      {
+        "sid": "2481",
+        "score": 7,
+        "close": 135.5,
+        "industry": "半導體業"
+      },
+      {
+        "sid": "2542",
+        "score": 7,
+        "close": 43.7,
+        "industry": "建材營造業"
+      },
+      {
+        "sid": "3624",
+        "score": 7,
+        "close": 80.2,
+        "industry": "電子零組件業"
+      },
+      {
+        "sid": "5347",
+        "score": 7,
+        "close": 163.5,
+        "industry": "半導體業"
+      },
+      {
+        "sid": "6831",
+        "score": 7,
+        "close": 716.0,
+        "industry": "電腦及週邊設備業"
+      },
+      {
+        "sid": "3227",
+        "score": 7,
+        "close": 227.0,
+        "industry": "半導體業"
+      },
+      {
+        "sid": "6223",
+        "score": 7,
+        "close": 6160.0,
+        "industry": "半導體業"
+      },
+      {
+        "sid": "1582",
+        "score": 7,
+        "close": 116.0,
+        "industry": "電子零組件業"
+      }
+    ]
   }
 ]
