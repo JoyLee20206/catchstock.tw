@@ -221,26 +221,23 @@ _level_fn[_freshness["level"]](f"📅 {_freshness['msg']}")
 
 if _freshness["level"] != "missing":
 
-    # 雲端更新按鈕區塊
-    st.markdown("#### 🔄 資料更新") 
-    st.caption("雲端環境專用:點擊後從網路抓取最新台股資料。")
-
-    # ── 顯示 daily 快取的「資料日期」──
-    # 用「檔名內嵌的日期」+「parquet 內最新交易日」,比 OS mtime 可靠
-    # (Streamlit Cloud 每次 git pull 都會重置 mtime,造成「沒更新但時間自己跳」的假象)
+    # ── 雲端更新按鈕區塊(含資料日期一起在 caption 顯示)──
+    # 把日 K 檔名/資料日期合併到同一行 caption,省一排版面
+    st.markdown("#### 🔄 資料更新")
+    _caption_parts = ["雲端環境專用:點擊後從網路抓取最新台股資料。"]
     try:
         daily_files = sorted(CACHE_DIR.glob('daily_*.parquet'))
         if daily_files:
-            # 從檔名 daily_YYYY-MM-DD.parquet 抓出抓取那天的日期
             _stem = daily_files[-1].stem  # 'daily_2026-05-18'
             _fetch_day = _stem.replace('daily_', '')
             _data_max = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "?"
             if _fetch_day == _data_max:
-                st.caption(f"📅 日 K 檔名/資料日期:**{_fetch_day}**")
+                _caption_parts.append(f"📅 資料日期 **{_fetch_day}**")
             else:
-                st.caption(f"📅 日 K 檔名:**{_fetch_day}** / 內含最新交易日:**{_data_max}**")
+                _caption_parts.append(f"📅 檔名 **{_fetch_day}** / 最新交易日 **{_data_max}**")
     except Exception:
         pass
+    st.caption(" · ".join(_caption_parts))
 
     # ── 盤中提醒:< 14:00 抓的是即時價,警告使用者 ──
     _now = datetime.now()
@@ -343,43 +340,6 @@ if _freshness["level"] != "missing":
                 st.error(f"❌ 例外:{e}")
                 _status.update(label="❌ 例外", state="error")
 
-# ── 策略邏輯導覽 (FAQ) ─────────────────────────────────────────────────────
-with st.expander("💡 策略邏輯導覽 (FAQ) — 核心量化規則說明", expanded=False):
-    st.markdown("""
-    ### 🎯 第一區：快速套用組合
-    不知道參數怎麼調？這裡為你準備了四套大腦：
-    * **預設 (Default)**：系統原始設定（門檻 7 分），適合一般盤勢下的穩健選股。
-    * **多頭寬鬆 (Bull)**：過關門檻降為 6 分，放寬 KD 觀察視窗。適合大盤**強勢上漲**時，避免因條件過於嚴苛而漏掉提早發動的潛力股。
-    * **空頭嚴格 (Bear)**：過關門檻提升至 8 分，縮短 KD 視窗並要求高流動性。適合大盤**大跌或震盪**時，嚴格挑選籌碼最集中、最抗跌的防禦標的。
-    * **KD 起漲 (KD Start)**：專注於尋找「低檔剛發生黃金交叉」的技術面訊號。適合用來抓跌深反彈，或是波段起漲的第一根轉折點。
-
-    ---
-
-    ### 📌 第二區：核心 / KD (計分與技術面)
-    * **過關門檻 (PASS_SCORE)**：滿分 10 分。計分包含：法人買超、大戶增散戶減、資減券增、技術突破、KD金叉、營收成長與大盤相對強弱。
-        * 🛡️ **動態防禦機制**：若大盤跌破季線，系統會**自動將門檻 +1 分**（空頭從嚴），幫你過濾掉崩盤時容易補跌的弱勢股。
-    * **KD 觀察區間**：往回看 N 天，尋找「曾經」發生低檔金叉的股票。設短專抓剛發動，設長容許起漲後稍微休息的股票。
-    * **KD 低檔啟動門檻**：金叉當天的 K 值必須小於此數值，確保這是一檔「從谷底翻揚」的股票，越低越嚴格。
-    * **KD 今日上限**：如果今天的 K 值已經大於此數值，代表短線已過熱（超買），即便曾低檔起漲也會被剔除，避免追高被套牢。
-
-    ---
-
-    ### 📌 第三區：預篩 / 法人 (基本保護與籌碼追蹤)
-    * **20 日均量與 ATR% 上限**：第一線防護網。均量過濾掉買得到賣不掉的「冷門股」；ATR% 則過濾掉每天上沖下洗、過度投機的「妖股」。
-    * **法人最少買超日（累計 vs 連續）**：
-        * 💡 **這是一個超大重點**：本系統計算的是**「累計天數」**而非「嚴格連續天數」。
-        * 例如觀察 7 天、最少買超 5 天，代表只要這 7 天內有任何 5 天外資或投信站在買方（且總淨額為正）即成立。這能有效包容法人在吃貨過程中「進三退一」的洗盤動作，避免因單日調節而錯失波段飆股。
-    * **什麼是「★籌碼共振」？**
-        * 當同週期內觸發「大戶持股上升（主力吃貨）」且「散戶持股下降（籌碼沉澱）」，即達成共振。
-        * 雖然不額外加分，但它是本系統**最高優先級的排序基準**！總分相同時，共振成立（✅）的股票會優先排在最上方。
-
-    ---
-
-    ### 🔄 第四區：資料更新與系統狀態
-    * **為什麼週末點擊「抓取最新資料」，日期沒有變成今天？**
-        * 台股在週末與國定假日是不開盤的。如果今天是週六，最新交易日停留在「本週五」是完全正確的狀態。此時畫面的提示會智能轉為綠色，告訴你「週末未開盤，此已為最新交易日」，不需重複抓取。
-    """)
-
 # ── Session state 初始化 ────────────────────────────────────────────────────
 DEFAULTS = {
     'pass_score': PASS_SCORE, 'lookback_days': LOOKBACK_DAYS, 'it_min_buy_days': IT_MIN_BUY_DAYS,
@@ -418,6 +378,42 @@ with st.sidebar:
     )
     st.divider()
 
+    with st.expander("💡 策略邏輯導覽 (FAQ)", expanded=False):
+        st.markdown("""
+### 🎯 第一區：快速套用組合
+不知道參數怎麼調？這裡為你準備了四套大腦：
+* **預設 (Default)**：系統原始設定（門檻 7 分），適合一般盤勢下的穩健選股。
+* **多頭寬鬆 (Bull)**：過關門檻降為 6 分，放寬 KD 觀察視窗。適合大盤**強勢上漲**時，避免因條件過於嚴苛而漏掉提早發動的潛力股。
+* **空頭嚴格 (Bear)**：過關門檻提升至 8 分，縮短 KD 視窗並要求高流動性。適合大盤**大跌或震盪**時，嚴格挑選籌碼最集中、最抗跌的防禦標的。
+* **KD 起漲 (KD Start)**：專注於尋找「低檔剛發生黃金交叉」的技術面訊號。適合用來抓跌深反彈，或是波段起漲的第一根轉折點。
+
+---
+
+### 📌 第二區：核心 / KD (計分與技術面)
+* **過關門檻 (PASS_SCORE)**：滿分 10 分。計分包含：法人買超、大戶增散戶減、資減券增、技術突破、KD金叉、營收成長與大盤相對強弱。
+    * 🛡️ **動態防禦機制**：若大盤跌破季線，系統會**自動將門檻 +1 分**（空頭從嚴），幫你過濾掉崩盤時容易補跌的弱勢股。
+* **KD 觀察區間**：往回看 N 天，尋找「曾經」發生低檔金叉的股票。設短專抓剛發動，設長容許起漲後稍微休息的股票。
+* **KD 低檔啟動門檻**：金叉當天的 K 值必須小於此數值，確保這是一檔「從谷底翻揚」的股票，越低越嚴格。
+* **KD 今日上限**：如果今天的 K 值已經大於此數值，代表短線已過熱（超買），即便曾低檔起漲也會被剔除，避免追高被套牢。
+
+---
+
+### 📌 第三區：預篩 / 法人 (基本保護與籌碼追蹤)
+* **20 日均量與 ATR% 上限**：第一線防護網。均量過濾掉買得到賣不掉的「冷門股」；ATR% 則過濾掉每天上沖下洗、過度投機的「妖股」。
+* **法人最少買超日（累計 vs 連續）**：
+    * 💡 **這是一個超大重點**：本系統計算的是**「累計天數」**而非「嚴格連續天數」。
+    * 例如觀察 7 天、最少買超 5 天，代表只要這 7 天內有任何 5 天外資或投信站在買方（且總淨額為正）即成立。這能有效包容法人在吃貨過程中「進三退一」的洗盤動作，避免因單日調節而錯失波段飆股。
+* **什麼是「★籌碼共振」？**
+    * 當同週期內觸發「大戶持股上升（主力吃貨）」且「散戶持股下降（籌碼沉澱）」，即達成共振。
+    * 雖然不額外加分，但它是本系統**最高優先級的排序基準**！總分相同時，共振成立（✅）的股票會優先排在最上方。
+
+---
+
+### 🔄 第四區：資料更新與系統狀態
+* **為什麼週末點擊「抓取最新資料」，日期沒有變成今天？**
+    * 台股在週末與國定假日是不開盤的。如果今天是週六，最新交易日停留在「本週五」是完全正確的狀態。此時畫面的提示會智能轉為綠色，告訴你「週末未開盤，此已為最新交易日」，不需重複抓取。
+        """)
+    st.divider()
     st.subheader("🎯 快速套用組合")
     st.button("預設",     on_click=apply_preset, args=('default',),   use_container_width=True)
     st.button("多頭寬鬆", on_click=apply_preset, args=('bull',),      use_container_width=True)
@@ -531,8 +527,17 @@ def _load_hot_picks_cached(top_n: int = 10):
     return compute_hot_picks(hist, top_n=top_n), len(hist)
 
 _hot, _hist_days = _load_hot_picks_cached(top_n=10)
-if _hot:
-    with st.expander(f"🔥 過去 {_hist_days} 日入選熱度榜(TOP 10)", expanded=False):
+
+# ── 4 個分析區塊改用 Tabs 並排,省直向空間 ──
+_tab_hot, _tab_rot, _tab_perf, _tab_bt = st.tabs([
+    f"🔥 入選熱度榜({_hist_days}日)",
+    "🔄 產業輪動",
+    "📊 策略績效",
+    "🔬 訊號回測",
+])
+
+with _tab_hot:
+    if _hot:
         st.caption("追蹤近期持續上榜的強勢股 — 連續出現次數越多,代表趨勢延續性越強。")
         # 用 dataframe 顯示,讓使用者可以排序與複製
         hot_rows = []
@@ -548,6 +553,8 @@ if _hot:
                 "目前連續":   f"{r['active_streak']} 日" if r['active_streak'] >= 1 else "—",
             })
         st.dataframe(pd.DataFrame(hot_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("尚未累積足夠歷史紀錄(需 Telegram 每日推播寫入後累積)。")
 
 
 # ── 產業輪動追蹤(對比最近 7 日 vs 前 7 日各產業上榜次數) ──────────────────
@@ -557,8 +564,8 @@ def _load_industry_rotation_cached():
     return compute_industry_rotation(hist, recent_days=7, prev_days=7)
 
 _rotation = _load_industry_rotation_cached()
-if _rotation:
-    with st.expander("🔄 產業輪動追蹤(近 7 日 vs 前 7 日)", expanded=False):
+with _tab_rot:
+    if _rotation:
         st.caption("資金流向觀察 — 上榜次數驟增的產業代表主流轉換,可加重押注;驟減則注意避開。")
         rot_rows = []
         for r in _rotation[:10]:
@@ -571,6 +578,8 @@ if _rotation:
                 "變化": f"{arrow} {change_str}",
             })
         st.dataframe(pd.DataFrame(rot_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("歷史資料不足以分析產業輪動。")
 
 
 # ── 策略績效追蹤(對歷史 picks 算入選後 N 日報酬) ───────────────────────
@@ -579,8 +588,8 @@ def _load_performance_cached():
     hist = load_history()
     return compute_performance(hist, CACHE_DIR, n_days_list=(5, 10, 20))
 
-if _hist_days >= 5:  # 至少有 5 天歷史才有意義
-    with st.expander("📊 策略績效追蹤(過去入選後續報酬)", expanded=False):
+with _tab_perf:
+    if _hist_days >= 5:  # 至少有 5 天歷史才有意義
         st.caption("回答「我這套系統真的有用嗎?」— 對每筆歷史選股,從 daily 快取算出後續 N 日報酬。")
         perf = _load_performance_cached()
         overall = perf.get("overall", {})
@@ -619,6 +628,8 @@ if _hist_days >= 5:  # 至少有 5 天歷史才有意義
                         "平均報酬": f"{s.get('avg_return_5d', 0):+.2f}%" if "avg_return_5d" in s else "—",
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    else:
+        st.info(f"目前累積 {_hist_days} 天歷史,需 ≥5 天才能算績效。每天執行 Telegram 推播自動累積。")
 
 
 # ── 訊號回測:對 daily/法人 parquet 掃描三大技術訊號歷史報酬 ─────────────
@@ -638,7 +649,7 @@ def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
                         dedup_within_hold=dedup)
 
 
-with st.expander("🔬 訊號回測(過去 180 天歷史掃描)", expanded=False):
+with _tab_bt:
     st.caption(
         "對 daily 快取掃描 5 種訊號的歷史觸發點,算「進場後 N 日報酬」── "
         "回答「哪個訊號真的有 alpha?該在計分系統加重?」可複選做組合測試。"
