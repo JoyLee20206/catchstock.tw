@@ -1000,6 +1000,15 @@ with col_chart:
                     if len(m_close) > 0 and m_close.iloc[0] > 0: hist['Market_Norm'] = m_close.values / m_close.iloc[0] * 100
 
                 hist['MA5'], hist['MA20'], hist['MA60'] = hist['close'].rolling(5).mean(), hist['close'].rolling(20).mean(), hist['close'].rolling(60).mean()
+
+                # ── 🎨 MA 多頭/空頭排列狀態(實際 add_vrect 染色延後到 fig 建立後) ──
+                _ma_state = pd.Series('flat', index=hist.index)
+                _bull = (hist['MA5'] > hist['MA20']) & (hist['MA20'] > hist['MA60'])
+                _bear = (hist['MA5'] < hist['MA20']) & (hist['MA20'] < hist['MA60'])
+                _ma_state[_bull] = 'bull'
+                _ma_state[_bear] = 'bear'
+                _state_change = (_ma_state != _ma_state.shift(1)).cumsum()
+
                 # Bug 1 修正：_calc_kd_series 在歷史不足 10 筆時回傳 (None, None),
                 # 不防護的話新股或剛恢復交易股會讓 list comprehension 拋 TypeError
                 k_list, d_list = _calc_kd_series(hist['max'], hist['min'], hist['close'])
@@ -1027,6 +1036,15 @@ with col_chart:
                 fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.42, 0.12, 0.18, 0.28])
 
                 fig.add_trace(go.Candlestick(x=hist['date'], open=hist['open'], high=hist['max'], low=hist['min'], close=hist['close'], name='K線', increasing_fillcolor='red', increasing_line_color='red', decreasing_fillcolor='green', decreasing_line_color='green'), row=1, col=1)
+
+                # ── 🎨 MA 多頭/空頭背景染色(台股慣例:紅=多頭、綠=空頭)──
+                for _, _seg in hist.groupby(_state_change):
+                    _s = _ma_state.loc[_seg.index[0]]
+                    if _s == 'flat':
+                        continue
+                    _fill = "rgba(244,67,54,0.10)" if _s == 'bull' else "rgba(76,175,80,0.10)"
+                    fig.add_vrect(x0=_seg['date'].iloc[0], x1=_seg['date'].iloc[-1],
+                                  fillcolor=_fill, line_width=0, layer="below", row=1, col=1)
                 if 'Market_Norm' in hist.columns:
                     fig.add_trace(go.Scatter(x=hist['date'], y=hist['Market_Norm'] * (hist['close'].iloc[0] / 100), line=dict(color='rgba(150,150,150,0.5)', width=1, dash='dot'), name='大盤 RS'), row=1, col=1)
 
@@ -1044,10 +1062,96 @@ with col_chart:
                 # 新股防護：MA20 NaN 防呆
                 ma20_last = hist['MA20'].iloc[-1]
                 defense_y = hist['min'].tail(10).min() if pd.isna(ma20_last) else max(ma20_last * 0.98, hist['min'].tail(10).min())
-                fig.add_hline(y=defense_y, line_dash="dash", line_color="red", annotation_text="🚨 防守", annotation_position="bottom right", row=1, col=1)
+                defense_label = "🚨 防守(週MA20)" if timeframe == "週K" else "🚨 防守(MA20)"
+                fig.add_hline(y=defense_y, line_dash="dash", line_color="red", annotation_text=defense_label, annotation_position="bottom right", row=1, col=1)
 
-                if row_data is not None:
-                    fig.add_annotation(x=hist['date'].iloc[-1], y=hist['min'].iloc[-1], text="🔥 訊號觸發", showarrow=True, arrowhead=1, arrowcolor="red", ay=30, row=1, col=1)
+                # ── ⭐ 爆量警示星(紅 K):量 > 5 期均量 × 2 ──
+                _vol5 = hist[vol_col].rolling(5).mean()
+                _big_vol = (hist[vol_col] > _vol5 * 2) & _vol5.notna()
+                _big_red = _big_vol & (hist['close'] >= hist['open'])
+                if _big_red.any():
+                    _bv = hist[_big_red]
+                    fig.add_trace(go.Scatter(
+                        x=_bv['date'], y=_bv['max'] * 1.015,
+                        mode='markers+text', text='⭐', textposition='top center',
+                        textfont=dict(size=14, color='gold'),
+                        marker=dict(size=1, color='rgba(0,0,0,0)'),
+                        name='爆量紅K',
+                        hovertext=[f"爆量紅K (量 {int(v/1000)} 張, 約 5 期均量 {r:.1f}x)"
+                                   for v, r in zip(_bv[vol_col], _bv[vol_col]/_vol5[_big_red])],
+                        hoverinfo='text',
+                    ), row=1, col=1)
+
+                # ── 🟡 出貨警訊:爆量黑 K(量 > 5 期均量 × 2 且收盤 < 開盤 × 0.97) ──
+                _big_black = _big_vol & (hist['close'] < hist['open'] * 0.97)
+                if _big_black.any():
+                    _bb = hist[_big_black]
+                    fig.add_trace(go.Scatter(
+                        x=_bb['date'], y=_bb['max'] * 1.015,
+                        mode='markers+text', text='🟡', textposition='top center',
+                        textfont=dict(size=14),
+                        marker=dict(size=1, color='rgba(0,0,0,0)'),
+                        name='出貨警訊',
+                        hovertext='⚠️ 爆量黑 K(主力出貨警訊)',
+                        hoverinfo='text',
+                    ), row=1, col=1)
+
+                # ── 📈 站上季線首日:今日 close > MA60 且 昨日 close ≤ MA60(中長線轉折) ──
+                if 'MA60' in hist.columns and hist['MA60'].notna().any():
+                    _above_ma60_now  = hist['close'] > hist['MA60']
+                    _above_ma60_prev = hist['close'].shift(1) <= hist['MA60'].shift(1)
+                    _cross_up_ma60 = _above_ma60_now & _above_ma60_prev & hist['MA60'].notna() & hist['MA60'].shift(1).notna()
+                    if _cross_up_ma60.any():
+                        _cu = hist[_cross_up_ma60]
+                        fig.add_trace(go.Scatter(
+                            x=_cu['date'], y=_cu['max'] * 1.025,
+                            mode='text', text='📈', textfont=dict(size=14),
+                            name='站上季線', hovertext='📈 站上季線首日(中長線轉強)',
+                            hoverinfo='text',
+                        ), row=1, col=1)
+
+                    # ── 📉 跌破季線首日:今日 close < MA60 且 昨日 close ≥ MA60(中長線轉弱) ──
+                    _below_ma60_now  = hist['close'] < hist['MA60']
+                    _below_ma60_prev = hist['close'].shift(1) >= hist['MA60'].shift(1)
+                    _cross_dn_ma60 = _below_ma60_now & _below_ma60_prev & hist['MA60'].notna() & hist['MA60'].shift(1).notna()
+                    if _cross_dn_ma60.any():
+                        _cd = hist[_cross_dn_ma60]
+                        fig.add_trace(go.Scatter(
+                            x=_cd['date'], y=_cd['max'] * 1.025,
+                            mode='text', text='📉', textfont=dict(size=14),
+                            name='跌破季線', hovertext='📉 跌破季線首日(中長線轉弱、必看出場)',
+                            hoverinfo='text',
+                        ), row=1, col=1)
+
+                # ── 🔻 KD 高檔死叉:K 從上穿過 D 且 K > 60(出場警示) ──
+                if 'K' in hist.columns and 'D' in hist.columns:
+                    _kd_death = ((hist['K'] < hist['D']) & (hist['K'].shift(1) >= hist['D'].shift(1)) & (hist['K'] > 60))
+                    if _kd_death.any():
+                        _kd_d = hist[_kd_death]
+                        fig.add_trace(go.Scatter(
+                            x=_kd_d['date'], y=_kd_d['max'] * 1.04,
+                            mode='markers', marker=dict(symbol='triangle-down', color='red', size=12,
+                                                       line=dict(width=1, color='darkred')),
+                            name='KD死叉(出場警示)',
+                            hovertext='⚠️ KD 高檔死叉(短線過熱、考慮減碼)',
+                            hoverinfo='text',
+                        ), row=1, col=1)
+
+                # ── 📐 跳空缺口:今日 low > 昨日 high(向上跳空) 或 今日 high < 昨日 low ──
+                _prev_high = hist['max'].shift(1)
+                _prev_low  = hist['min'].shift(1)
+                _gap_up   = hist['min'] > _prev_high
+                _gap_down = hist['max'] < _prev_low
+                for _, _row in hist[_gap_up].iterrows():
+                    fig.add_shape(type="rect",
+                        x0=_row['date'] - pd.Timedelta(hours=12), x1=_row['date'] + pd.Timedelta(hours=12),
+                        y0=_prev_high.loc[_row.name], y1=_row['min'],
+                        fillcolor="rgba(255,99,71,0.25)", line=dict(width=0), row=1, col=1)
+                for _, _row in hist[_gap_down].iterrows():
+                    fig.add_shape(type="rect",
+                        x0=_row['date'] - pd.Timedelta(hours=12), x1=_row['date'] + pd.Timedelta(hours=12),
+                        y0=_row['max'], y1=_prev_low.loc[_row.name],
+                        fillcolor="rgba(60,179,113,0.25)", line=dict(width=0), row=1, col=1)
 
                 # 第二層：成交量
                 vol_colors = ['red' if c >= o else 'green' for c, o in zip(hist['close'], hist['open'])]
