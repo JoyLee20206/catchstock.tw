@@ -289,10 +289,9 @@ def main():
             _summary_parts = []
             if df is not None and not df.empty:
                 _top  = df.iloc[0]
-                _stop = str(_top['代號'])
-                _ntop = str(_top['名稱'])
-                _sscr = _top['總分']
-                # 冠軍 + 達標檔數
+                _stop = html.escape(str(_top['代號']))
+                _ntop = html.escape(str(_top['名稱']))   # 防 & / < / > 等字元破壞 HTML
+                _sscr = int(_top['總分']) if pd.notna(_top['總分']) else _top['總分']
                 _summary_parts.append(f"<b>{_stop} {_ntop} {_sscr}分</b>(冠軍)/ {len(df)} 檔達標")
 
                 # 最強產業
@@ -300,7 +299,7 @@ def main():
                     _v = df['產業'].dropna()
                     _v = _v[_v != ""]
                     if not _v.empty:
-                        _top_ind = _v.value_counts().idxmax()
+                        _top_ind = html.escape(str(_v.value_counts().idxmax()))
                         _top_cnt = int(_v.value_counts().max())
                         _summary_parts.append(f"主流 <b>{_top_ind}</b> {_top_cnt} 檔")
             # 大盤狀態警示
