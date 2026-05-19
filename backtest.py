@@ -484,20 +484,46 @@ def compute_signal_returns(signal_matrix, close_matrix, hold_days: int,
     return merged
 
 
-def summarize(trades: pd.DataFrame) -> dict:
-    """對一組交易紀錄算統計摘要。"""
+def summarize(trades: pd.DataFrame, hold_days: int = 10) -> dict:
+    """對一組交易紀錄算統計摘要 + 風險指標。
+
+    Args:
+        trades: 含 'date', 'return_pct' 的交易紀錄
+        hold_days: 持有天數,用於年化 Sharpe
+
+    新增:
+    - mdd:    最大回檔 (%),累積資金曲線從高點到低點的最大跌幅
+    - sharpe: 年化夏普值 (avg/std × √(252/hold_days)),衡量風險調整後報酬
+    """
     if trades is None or trades.empty:
         return {"n": 0}
-    rets = trades['return_pct']
+    rets = trades.sort_values('date')['return_pct'].values
     wins = (rets > 0).sum()
+
+    # ── 最大回檔(MDD):假設等權部位、序列交易、複利累積 ──
+    equity = np.cumprod(1 + rets / 100.0)
+    running_max = np.maximum.accumulate(equity)
+    drawdowns = (equity - running_max) / running_max
+    mdd = float(drawdowns.min() * 100) if len(drawdowns) > 0 else 0.0   # 負數,例 -15.3
+
+    # ── 年化 Sharpe:用 hold_days 推算「一年大約幾次交易」做年化 ──
+    std = float(rets.std()) if len(rets) > 1 else 0.0
+    if std > 0 and hold_days > 0:
+        trades_per_year = 252.0 / hold_days
+        sharpe = (rets.mean() / std) * np.sqrt(trades_per_year)
+    else:
+        sharpe = 0.0
+
     return {
-        "n":            len(trades),
-        "win_rate":     wins / len(trades),
-        "avg_return":   rets.mean(),
-        "median_return": rets.median(),
-        "max_return":   rets.max(),
-        "min_return":   rets.min(),
-        "std":          rets.std(),
+        "n":             len(trades),
+        "win_rate":      wins / len(trades),
+        "avg_return":    rets.mean(),
+        "median_return": float(pd.Series(rets).median()),
+        "max_return":    float(rets.max()),
+        "min_return":    float(rets.min()),
+        "std":           std,
+        "mdd":           mdd,
+        "sharpe":        sharpe,
     }
 
 
@@ -583,7 +609,7 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
     for sig_name, sig_mat in sig_matrices.items():
         trades = compute_signal_returns(_slice_by_date(sig_mat), matrices['close'], hold_days,
                                         dedup_within_hold=dedup_within_hold)
-        all_signals_stats[sig_name] = summarize(trades)
+        all_signals_stats[sig_name] = summarize(trades, hold_days=hold_days)
 
     # 算「選定組合」的交易
     if len(selected_list) == 1 and selected_list[0] in sig_matrices:
@@ -606,6 +632,6 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
         "combine_mode":      combine_mode,
         "hold_days":         hold_days,
         "trades":            selected_trades,
-        "stats":             summarize(selected_trades),
+        "stats":             summarize(selected_trades, hold_days=hold_days),
         "all_signals_stats": all_signals_stats,
     }

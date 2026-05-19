@@ -773,20 +773,58 @@ with _tab_bt:
         st.info("此訊號在所選期間內無觸發紀錄。試試擴大期間或換訊號。")
     else:
         stats = _bt['stats']
-        # ── 4 張指標卡 ──
+
+        # ── ⚠️ 樣本數不足警示:< 30 筆統計不顯著,易受極端值影響 ──
+        if stats['n'] < 30:
+            st.warning(
+                f"⚠️ 樣本僅 **{stats['n']} 筆**,統計不顯著(< 30 筆易受極端值影響)。"
+                "建議:擴大樣本期間、放寬訊號組合、或關掉持倉鎖定。"
+            )
+
+        # ── 6 張指標卡(第一列:基本統計 / 第二列:風險指標)──
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("樣本數", f"{stats['n']:,}", "次觸發")
-        # 台股慣例:勝率紅色、平均報酬看正負決定紅綠
         m2.metric("勝率", f"{stats['win_rate']*100:.0f}%",
                   f"{int(stats['win_rate']*stats['n'])} 賺")
         avg = stats['avg_return']
-        # 用 delta 顯示中位數;台股紅漲綠跌,但 streamlit metric 預設綠正紅負,改 inverse 反轉
         m3.metric("平均報酬", f"{avg:+.2f}%",
                   f"中位數 {stats['median_return']:+.2f}%",
                   delta_color="inverse")
         m4.metric("最差單筆", f"{stats['min_return']:+.2f}%",
                   f"最佳 {stats['max_return']:+.2f}%",
                   delta_color="inverse")
+
+        # 第二列:風險指標(MDD / Sharpe / Std)
+        r1, r2, r3 = st.columns(3)
+        _mdd = stats.get('mdd', 0)
+        _sharpe = stats.get('sharpe', 0)
+        _std = stats.get('std', 0)
+        # MDD 評級
+        if _mdd >= -10:
+            _mdd_eval = "✅ 低風險"
+        elif _mdd >= -20:
+            _mdd_eval = "🟡 中等"
+        else:
+            _mdd_eval = "🔴 高風險"
+        # Sharpe 評級(年化):>1 不錯、>2 優秀、>3 罕見;< 0 不及格
+        if _sharpe >= 2:
+            _sharpe_eval = "🌟 優秀"
+        elif _sharpe >= 1:
+            _sharpe_eval = "✅ 良好"
+        elif _sharpe >= 0:
+            _sharpe_eval = "🟡 一般"
+        else:
+            _sharpe_eval = "🔴 不及格"
+        r1.metric("📉 最大回檔(MDD)", f"{_mdd:+.2f}%", _mdd_eval,
+                  delta_color="off",
+                  help="累積資金曲線從高點到低點的最大跌幅。\n-10% 內算低風險;-20% 中等;-20%+ 高風險。")
+        r2.metric("⚖️ 夏普值(年化)", f"{_sharpe:+.2f}", _sharpe_eval,
+                  delta_color="off",
+                  help="風險調整後報酬 = 平均/標準差 × √(252/持有天數)。\n>1 良好;>2 優秀;<0 不及格。")
+        r3.metric("📊 標準差", f"{_std:.2f}%",
+                  "波動大" if _std > 8 else "波動低",
+                  delta_color="off",
+                  help="單筆報酬的標準差。越小代表報酬越穩定。")
 
         # ── 三訊號對照圖 ──
         st.divider()
@@ -844,6 +882,86 @@ with _tab_bt:
                 if best_ret[0] != best_wr[0]:
                     hints.append(f"報酬最高 — **{SIGNAL_LABELS[best_ret[0]].split('(')[0]}** ({best_ret[1]['avg_return']:+.2f}%)")
                 st.info("💡 " + " / ".join(hints) + " — 可考慮在計分系統內加重對應訊號的權重。")
+
+        # ── ⏱ 持有天數敏感度分析:同訊號組合下,5/10/20/40 日結果並排比較 ──
+        # 答得「該策略最佳持有期是幾天?」(避免你硬選 10 天但其實 5 天勝率更高的盲區)
+        if sig_choice_multi:
+            st.divider()
+            with st.expander("⏱ 持有天數敏感度(同訊號下 5/10/20/40 日對比)", expanded=False):
+                st.caption("把目前訊號組合套到不同持有天數,看勝率/平均報酬如何隨持有期變化。")
+                _sens_rows = []
+                for _hd in (5, 10, 20, 40):
+                    try:
+                        _bt_s = _run_backtest_cached(
+                            tuple(sig_choice_multi), _hd, period_choice,
+                            combine_mode_choice, dedup_choice, stock_filter_input
+                        )
+                        _s = _bt_s.get('stats', {"n": 0})
+                        if _s.get('n', 0) > 0:
+                            _sens_rows.append({
+                                "持有天數": f"{_hd} 日",
+                                "樣本": _s['n'],
+                                "勝率(%)":   _s['win_rate'] * 100,
+                                "平均報酬(%)": _s['avg_return'],
+                                "MDD(%)":  _s.get('mdd', 0),
+                                "Sharpe":  _s.get('sharpe', 0),
+                            })
+                    except Exception as _e:
+                        print(f"⚠ 敏感度計算 hold={_hd} 失敗: {_e}")
+
+                if _sens_rows:
+                    _sens_df = pd.DataFrame(_sens_rows)
+                    # 雙軸折線圖:勝率(左) + 平均報酬(右)
+                    fig_sens = make_subplots(specs=[[{"secondary_y": True}]])
+                    fig_sens.add_trace(
+                        go.Scatter(x=_sens_df['持有天數'], y=_sens_df['勝率(%)'],
+                                   mode='lines+markers+text', name='勝率',
+                                   line=dict(color='#A32D2D', width=2),
+                                   marker=dict(size=10),
+                                   text=[f"{v:.0f}%" for v in _sens_df['勝率(%)']],
+                                   textposition='top center'),
+                        secondary_y=False
+                    )
+                    fig_sens.add_trace(
+                        go.Scatter(x=_sens_df['持有天數'], y=_sens_df['平均報酬(%)'],
+                                   mode='lines+markers+text', name='平均報酬',
+                                   line=dict(color='#888780', width=2, dash='dot'),
+                                   marker=dict(size=10),
+                                   text=[f"{v:+.1f}%" for v in _sens_df['平均報酬(%)']],
+                                   textposition='bottom center'),
+                        secondary_y=True
+                    )
+                    fig_sens.update_layout(
+                        height=320,
+                        margin=dict(l=10, r=10, t=20, b=10),
+                        showlegend=True,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                        template=chart_theme if 'chart_theme' in dir() else 'plotly',
+                    )
+                    fig_sens.update_yaxes(title_text="勝率 (%)", secondary_y=False)
+                    fig_sens.update_yaxes(title_text="平均報酬 (%)", secondary_y=True)
+                    st.plotly_chart(fig_sens, use_container_width=True)
+
+                    # 詳細數字表
+                    _sens_disp = _sens_df.copy()
+                    _sens_disp['勝率(%)']     = _sens_disp['勝率(%)'].apply(lambda v: f"{v:.0f}%")
+                    _sens_disp['平均報酬(%)'] = _sens_disp['平均報酬(%)'].apply(lambda v: f"{v:+.2f}%")
+                    _sens_disp['MDD(%)']      = _sens_disp['MDD(%)'].apply(lambda v: f"{v:+.2f}%")
+                    _sens_disp['Sharpe']      = _sens_disp['Sharpe'].apply(lambda v: f"{v:+.2f}")
+                    st.dataframe(_sens_disp, use_container_width=True, hide_index=True)
+
+                    # 提示:最佳持有期
+                    _best_wr = max(_sens_rows, key=lambda r: r['勝率(%)'])
+                    _best_ret = max(_sens_rows, key=lambda r: r['平均報酬(%)'])
+                    _best_sharpe = max(_sens_rows, key=lambda r: r['Sharpe'])
+                    _hints_sens = [
+                        f"勝率最高 — **{_best_wr['持有天數']}** ({_best_wr['勝率(%)']:.0f}%)",
+                        f"報酬最高 — **{_best_ret['持有天數']}** ({_best_ret['平均報酬(%)']:+.2f}%)",
+                        f"風險調整最佳 — **{_best_sharpe['持有天數']}** (Sharpe {_best_sharpe['Sharpe']:+.2f})",
+                    ]
+                    st.info("💡 " + " / ".join(_hints_sens))
+                else:
+                    st.info("4 個持有天數下皆無觸發紀錄,試試擴大期間或換訊號組合。")
 
         # ── 觸發明細表 ──
         trades = _bt['trades']
