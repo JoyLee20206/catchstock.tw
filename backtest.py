@@ -506,7 +506,8 @@ def summarize(trades: pd.DataFrame) -> dict:
 # ══════════════════════════════════════════════════════════════════════
 def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
                  date_range: tuple = None, combine_mode: str = "and",
-                 dedup_within_hold: bool = True) -> dict:
+                 dedup_within_hold: bool = True,
+                 stock_filter: str = None) -> dict:
     """跑一次回測。
 
     Args:
@@ -549,6 +550,24 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
         "triple_buy":       detect_triple_buy_signals(matrices, fi_matrix, it_matrix, dealer_matrix),
         "ma20_pullback":    detect_ma20_pullback_signals(matrices),
     }
+
+    # ── 個股回測過濾:若指定 stock_filter,只保留該股票欄位 ──
+    # 若該股不在 matrix 內,結果為空(由上層判斷顯示提示)
+    if stock_filter:
+        _sid = str(stock_filter).strip()
+        if _sid in matrices['close'].columns:
+            for k in list(sig_matrices.keys()):
+                # 保留該股一欄,其他欄位全設 False(等同過濾)
+                _mat = sig_matrices[k]
+                _filtered = pd.DataFrame(False, index=_mat.index, columns=_mat.columns)
+                _filtered[_sid] = _mat[_sid]
+                sig_matrices[k] = _filtered
+        else:
+            # 找不到該股 → 全部設空,讓上層 stats['n']=0 觸發提示
+            for k in list(sig_matrices.keys()):
+                sig_matrices[k] = pd.DataFrame(False,
+                                              index=sig_matrices[k].index,
+                                              columns=sig_matrices[k].columns)
 
     # signal 支援 str(向後相容) 或 list(多選)
     selected_list = [signal] if isinstance(signal, str) else list(signal)

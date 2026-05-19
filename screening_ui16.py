@@ -542,6 +542,52 @@ def _load_hot_picks_cached(top_n: int = 10):
 
 _hot, _hist_days = _load_hot_picks_cached(top_n=10)
 
+# 績效計算函式 提前定義(供首頁速覽卡片 + 後續 tab_perf 共用)
+@st.cache_data(ttl=600, show_spinner="計算策略績效中…")
+def _load_performance_cached():
+    hist = load_history()
+    return compute_performance(hist, CACHE_DIR, n_days_list=(5, 10, 20))
+
+# ── 🎯 首頁速覽卡片(3 秒看完今日重點) ──
+# 4 張 metric:今日達標 / 大盤狀態 / 最強產業 / 系統 5 日勝率
+if meta is not None and df is not None:
+    _qc1, _qc2, _qc3, _qc4 = st.columns(4)
+
+    # 1. 今日達標檔數
+    _n_hit = len(df)
+    _qc1.metric("📋 今日達標", f"{_n_hit} 檔",
+                "🔥 高張力" if _n_hit >= 20 else ("✅ 正常" if _n_hit >= 5 else "⚠ 稀少"))
+
+    # 2. 大盤狀態(台股紅漲綠跌,用 inverse 讓正報酬顯紅)
+    _bull = meta.get('market_bullish', True)
+    _twii_pct = meta.get('twii_pct')
+    _qc2.metric("📈 大盤", "多頭" if _bull else "空頭",
+                f"{_twii_pct:+.2f}%" if pd.notna(_twii_pct) else "N/A",
+                delta_color="inverse")
+
+    # 3. 最強產業
+    _top_industry = "—"
+    if not df.empty and '產業' in df.columns:
+        _v = df['產業'].dropna()
+        _v = _v[_v != ""]
+        if not _v.empty:
+            _top_industry = f"{_v.value_counts().idxmax()} ×{int(_v.value_counts().max())}"
+    _qc3.metric("🏭 最強產業", _top_industry)
+
+    # 4. 系統 5 日勝率(需要 history ≥ 5 天才算)
+    _wr_text, _wr_delta = "—", "資料累積中"
+    try:
+        if _hist_days >= 5:
+            _o = _load_performance_cached().get("overall", {})
+            if "win_rate_5d" in _o:
+                _wr_text = f"{_o['win_rate_5d']*100:.0f}%"
+                _wr_delta = f"樣本 {_o['n_5d']} 筆"
+    except Exception:
+        pass
+    _qc4.metric("🎯 5 日勝率", _wr_text, _wr_delta)
+
+    st.divider()
+
 # ── 4 個分析區塊改用 Tabs 並排,省直向空間 ──
 _tab_hot, _tab_rot, _tab_perf, _tab_bt = st.tabs([
     f"🔥 入選熱度榜({_hist_days}日)",
@@ -597,10 +643,7 @@ with _tab_rot:
 
 
 # ── 策略績效追蹤(對歷史 picks 算入選後 N 日報酬) ───────────────────────
-@st.cache_data(ttl=600, show_spinner="計算策略績效中…")
-def _load_performance_cached():
-    hist = load_history()
-    return compute_performance(hist, CACHE_DIR, n_days_list=(5, 10, 20))
+# (_load_performance_cached 已在首頁速覽卡片前定義,此處直接使用)
 
 with _tab_perf:
     if _hist_days >= 5:  # 至少有 5 天歷史才有意義
@@ -649,8 +692,8 @@ with _tab_perf:
 # ── 訊號回測:對 daily/法人 parquet 掃描三大技術訊號歷史報酬 ─────────────
 @st.cache_data(ttl=900, show_spinner="跑回測中(掃描 180 天歷史訊號)…")
 def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
-                         combine_mode: str, dedup: bool):
-    """signals_tuple: 用 tuple 才能被 cache_data hash。"""
+                         combine_mode: str, dedup: bool, stock_filter: str = ""):
+    """signals_tuple: 用 tuple 才能被 cache_data hash。stock_filter='' 視同全市場。"""
     if date_filter == "all":
         date_range = None
     else:
@@ -660,7 +703,8 @@ def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
         date_range = (start, end)
     return run_backtest(CACHE_DIR, signal=list(signals_tuple), hold_days=hold_days,
                         date_range=date_range, combine_mode=combine_mode,
-                        dedup_within_hold=dedup)
+                        dedup_within_hold=dedup,
+                        stock_filter=stock_filter or None)
 
 
 with _tab_bt:
@@ -695,19 +739,30 @@ with _tab_bt:
         key="bt_period"
     )
 
-    dedup_choice = st.checkbox(
-        "持倉鎖定期內不重複進場(避免統計灌水)", value=True, key="bt_dedup",
-        help="勾選後:同股票進場後在持有天數內的第二次訊號會被忽略,模擬真實「沒平倉前不再買」。\n\n關掉則是「每天逐日掃描」的原始統計,強勢股會被多次計入。"
+    bcc1, bcc2 = st.columns([1, 2])
+    dedup_choice = bcc1.checkbox(
+        "持倉鎖定期內不重複進場", value=True, key="bt_dedup",
+        help="勾選後:同股票進場後在持有天數內的第二次訊號會被忽略,模擬真實「沒平倉前不再買」。\n關掉則是「每天逐日掃描」的原始統計,強勢股會被多次計入。"
     )
+    stock_filter_input = bcc2.text_input(
+        "🎯 個股回測(留空 = 全市場)", value="", key="bt_stock_filter",
+        placeholder="例:2330",
+        help="輸入股票代號就只跑這一檔的歷史訊號績效,例如想看 2454 過去 KD 金叉進場是否能賺錢"
+    ).strip()
 
     if not sig_choice_multi:
         st.info("👆 請至少勾選一個訊號才能跑回測")
         _bt = {"trades": pd.DataFrame(), "stats": {"n": 0}, "all_signals_stats": {}}
     else:
         _bt = _run_backtest_cached(tuple(sig_choice_multi), hold_choice, period_choice,
-                                   combine_mode_choice, dedup_choice)
+                                   combine_mode_choice, dedup_choice, stock_filter_input)
+        # 個股回測且查無資料時的友善提示
+        if stock_filter_input and _bt['stats'].get('n', 0) == 0:
+            st.warning(f"⚠ 個股 {stock_filter_input} 在所選期間/訊號下無觸發,試試擴大期間或換訊號組合。")
     # 下方明細表/CSV 命名用的單一 label
-    sig_choice = "_".join(sig_choice_multi) + ("_AND" if combine_mode_choice == "and" else "_OR") if sig_choice_multi else "none"
+    _suffix = f"_{stock_filter_input}" if stock_filter_input else ""
+    sig_choice = ("_".join(sig_choice_multi) + ("_AND" if combine_mode_choice == "and" else "_OR") + _suffix
+                  if sig_choice_multi else "none")
 
     if _bt.get("error"):
         st.error(f"⚠️ {_bt['error']}")

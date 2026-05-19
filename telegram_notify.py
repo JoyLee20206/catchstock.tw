@@ -283,6 +283,34 @@ def main():
         except Exception as e:
             print(f"⚠ 健康度檢查失敗(略過): {e}")
 
+        # ── 4b. 重點摘要(一行濃縮今日盤勢、達標數、冠軍、最強產業) ──
+        # 設計目的:手機通知一眼能看完最關鍵資訊,不用滑半天
+        try:
+            _summary_parts = []
+            if df is not None and not df.empty:
+                _top  = df.iloc[0]
+                _stop = str(_top['代號'])
+                _ntop = str(_top['名稱'])
+                _sscr = _top['總分']
+                # 冠軍 + 達標檔數
+                _summary_parts.append(f"<b>{_stop} {_ntop} {_sscr}分</b>(冠軍)/ {len(df)} 檔達標")
+
+                # 最強產業
+                if '產業' in df.columns:
+                    _v = df['產業'].dropna()
+                    _v = _v[_v != ""]
+                    if not _v.empty:
+                        _top_ind = _v.value_counts().idxmax()
+                        _top_cnt = int(_v.value_counts().max())
+                        _summary_parts.append(f"主流 <b>{_top_ind}</b> {_top_cnt} 檔")
+            # 大盤狀態警示
+            if not meta.get('market_bullish', True):
+                _summary_parts.append("⚠️ <b>大盤空頭防禦</b>")
+            if _summary_parts:
+                header += f"📌 <b>今日重點:</b>{' / '.join(_summary_parts)}\n"
+        except Exception as e:
+            print(f"⚠ 重點摘要產生失敗(略過): {e}")
+
         header += "━━━━━━━━━━━━━━\n\n"
 
         # ── 5. AI 點評(模型輪替) ──────────────────────────
