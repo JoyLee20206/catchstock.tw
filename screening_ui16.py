@@ -49,13 +49,33 @@ WATCHLIST_FILE = "cache/watchlist.json"
 NOTES_FILE = "cache/notes.json"
 
 def load_watchlist() -> list:
+    """讀取自選股。優先順序:URL query param > 檔案 > 空清單。
+    Streamlit Cloud 檔案系統 reboot 會被洗掉,改用 query_param 跨 reboot 持久化;
+    使用者只要書籤 URL 就能保留自選股(URL 不會超過上限,幾十支股票完全沒問題)。
+    """
+    try:
+        qp_wl = st.query_params.get("wl", "")
+        if qp_wl:
+            return [s.strip() for s in qp_wl.split(",") if s.strip()]
+    except Exception:
+        pass
     if Path(WATCHLIST_FILE).exists():
-        with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return []
     return []
 
 def save_watchlist(wl: list) -> None:
-    # 確保 cache 資料夾存在
+    """雙寫:URL query param(跨 reboot 持久化) + 檔案(session 加速)。"""
+    try:
+        if wl:
+            st.query_params["wl"] = ",".join(str(s) for s in wl)
+        elif "wl" in st.query_params:
+            del st.query_params["wl"]
+    except Exception:
+        pass
     Path("cache").mkdir(exist_ok=True)
     with open(WATCHLIST_FILE, 'w', encoding='utf-8') as f:
         json.dump(wl, f, ensure_ascii=False, indent=2)
@@ -235,9 +255,41 @@ if _freshness["level"] != "missing":
         st.toast("✅ 日 K 強制更新完成!", icon="🔄")
         st.session_state.show_force_daily_success = False
 
+    # ── 兩顆按鈕並排顯示(左:標準抓取 / 右:強制更新日 K) ──
+    FORCE_DAILY_COOLDOWN = 120  # 2 分鐘
+    _last_force_ts = st.session_state.get('last_force_daily_ts', 0)
+    _elapsed = time.time() - _last_force_ts
+    _on_cooldown = _elapsed < FORCE_DAILY_COOLDOWN
+
+    _btn_col1, _btn_col2 = st.columns(2)
+
+    with _btn_col1:
+        _click_fetch = st.button(
+            "📥 抓取今日最新資料", type="secondary", use_container_width=True,
+            help="標準模式:若各類資源今天已抓過就略過。預設排程跑的就是這個。"
+        )
+
+    with _btn_col2:
+        if _on_cooldown:
+            _remaining = int(FORCE_DAILY_COOLDOWN - _elapsed)
+            st.button(
+                f"🔄 強制更新日 K(冷卻 {_remaining} 秒)",
+                disabled=True, use_container_width=True
+            )
+            _click_force = False
+        else:
+            _click_force = st.button(
+                "🔄 強制更新日 K", type="primary", use_container_width=True,
+                help=(
+                    "無視當日 cache,重新抓取**所有股票**的日 K 資料。\n\n"
+                    "**用途**:盤中已經跑過、要拿到真正收盤價時(14:00 後再按)。\n"
+                    "**只重抓 daily**:法人/融資券/營收/大戶 仍沿用今日 cache,不浪費 API 額度。\n"
+                    "**冷卻**:2 分鐘內只能按一次。"
+                )
+            )
+
     # ── 按鈕 1:標準抓取(略過已有當日 cache) ──
-    if st.button("📥 抓取今日最新資料", type="secondary", use_container_width=True,
-                 help="標準模式:若各類資源今天已抓過就略過。預設排程跑的就是這個。"):
+    if _click_fetch:
         st.toast("⏳ 系統已收到請求,開始比對資料...", icon="🤖")
         with st.spinner("正在執行資料更新... (若轉圈超過 2 分鐘,可能是主機記憶體不足崩潰)"):
             try:
@@ -253,56 +305,35 @@ if _freshness["level"] != "missing":
                 st.error(f"❌ 發生未知的錯誤:{e}")
 
     # ── 按鈕 2:強制更新日 K(無視 cache,只重抓 daily) ──
-    # 冷卻保護:避免狂按耗 API 額度
-    FORCE_DAILY_COOLDOWN = 120  # 2 分鐘
-    _last_force_ts = st.session_state.get('last_force_daily_ts', 0)
-    _elapsed = time.time() - _last_force_ts
-    _on_cooldown = _elapsed < FORCE_DAILY_COOLDOWN
-
-    if _on_cooldown:
-        _remaining = int(FORCE_DAILY_COOLDOWN - _elapsed)
-        st.button(
-            f"🔄 強制更新日 K(冷卻 {_remaining} 秒)",
-            disabled=True, use_container_width=True
-        )
-    else:
-        if st.button(
-            "🔄 強制更新日 K", type="primary", use_container_width=True,
-            help=(
-                "無視當日 cache,重新抓取**所有股票**的日 K 資料。\n\n"
-                "**用途**:盤中已經跑過、要拿到真正收盤價時(14:00 後再按)。\n"
-                "**只重抓 daily**:法人/融資券/營收/大戶 仍沿用今日 cache,不浪費 API 額度。\n"
-                "**冷卻**:2 分鐘內只能按一次。"
-            )
-        ):
-            with st.status("正在強制重抓 daily K 線...", expanded=True) as _status:
-                try:
-                    st.write("⏳ 啟動 `fetch_cache.py --force-daily`,預估 1~3 分鐘...")
-                    result = subprocess.run(
-                        [sys.executable, "fetch_cache.py", "--force-daily"],
-                        capture_output=True, text=True, timeout=600
-                    )
-                    if result.returncode == 0:
-                        # 只顯示最後 8 行 log,避免訊息太長
-                        _last_lines = result.stdout.strip().split('\n')[-8:]
-                        st.code('\n'.join(_last_lines))
-                        st.session_state.last_force_daily_ts = time.time()
-                        st.session_state.show_force_daily_success = True
-                        # 清掉所有 cache_data,讓 UI 重新讀新檔
-                        st.cache_data.clear()
-                        _status.update(label="✅ daily K 線已更新", state="complete")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(f"❌ 抓取失敗(returncode={result.returncode})")
-                        st.code(result.stderr[-500:] if result.stderr else "(無錯誤輸出)")
-                        _status.update(label="❌ 失敗", state="error")
-                except subprocess.TimeoutExpired:
-                    st.error("⏱️ 抓取逾時(超過 10 分鐘),已中止。可能是 yfinance 異常。")
-                    _status.update(label="❌ 逾時", state="error")
-                except Exception as e:
-                    st.error(f"❌ 例外:{e}")
-                    _status.update(label="❌ 例外", state="error")
+    if _click_force:
+        with st.status("正在強制重抓 daily K 線...", expanded=True) as _status:
+            try:
+                st.write("⏳ 啟動 `fetch_cache.py --force-daily`,預估 1~3 分鐘...")
+                result = subprocess.run(
+                    [sys.executable, "fetch_cache.py", "--force-daily"],
+                    capture_output=True, text=True, timeout=600
+                )
+                if result.returncode == 0:
+                    # 只顯示最後 8 行 log,避免訊息太長
+                    _last_lines = result.stdout.strip().split('\n')[-8:]
+                    st.code('\n'.join(_last_lines))
+                    st.session_state.last_force_daily_ts = time.time()
+                    st.session_state.show_force_daily_success = True
+                    # 清掉所有 cache_data,讓 UI 重新讀新檔
+                    st.cache_data.clear()
+                    _status.update(label="✅ daily K 線已更新", state="complete")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"❌ 抓取失敗(returncode={result.returncode})")
+                    st.code(result.stderr[-500:] if result.stderr else "(無錯誤輸出)")
+                    _status.update(label="❌ 失敗", state="error")
+            except subprocess.TimeoutExpired:
+                st.error("⏱️ 抓取逾時(超過 10 分鐘),已中止。可能是 yfinance 異常。")
+                _status.update(label="❌ 逾時", state="error")
+            except Exception as e:
+                st.error(f"❌ 例外:{e}")
+                _status.update(label="❌ 例外", state="error")
 
 # ── 策略邏輯導覽 (FAQ) ─────────────────────────────────────────────────────
 with st.expander("💡 策略邏輯導覽 (FAQ) — 核心量化規則說明", expanded=False):
@@ -584,8 +615,8 @@ if _hist_days >= 5:  # 至少有 5 天歷史才有意義
 
 # ── 訊號回測:對 daily/法人 parquet 掃描三大技術訊號歷史報酬 ─────────────
 @st.cache_data(ttl=900, show_spinner="跑回測中(掃描 180 天歷史訊號)…")
-def _run_backtest_cached(signal: str, hold_days: int, date_filter: str):
-    """date_filter: 'all' / '90d' / '30d'"""
+def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str, combine_mode: str):
+    """signals_tuple: 用 tuple 才能被 cache_data hash。"""
     if date_filter == "all":
         date_range = None
     else:
@@ -593,21 +624,30 @@ def _run_backtest_cached(signal: str, hold_days: int, date_filter: str):
         end = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
         start = end - pd.Timedelta(days=ndays)
         date_range = (start, end)
-    return run_backtest(CACHE_DIR, signal=signal, hold_days=hold_days, date_range=date_range)
+    return run_backtest(CACHE_DIR, signal=list(signals_tuple), hold_days=hold_days,
+                        date_range=date_range, combine_mode=combine_mode)
 
 
 with st.expander("🔬 訊號回測(過去 180 天歷史掃描)", expanded=False):
     st.caption(
-        "對 daily 快取掃描三大技術訊號的歷史觸發點,算「進場後 N 日報酬」── "
-        "回答「哪個訊號真的有 alpha?該在計分系統加重?」"
+        "對 daily 快取掃描 5 種訊號的歷史觸發點,算「進場後 N 日報酬」── "
+        "回答「哪個訊號真的有 alpha?該在計分系統加重?」可複選做組合測試。"
+    )
+
+    sig_options = list(SIGNAL_LABELS.keys())
+    sig_choice_multi = st.multiselect(
+        "選擇訊號(可複選)", sig_options,
+        default=["breakout"],
+        format_func=lambda k: SIGNAL_LABELS[k],
+        key="bt_signals",
+        help="多選時依「合併模式」交集 / 聯集 — 例:選『外資+投信』模式 AND = 兩家同日都買超才算"
     )
 
     bc1, bc2, bc3 = st.columns(3)
-    sig_options = list(SIGNAL_LABELS.keys())
-    sig_choice = bc1.selectbox(
-        "選擇訊號", sig_options,
-        format_func=lambda k: SIGNAL_LABELS[k],
-        key="bt_signal"
+    combine_mode_choice = bc1.radio(
+        "合併模式", ["and", "or"], horizontal=True, key="bt_combine",
+        format_func=lambda k: "AND 交集(都觸發)" if k == "and" else "OR 聯集(任一觸發)",
+        help="只選 1 個訊號時兩者效果一樣;選 2+ 才有意義"
     )
     hold_choice = bc2.selectbox(
         "持有天數", [5, 10, 20], index=1, key="bt_hold",
@@ -620,7 +660,13 @@ with st.expander("🔬 訊號回測(過去 180 天歷史掃描)", expanded=False
         key="bt_period"
     )
 
-    _bt = _run_backtest_cached(sig_choice, hold_choice, period_choice)
+    if not sig_choice_multi:
+        st.info("👆 請至少勾選一個訊號才能跑回測")
+        _bt = {"trades": pd.DataFrame(), "stats": {"n": 0}, "all_signals_stats": {}}
+    else:
+        _bt = _run_backtest_cached(tuple(sig_choice_multi), hold_choice, period_choice, combine_mode_choice)
+    # 下方明細表/CSV 命名用的單一 label
+    sig_choice = "_".join(sig_choice_multi) + ("_AND" if combine_mode_choice == "and" else "_OR") if sig_choice_multi else "none"
 
     if _bt.get("error"):
         st.error(f"⚠️ {_bt['error']}")

@@ -26,9 +26,11 @@ KD_LOW_FROM        = 30
 KD_HIGH_CAP_NOW    = 80
 
 SIGNAL_LABELS = {
-    "breakout": "量價齊揚突破(60 日新高)",
-    "foreign":  "外資連 5 日買超",
-    "kd_cross": "KD 低檔金叉",
+    "breakout":         "量價齊揚突破(60 日新高)",
+    "foreign":          "外資連 5 日買超",
+    "kd_cross":         "KD 低檔金叉",
+    "investment_trust": "投信連 5 日買超",
+    "rs_market":        "RS 優於大盤(20 日)",
 }
 
 
@@ -70,6 +72,29 @@ def _load_daily_matrix(cache_dir):
         }
     except Exception as e:
         print(f"⚠ 讀取 daily matrix 失敗: {e}")
+        return None
+
+
+def _load_it_net_matrix(cache_dir):
+    """投信每日淨買超 matrix(股),邏輯與 _load_foreign_net_matrix 一致但抓投信。"""
+    try:
+        files = sorted(cache_dir.glob('institutional_*.parquet'))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        if df.empty:
+            return None
+        mask = df['name'].str.contains('Investment_Trust|投信', na=False)
+        it = df[mask].copy()
+        if it.empty:
+            return None
+        it['date']     = pd.to_datetime(it['date'])
+        it['stock_id'] = it['stock_id'].astype(str)
+        it['net']      = it['buy'] - it['sell']
+        it = it.groupby(['date', 'stock_id'], as_index=False)['net'].sum()
+        return it.pivot(index='date', columns='stock_id', values='net')
+    except Exception as e:
+        print(f"⚠ 讀取投信 matrix 失敗: {e}")
         return None
 
 
@@ -125,6 +150,27 @@ def detect_breakout_signals(matrices):
     vol_surge   = vol >= vol_ma20 * BREAKOUT_VOL_RATIO
 
     return price_break & vol_surge
+
+
+def detect_investment_trust_signals(matrices, it_matrix):
+    """投信連 5 日買超:近 5 日淨額 > 0 且 ≥ 2 日買超(邏輯與 detect_foreign_signals 對稱)"""
+    close = matrices['close']
+    if it_matrix is None:
+        return pd.DataFrame(False, index=close.index, columns=close.columns)
+    it_aligned   = it_matrix.reindex(index=close.index, columns=close.columns)
+    rolling_sum  = it_aligned.rolling(window=LOOKBACK_DAYS, min_periods=LOOKBACK_DAYS).sum()
+    rolling_pos  = (it_aligned > 0).rolling(window=LOOKBACK_DAYS, min_periods=LOOKBACK_DAYS).sum()
+    return (rolling_sum > 0) & (rolling_pos >= FI_MIN_BUY_DAYS)
+
+
+def detect_rs_market_signals(matrices, window: int = 20):
+    """RS 優於大盤:個股近 N 日報酬 > 跨股票中位數同期報酬。
+    用「市場中位報酬」代替 ^TWII 作為市場代理,避免依賴外部資料,且整批向量化。
+    """
+    close  = matrices['close']
+    ret_n  = close.pct_change(window)
+    market = ret_n.median(axis=1)               # 每日跨股票報酬中位數 = 市場代理
+    return ret_n.gt(market, axis=0) & ret_n.notna()
 
 
 def detect_foreign_signals(matrices, fi_matrix):
@@ -235,6 +281,26 @@ def detect_kd_cross_signals(matrices):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# 多訊號合併
+# ══════════════════════════════════════════════════════════════════════
+def combine_signals(sig_dict: dict, selected: list, mode: str = "and") -> pd.DataFrame:
+    """合併多個訊號 matrix。
+    mode='and' → 同日全部觸發才算(交集,訊號變少但更可信)
+    mode='or'  → 同日任一觸發即算(聯集,訊號變多)
+    """
+    if not selected:
+        return None
+    mats = [sig_dict[s] for s in selected if s in sig_dict]
+    if not mats:
+        return None
+    result = mats[0].copy().fillna(False).astype(bool)
+    for m in mats[1:]:
+        m_bool = m.fillna(False).astype(bool)
+        result = (result & m_bool) if mode == "and" else (result | m_bool)
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════
 # 主流程:對任一訊號矩陣算 N 日後報酬
 # ══════════════════════════════════════════════════════════════════════
 def compute_signal_returns(signal_matrix, close_matrix, hold_days: int) -> pd.DataFrame:
@@ -304,8 +370,8 @@ def summarize(trades: pd.DataFrame) -> dict:
 # ══════════════════════════════════════════════════════════════════════
 # 對外主介面
 # ══════════════════════════════════════════════════════════════════════
-def run_backtest(cache_dir, signal: str = "breakout", hold_days: int = 10,
-                 date_range: tuple = None) -> dict:
+def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
+                 date_range: tuple = None, combine_mode: str = "and") -> dict:
     """跑一次回測。
 
     Args:
@@ -333,32 +399,52 @@ def run_backtest(cache_dir, signal: str = "breakout", hold_days: int = 10,
         return {"error": "無法讀取 daily 快取", "trades": pd.DataFrame(), "stats": {"n": 0}}
 
     fi_matrix = _load_foreign_net_matrix(cache_dir)
+    it_matrix = _load_it_net_matrix(cache_dir)
 
-    # 計算三個訊號矩陣(對照圖需要)
+    # 計算 5 個訊號矩陣(對照圖一次算齊)
     sig_matrices = {
-        "breakout": detect_breakout_signals(matrices),
-        "foreign":  detect_foreign_signals(matrices, fi_matrix),
-        "kd_cross": detect_kd_cross_signals(matrices),
+        "breakout":         detect_breakout_signals(matrices),
+        "foreign":          detect_foreign_signals(matrices, fi_matrix),
+        "kd_cross":         detect_kd_cross_signals(matrices),
+        "investment_trust": detect_investment_trust_signals(matrices, it_matrix),
+        "rs_market":        detect_rs_market_signals(matrices),
     }
+
+    # signal 支援 str(向後相容) 或 list(多選)
+    selected_list = [signal] if isinstance(signal, str) else list(signal)
+
+    def _slice_by_date(mat):
+        if date_range is None:
+            return mat
+        start, end = date_range
+        return mat.loc[(mat.index >= start) & (mat.index <= end)]
 
     # 對每個訊號算交易與摘要(供對照圖)
     all_signals_stats = {}
-    selected_trades = pd.DataFrame()
     for sig_name, sig_mat in sig_matrices.items():
-        # 套日期範圍
-        if date_range is not None:
-            start, end = date_range
-            mask = (sig_mat.index >= start) & (sig_mat.index <= end)
-            sig_mat = sig_mat.loc[mask]
-        trades = compute_signal_returns(sig_mat, matrices['close'], hold_days)
+        trades = compute_signal_returns(_slice_by_date(sig_mat), matrices['close'], hold_days)
         all_signals_stats[sig_name] = summarize(trades)
-        if sig_name == signal:
-            selected_trades = trades
+
+    # 算「選定組合」的交易
+    if len(selected_list) == 1 and selected_list[0] in sig_matrices:
+        # 單一訊號:直接用上面已算好的
+        combined_mat = _slice_by_date(sig_matrices[selected_list[0]])
+    else:
+        combined_mat = combine_signals(sig_matrices, selected_list, mode=combine_mode)
+        if combined_mat is not None:
+            combined_mat = _slice_by_date(combined_mat)
+
+    selected_trades = (
+        compute_signal_returns(combined_mat, matrices['close'], hold_days)
+        if combined_mat is not None else pd.DataFrame()
+    )
 
     return {
-        "signal":   signal,
-        "hold_days": hold_days,
-        "trades":   selected_trades,
-        "stats":    all_signals_stats.get(signal, {"n": 0}),
+        "signal":            signal,
+        "selected_signals":  selected_list,
+        "combine_mode":      combine_mode,
+        "hold_days":         hold_days,
+        "trades":            selected_trades,
+        "stats":             summarize(selected_trades),
         "all_signals_stats": all_signals_stats,
     }
