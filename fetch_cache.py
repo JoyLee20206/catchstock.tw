@@ -686,7 +686,14 @@ def fetch_yfinance_daily(info_df, default_start_date, chunk_size=400):
         prev_files = sorted(CACHE_DIR.glob("daily_*.parquet"))
         if prev_files and not path_for("daily").exists():
             pd.read_parquet(prev_files[-1]).to_parquet(path_for("daily"))
-            cleanup_old_cache("daily")  # <--- 補上這行
+            cleanup_old_cache("daily")
+        # 即使墊檔也寫時戳,讓 UI 知道「有人按過按鈕」,並用 FALLBACK 標記
+        try:
+            _now_str = datetime.now(TPE_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            (CACHE_DIR / "last_fetch_daily.txt").write_text(f"{_now_str} FALLBACK", encoding="utf-8")
+            print(f"   -> 寫入抓取時戳(墊檔模式): {_now_str}")
+        except Exception as e:
+            print(f"   ⚠ 寫入時戳失敗(略過): {e}")
         return
         
     df_new = pd.concat(all_frames, ignore_index=True)

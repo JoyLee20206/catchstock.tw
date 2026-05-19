@@ -236,11 +236,12 @@ if _freshness["level"] != "missing":
                 _caption_parts.append(f"📅 檔名 **{_fetch_day}** / 最新交易日 **{_data_max}**")
 
         # ── 抓取時戳:讀 last_fetch_daily.txt 的「內容」,不靠 mtime(git pull 會重置) ──
-        # 含時間才能判斷盤中 (< 14:00) 或盤後 (≥ 14:00)
+        # 含時間才能判斷盤中 (< 13:30) 或盤後 (≥ 13:30);若帶 FALLBACK 標記 = 本次抓失敗用舊檔
         _ts_file = CACHE_DIR / "last_fetch_daily.txt"
         if _ts_file.exists():
-            _fetch_ts = _ts_file.read_text(encoding="utf-8").strip()
-            # 判斷時段:13:30 後算盤後(收盤),否則算盤中
+            _fetch_raw = _ts_file.read_text(encoding="utf-8").strip()
+            _is_fallback = "FALLBACK" in _fetch_raw
+            _fetch_ts = _fetch_raw.replace("FALLBACK", "").strip()
             _suffix = ""
             try:
                 _hh_mm = _fetch_ts.split(" ")[1][:5]   # 'HH:MM'
@@ -248,6 +249,8 @@ if _freshness["level"] != "missing":
                 _suffix = " 🌙 盤後" if (_h, _m) >= (13, 30) else " ⏰ 盤中"
             except Exception:
                 pass
+            if _is_fallback:
+                _suffix += " ⚠️ <span style='color:#d97706'>**本次抓取失敗,仍為前次資料**</span>"
             _caption_parts.append(f"🕐 抓取於 **{_fetch_ts}**{_suffix}")
     except Exception:
         pass
