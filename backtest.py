@@ -407,13 +407,39 @@ def combine_signals(sig_dict: dict, selected: list, mode: str = "and") -> pd.Dat
 # ══════════════════════════════════════════════════════════════════════
 # 主流程:對任一訊號矩陣算 N 日後報酬
 # ══════════════════════════════════════════════════════════════════════
-def compute_signal_returns(signal_matrix, close_matrix, hold_days: int) -> pd.DataFrame:
+def _dedup_overlap(trades_df: pd.DataFrame, hold_days: int, trading_dates) -> pd.DataFrame:
+    """同檔股票 hold_days 個交易日內的第二次觸發 → 忽略(避免持倉重疊灌水)。
+    保留每段「進場 → 出場」週期的第一筆訊號,後續同股觸發要等過了出場日才算下一筆。
+    """
+    if trades_df.empty:
+        return trades_df
+    # 建 trading date → ordinal index 對映(避免用日曆天差,週末會偏差)
+    date_idx = {d: i for i, d in enumerate(trading_dates)}
+    keep_rows = []
+    for _, grp in trades_df.sort_values(['stock_id', 'date']).groupby('stock_id'):
+        last_exit_idx = -1
+        for _, row in grp.iterrows():
+            entry_idx = date_idx.get(row['date'], -1)
+            if entry_idx < 0:
+                continue
+            if entry_idx > last_exit_idx:           # 上一筆已出場才算新交易
+                keep_rows.append(row)
+                last_exit_idx = entry_idx + hold_days
+    if not keep_rows:
+        return pd.DataFrame(columns=trades_df.columns)
+    return pd.DataFrame(keep_rows).reset_index(drop=True)
+
+
+def compute_signal_returns(signal_matrix, close_matrix, hold_days: int,
+                           dedup_within_hold: bool = True) -> pd.DataFrame:
     """對訊號觸發點,算「進場後 hold_days 個交易日的報酬率」。
 
     Args:
         signal_matrix: bool DataFrame index=date, columns=stock_id (True 表觸發)
         close_matrix:  收盤價 DataFrame 同 shape
         hold_days:     持有交易日數
+        dedup_within_hold: True = 同股票 hold_days 內第二次訊號會被忽略(避免持倉重疊
+                       與強勢股權重灌水);False = 每天觸發都算一筆(原始逐日掃描)。
 
     Returns:
         DataFrame[date, stock_id, entry_close, exit_close, return_pct]
@@ -450,8 +476,12 @@ def compute_signal_returns(signal_matrix, close_matrix, hold_days: int) -> pd.Da
     merged['return_pct'] = (merged['exit_close'] - merged['entry_close']) / merged['entry_close'] * 100
     # 過濾離譜值(資料壞掉造成的 1000% 漲跌)
     merged = merged[merged['return_pct'].abs() < 100]
+    merged = merged.sort_values('date').reset_index(drop=True)
 
-    return merged.sort_values('date').reset_index(drop=True)
+    if dedup_within_hold:
+        merged = _dedup_overlap(merged, hold_days, list(close_matrix.index))
+
+    return merged
 
 
 def summarize(trades: pd.DataFrame) -> dict:
@@ -475,7 +505,8 @@ def summarize(trades: pd.DataFrame) -> dict:
 # 對外主介面
 # ══════════════════════════════════════════════════════════════════════
 def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
-                 date_range: tuple = None, combine_mode: str = "and") -> dict:
+                 date_range: tuple = None, combine_mode: str = "and",
+                 dedup_within_hold: bool = True) -> dict:
     """跑一次回測。
 
     Args:
@@ -531,7 +562,8 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
     # 對每個訊號算交易與摘要(供對照圖)
     all_signals_stats = {}
     for sig_name, sig_mat in sig_matrices.items():
-        trades = compute_signal_returns(_slice_by_date(sig_mat), matrices['close'], hold_days)
+        trades = compute_signal_returns(_slice_by_date(sig_mat), matrices['close'], hold_days,
+                                        dedup_within_hold=dedup_within_hold)
         all_signals_stats[sig_name] = summarize(trades)
 
     # 算「選定組合」的交易
@@ -544,7 +576,8 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
             combined_mat = _slice_by_date(combined_mat)
 
     selected_trades = (
-        compute_signal_returns(combined_mat, matrices['close'], hold_days)
+        compute_signal_returns(combined_mat, matrices['close'], hold_days,
+                               dedup_within_hold=dedup_within_hold)
         if combined_mat is not None else pd.DataFrame()
     )
 

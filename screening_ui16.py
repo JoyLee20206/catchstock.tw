@@ -615,7 +615,8 @@ if _hist_days >= 5:  # 至少有 5 天歷史才有意義
 
 # ── 訊號回測:對 daily/法人 parquet 掃描三大技術訊號歷史報酬 ─────────────
 @st.cache_data(ttl=900, show_spinner="跑回測中(掃描 180 天歷史訊號)…")
-def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str, combine_mode: str):
+def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
+                         combine_mode: str, dedup: bool):
     """signals_tuple: 用 tuple 才能被 cache_data hash。"""
     if date_filter == "all":
         date_range = None
@@ -625,7 +626,8 @@ def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
         start = end - pd.Timedelta(days=ndays)
         date_range = (start, end)
     return run_backtest(CACHE_DIR, signal=list(signals_tuple), hold_days=hold_days,
-                        date_range=date_range, combine_mode=combine_mode)
+                        date_range=date_range, combine_mode=combine_mode,
+                        dedup_within_hold=dedup)
 
 
 with st.expander("🔬 訊號回測(過去 180 天歷史掃描)", expanded=False):
@@ -660,11 +662,17 @@ with st.expander("🔬 訊號回測(過去 180 天歷史掃描)", expanded=False
         key="bt_period"
     )
 
+    dedup_choice = st.checkbox(
+        "持倉鎖定期內不重複進場(避免統計灌水)", value=True, key="bt_dedup",
+        help="勾選後:同股票進場後在持有天數內的第二次訊號會被忽略,模擬真實「沒平倉前不再買」。\n\n關掉則是「每天逐日掃描」的原始統計,強勢股會被多次計入。"
+    )
+
     if not sig_choice_multi:
         st.info("👆 請至少勾選一個訊號才能跑回測")
         _bt = {"trades": pd.DataFrame(), "stats": {"n": 0}, "all_signals_stats": {}}
     else:
-        _bt = _run_backtest_cached(tuple(sig_choice_multi), hold_choice, period_choice, combine_mode_choice)
+        _bt = _run_backtest_cached(tuple(sig_choice_multi), hold_choice, period_choice,
+                                   combine_mode_choice, dedup_choice)
     # 下方明細表/CSV 命名用的單一 label
     sig_choice = "_".join(sig_choice_multi) + ("_AND" if combine_mode_choice == "and" else "_OR") if sig_choice_multi else "none"
 
