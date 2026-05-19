@@ -26,16 +26,22 @@ KD_LOW_FROM        = 30
 KD_HIGH_CAP_NOW    = 80
 
 SIGNAL_LABELS = {
-    "breakout":          "量價齊揚突破(60 日新高)",
-    "foreign":           "外資連 5 日買超",
-    "kd_cross":          "KD 低檔金叉",
-    "investment_trust":  "投信連 5 日買超",
+    # ── Tier S 🌟 台股神器(實證最強三檔) ──
     "resonance":         "籌碼共振(散戶↓)",
-    "triple_buy":        "三大法人同步買超",
-    "ma20_pullback":     "MA20 拉回守穩(葛蘭碧 2)",
+    "foreign":           "外資連 5 日買超",
     "revenue_breakout":  "月營收雙紅突破(YoY>10% & MoM>0)",
-    "ma_golden_cross":   "MA 黃金交叉(MA20 上穿 MA60)",
+    # ── Tier A ✅ 有效(次強四檔) ──
+    "margin_squeeze":    "資減券增(軋空力道)",
+    "triple_buy":        "三大法人同步買超",
+    "investment_trust":  "投信連 5 日買超",
+    "breakout":          "量價齊揚突破(60 日新高)",
+    # ── Tier B 🟡 效果一般(三檔) ──
+    "momentum_top":      "20 日動能 Top 10%",
     "quality_breakout":  "品質突破(量縮整理後爆量)",
+    "ma_golden_cross":   "MA 黃金交叉(MA20 上穿 MA60)",
+    # ── Tier C ❌ 效果不顯著(待驗證) ──
+    "kd_cross":          "KD 低檔金叉",
+    # ── 已移除:ma20_pullback (葛蘭碧 2,實證無 alpha);detect_ma20_pullback_signals 函式保留 orphan ──
 }
 
 
@@ -100,6 +106,36 @@ def _load_it_net_matrix(cache_dir):
         return it.pivot(index='date', columns='stock_id', values='net')
     except Exception as e:
         print(f"⚠ 讀取投信 matrix 失敗: {e}")
+        return None
+
+
+def _load_margin_matrices(cache_dir):
+    """讀融資融券 parquet,組成 {'margin': 融資餘額 pivot, 'short': 融券餘額 pivot}。
+
+    用於偵測「資減券增」軋空訊號 — 多頭認賠出場(融資↓) + 空頭加碼(融券↑)
+    通常是股價即將反彈的反向訊號。
+    """
+    try:
+        files = sorted(cache_dir.glob('margin_*.parquet'))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        if df.empty:
+            return None
+        # 必要欄位檢查
+        need_cols = {'date', 'stock_id', 'MarginPurchaseTodayBalance', 'ShortSaleTodayBalance'}
+        if not need_cols.issubset(df.columns):
+            print(f"⚠ margin parquet 欄位不全,實際:{set(df.columns)}")
+            return None
+        df['date']     = pd.to_datetime(df['date'])
+        df['stock_id'] = df['stock_id'].astype(str)
+        df = df.drop_duplicates(subset=['date', 'stock_id'], keep='last')
+        return {
+            'margin': df.pivot(index='date', columns='stock_id', values='MarginPurchaseTodayBalance'),
+            'short':  df.pivot(index='date', columns='stock_id', values='ShortSaleTodayBalance'),
+        }
+    except Exception as e:
+        print(f"⚠ 讀取融資融券 matrix 失敗: {e}")
         return None
 
 
@@ -363,6 +399,38 @@ def detect_quality_breakout_signals(matrices, breakout_matrix):
     is_low_vol = vol < vol_ma20 * 0.7
     quiet_count = is_low_vol.shift(1).rolling(window=10, min_periods=10).sum()
     return breakout_matrix & (quiet_count >= 6)
+
+
+def detect_margin_short_squeeze_signals(matrices, margin_mats):
+    """資減券增(軋空力道):
+    - 近 5 日融資餘額累積跌幅 ≥ 3%(多頭認賠出場)
+    - 近 5 日融券餘額累積增幅 ≥ 5%(空頭加碼)
+    意義:籌碼結構轉為「散戶逃 + 空頭壓」→ 容易被軋空,股價往上反彈機率高
+    """
+    close = matrices['close']
+    if margin_mats is None:
+        return pd.DataFrame(False, index=close.index, columns=close.columns)
+    margin = margin_mats['margin'].reindex(index=close.index, columns=close.columns)
+    short  = margin_mats['short'].reindex(index=close.index, columns=close.columns)
+
+    # 5 日累積變化率(%);融資餘額為 0 的股(沒掛融資)會出現 NaN/inf,自動被 mask 掉
+    margin_5d_chg = (margin / margin.shift(5) - 1) * 100
+    short_5d_chg  = (short  / short.shift(5)  - 1) * 100
+
+    cond = (margin_5d_chg < -3) & (short_5d_chg > 5)
+    return cond.fillna(False) & margin.shift(5).notna() & short.shift(5).notna()
+
+
+def detect_momentum_top_signals(matrices, window: int = 20, top_pct: float = 0.10):
+    """中期動能 Top 10%(Jegadeesh-Titman 1993 經典動能因子):
+    個股近 window 日報酬,排名在全市場前 top_pct 分位。
+    比 rs_market(贏中位數)更嚴格,只選真正的強勢股。
+    """
+    close = matrices['close']
+    ret_n = close.pct_change(window)
+    # 每日跨股票算分位數;若該日有效股數太少(< 100),threshold 可能 NaN,則該日無訊號
+    threshold = ret_n.quantile(1 - top_pct, axis=1)
+    return ret_n.gt(threshold, axis=0).fillna(False) & ret_n.notna()
 
 
 def detect_rs_market_signals(matrices, window: int = 20):
@@ -662,6 +730,7 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
     it_matrix     = _load_it_net_matrix(cache_dir)
     dealer_matrix = _load_dealer_net_matrix(cache_dir)
     retail_matrix = _load_retail_pct_matrix(cache_dir)
+    margin_mats   = _load_margin_matrices(cache_dir)
     # 雙紅營收需要 daily matrix 的 index/columns 對齊
     double_red_matrix = _load_double_red_revenue_matrix(
         cache_dir, matrices['close'].index, matrices['close'].columns
@@ -670,18 +739,24 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
     # 先算 breakout 給 revenue_breakout / quality_breakout 共用
     _breakout = detect_breakout_signals(matrices)
 
-    # 計算 10 個訊號矩陣(對照圖一次算齊;rs_market 已移除)
+    # 計算 11 個訊號矩陣(順序對齊 SIGNAL_LABELS:Tier S → A → B → C)
+    # rs_market 與 ma20_pullback 已移除;對應 detect 函式仍保留為 orphan
     sig_matrices = {
-        "breakout":         _breakout,
-        "foreign":          detect_foreign_signals(matrices, fi_matrix),
-        "kd_cross":         detect_kd_cross_signals(matrices),
-        "investment_trust": detect_investment_trust_signals(matrices, it_matrix),
+        # Tier S
         "resonance":        detect_resonance_signals(matrices, retail_matrix),
-        "triple_buy":       detect_triple_buy_signals(matrices, fi_matrix, it_matrix, dealer_matrix),
-        "ma20_pullback":    detect_ma20_pullback_signals(matrices),
+        "foreign":          detect_foreign_signals(matrices, fi_matrix),
         "revenue_breakout": detect_revenue_breakout_signals(matrices, _breakout, double_red_matrix),
-        "ma_golden_cross":  detect_ma_golden_cross_signals(matrices),
+        # Tier A
+        "margin_squeeze":   detect_margin_short_squeeze_signals(matrices, margin_mats),
+        "triple_buy":       detect_triple_buy_signals(matrices, fi_matrix, it_matrix, dealer_matrix),
+        "investment_trust": detect_investment_trust_signals(matrices, it_matrix),
+        "breakout":         _breakout,
+        # Tier B
+        "momentum_top":     detect_momentum_top_signals(matrices),
         "quality_breakout": detect_quality_breakout_signals(matrices, _breakout),
+        "ma_golden_cross":  detect_ma_golden_cross_signals(matrices),
+        # Tier C
+        "kd_cross":         detect_kd_cross_signals(matrices),
     }
 
     # ── 個股回測過濾:若指定 stock_filter,只保留該股票欄位 ──
