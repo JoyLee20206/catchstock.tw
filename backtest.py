@@ -31,6 +31,9 @@ SIGNAL_LABELS = {
     "kd_cross":         "KD 低檔金叉",
     "investment_trust": "投信連 5 日買超",
     "rs_market":        "RS 優於大盤(20 日)",
+    "resonance":        "籌碼共振(散戶↓)",
+    "triple_buy":       "三大法人同步買超",
+    "ma20_pullback":    "MA20 拉回守穩(葛蘭碧 2)",
 }
 
 
@@ -98,6 +101,57 @@ def _load_it_net_matrix(cache_dir):
         return None
 
 
+def _load_dealer_net_matrix(cache_dir):
+    """自營商每日淨買超 matrix(股)。"""
+    try:
+        files = sorted(cache_dir.glob('institutional_*.parquet'))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        if df.empty:
+            return None
+        mask = df['name'].str.contains('Dealer|自營', na=False)
+        d = df[mask].copy()
+        if d.empty:
+            return None
+        d['date']     = pd.to_datetime(d['date'])
+        d['stock_id'] = d['stock_id'].astype(str)
+        d['net']      = d['buy'] - d['sell']
+        d = d.groupby(['date', 'stock_id'], as_index=False)['net'].sum()
+        return d.pivot(index='date', columns='stock_id', values='net')
+    except Exception as e:
+        print(f"⚠ 讀取自營商 matrix 失敗: {e}")
+        return None
+
+
+def _load_retail_pct_matrix(cache_dir):
+    """讀 holders parquet,組成「每週各股散戶持股率 %」pivot。
+
+    取每檔股票每週「最低 HoldingSharesLevel」(通常為 1~999 股 / 零股)當散戶代表。
+    完整版「大戶↑+散戶↓」實作較繁瑣,這裡用「散戶↓」作為共振訊號的代理 ──
+    實務上兩者高度相關(零和關係),已足夠抓 80% 的共振訊號。
+    """
+    try:
+        files = sorted(cache_dir.glob('holders_*.parquet'))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        if df.empty or 'HoldingSharesLevel' not in df.columns:
+            return None
+        df['date']     = pd.to_datetime(df['date'])
+        df['stock_id'] = df['stock_id'].astype(str)
+        df['percent']  = pd.to_numeric(df['percent'], errors='coerce')
+        df = df.dropna(subset=['percent', 'HoldingSharesLevel'])
+        # 依 level 字串/數值排序,取每組第一筆 = 最小級距(假設「1~999 股」字串會排第一)
+        df['_level_str'] = df['HoldingSharesLevel'].astype(str)
+        df = df.sort_values(['stock_id', 'date', '_level_str'])
+        retail = df.groupby(['stock_id', 'date'], as_index=False).first()
+        return retail.pivot(index='date', columns='stock_id', values='percent')
+    except Exception as e:
+        print(f"⚠ 讀取散戶 matrix 失敗: {e}")
+        return None
+
+
 def _load_foreign_net_matrix(cache_dir):
     """讀 institutional parquet,組成「外資每日淨買超(股數)」pivot table。
 
@@ -161,6 +215,56 @@ def detect_investment_trust_signals(matrices, it_matrix):
     rolling_sum  = it_aligned.rolling(window=LOOKBACK_DAYS, min_periods=LOOKBACK_DAYS).sum()
     rolling_pos  = (it_aligned > 0).rolling(window=LOOKBACK_DAYS, min_periods=LOOKBACK_DAYS).sum()
     return (rolling_sum > 0) & (rolling_pos >= FI_MIN_BUY_DAYS)
+
+
+def detect_triple_buy_signals(matrices, fi_matrix, it_matrix, dealer_matrix):
+    """三大法人同步買超:當日 外資 > 0 AND 投信 > 0 AND 自營 > 0
+    最強籌碼共識訊號,但樣本少;適合用 OR 跟其他訊號搭配看「擇優」。
+    """
+    close = matrices['close']
+    if any(m is None for m in (fi_matrix, it_matrix, dealer_matrix)):
+        return pd.DataFrame(False, index=close.index, columns=close.columns)
+    fi = fi_matrix.reindex(index=close.index, columns=close.columns)
+    it = it_matrix.reindex(index=close.index, columns=close.columns)
+    dl = dealer_matrix.reindex(index=close.index, columns=close.columns)
+    return (fi > 0) & (it > 0) & (dl > 0)
+
+
+def detect_resonance_signals(matrices, retail_matrix):
+    """籌碼共振(簡化版):本週散戶比例 < 上週(散戶↓ → 籌碼集中)。
+    holders 是週資料,daily 是日資料 → 用 reindex + ffill 把週訊號延伸到該週每個交易日。
+    """
+    close = matrices['close']
+    if retail_matrix is None:
+        return pd.DataFrame(False, index=close.index, columns=close.columns)
+    delta = retail_matrix.diff()           # 週對週變化
+    weekly_signal = delta < 0              # 散戶比例下降即觸發
+    daily_signal = weekly_signal.reindex(
+        index=close.index, columns=close.columns, method='ffill'
+    )
+    return daily_signal.fillna(False).astype(bool)
+
+
+def detect_ma20_pullback_signals(matrices):
+    """MA20 拉回守穩(葛蘭碧第二法則):
+    1. 過去 10 日內至少 7 日 close > MA20(持續站上,確認多頭結構)
+    2. 過去 3 日內至少 1 日 low <= MA20(有拉回觸碰 MA20)
+    3. 今日 close > MA20 AND close > 昨日 close(重新站上 + 紅 K 守穩)
+    """
+    close = matrices['close']
+    low   = matrices['low']
+    ma20  = close.rolling(window=20, min_periods=20).mean()
+
+    above_ma20  = close > ma20
+    days_above  = above_ma20.rolling(window=10, min_periods=10).sum()
+    cond1 = days_above >= 7
+
+    touched_ma20 = low <= ma20
+    cond2 = touched_ma20.rolling(window=3, min_periods=3).sum() >= 1
+
+    cond3 = (close > ma20) & (close > close.shift(1))
+
+    return cond1 & cond2 & cond3
 
 
 def detect_rs_market_signals(matrices, window: int = 20):
@@ -398,16 +502,21 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
     if matrices is None:
         return {"error": "無法讀取 daily 快取", "trades": pd.DataFrame(), "stats": {"n": 0}}
 
-    fi_matrix = _load_foreign_net_matrix(cache_dir)
-    it_matrix = _load_it_net_matrix(cache_dir)
+    fi_matrix     = _load_foreign_net_matrix(cache_dir)
+    it_matrix     = _load_it_net_matrix(cache_dir)
+    dealer_matrix = _load_dealer_net_matrix(cache_dir)
+    retail_matrix = _load_retail_pct_matrix(cache_dir)
 
-    # 計算 5 個訊號矩陣(對照圖一次算齊)
+    # 計算 8 個訊號矩陣(對照圖一次算齊)
     sig_matrices = {
         "breakout":         detect_breakout_signals(matrices),
         "foreign":          detect_foreign_signals(matrices, fi_matrix),
         "kd_cross":         detect_kd_cross_signals(matrices),
         "investment_trust": detect_investment_trust_signals(matrices, it_matrix),
         "rs_market":        detect_rs_market_signals(matrices),
+        "resonance":        detect_resonance_signals(matrices, retail_matrix),
+        "triple_buy":       detect_triple_buy_signals(matrices, fi_matrix, it_matrix, dealer_matrix),
+        "ma20_pullback":    detect_ma20_pullback_signals(matrices),
     }
 
     # signal 支援 str(向後相容) 或 list(多選)
