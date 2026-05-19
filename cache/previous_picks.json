@@ -183,8 +183,14 @@
       {
         "sid": "3034",
         "score": 8,
-        "close": 478.0,
+        "close": 466.0,
         "industry": "半導體業"
+      },
+      {
+        "sid": "1582",
+        "score": 8,
+        "close": 117.0,
+        "industry": "電子零組件業"
       },
       {
         "sid": "8069",
@@ -201,38 +207,38 @@
       {
         "sid": "3624",
         "score": 7,
-        "close": 80.2,
+        "close": 91.2,
         "industry": "電子零組件業"
+      },
+      {
+        "sid": "5536",
+        "score": 7,
+        "close": 944.0,
+        "industry": "其他電子業"
       },
       {
         "sid": "8016",
         "score": 7,
-        "close": 277.0,
+        "close": 280.5,
         "industry": "半導體業"
       },
       {
         "sid": "2481",
         "score": 7,
-        "close": 135.5,
+        "close": 135.0,
         "industry": "半導體業"
       },
       {
         "sid": "6831",
         "score": 7,
-        "close": 716.0,
+        "close": 733.0,
         "industry": "電腦及週邊設備業"
       },
       {
         "sid": "6223",
         "score": 7,
-        "close": 6160.0,
+        "close": 5730.0,
         "industry": "半導體業"
-      },
-      {
-        "sid": "1582",
-        "score": 7,
-        "close": 116.0,
-        "industry": "電子零組件業"
       }
     ]
   }
