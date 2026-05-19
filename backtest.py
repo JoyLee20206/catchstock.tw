@@ -26,14 +26,16 @@ KD_LOW_FROM        = 30
 KD_HIGH_CAP_NOW    = 80
 
 SIGNAL_LABELS = {
-    "breakout":         "量價齊揚突破(60 日新高)",
-    "foreign":          "外資連 5 日買超",
-    "kd_cross":         "KD 低檔金叉",
-    "investment_trust": "投信連 5 日買超",
-    "rs_market":        "RS 優於大盤(20 日)",
-    "resonance":        "籌碼共振(散戶↓)",
-    "triple_buy":       "三大法人同步買超",
-    "ma20_pullback":    "MA20 拉回守穩(葛蘭碧 2)",
+    "breakout":          "量價齊揚突破(60 日新高)",
+    "foreign":           "外資連 5 日買超",
+    "kd_cross":          "KD 低檔金叉",
+    "investment_trust":  "投信連 5 日買超",
+    "resonance":         "籌碼共振(散戶↓)",
+    "triple_buy":        "三大法人同步買超",
+    "ma20_pullback":     "MA20 拉回守穩(葛蘭碧 2)",
+    "revenue_breakout":  "月營收雙紅突破(YoY>10% & MoM>0)",
+    "ma_golden_cross":   "MA 黃金交叉(MA20 上穿 MA60)",
+    "quality_breakout":  "品質突破(量縮整理後爆量)",
 }
 
 
@@ -265,6 +267,102 @@ def detect_ma20_pullback_signals(matrices):
     cond3 = (close > ma20) & (close > close.shift(1))
 
     return cond1 & cond2 & cond3
+
+
+def _load_double_red_revenue_matrix(cache_dir, daily_index, daily_columns):
+    """讀 revenue parquet,組成「該股最新已公告月營收為雙紅(YoY>10% 且 MoM>0)」的 daily flag matrix。
+
+    對齊邏輯:月營收約於次月 10~15 日公告(MOPS),這裡用「次月 15 日」為近似 effective_date,
+    用 forward-fill 把月旗標延伸到該月之後的每個交易日(直到下一筆新營收出爐)。
+    """
+    try:
+        files = sorted(cache_dir.glob('revenue_*.parquet'))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        if df.empty or 'revenue' not in df.columns:
+            return None
+        df = df.sort_values(['stock_id', 'revenue_year', 'revenue_month']).copy()
+
+        # 算 MoM:同股上一筆營收
+        df['rev_mom_base'] = df.groupby('stock_id')['revenue'].shift(1)
+        df['mom'] = (df['revenue'] / df['rev_mom_base'] - 1) * 100
+
+        # 算 YoY:找該股 12 個月前同月份
+        df['_ym'] = df['revenue_year'] * 12 + df['revenue_month']
+        df['_self_key']  = df['stock_id'] + '_' + df['_ym'].astype(str)
+        df['_yoy_key']   = df['stock_id'] + '_' + (df['_ym'] - 12).astype(str)
+        _lookup = df.drop_duplicates('_self_key').set_index('_self_key')['revenue']
+        df['rev_yoy_base'] = df['_yoy_key'].map(_lookup)
+        df['yoy'] = (df['revenue'] / df['rev_yoy_base'] - 1) * 100
+
+        # 雙紅:YoY > 10% 且 MoM > 0
+        df['double_red'] = (df['yoy'] > 10) & (df['mom'] > 0)
+
+        # effective_date = 公告日近似(次月 15 號)
+        df['effective_year']  = df['revenue_year']
+        df['effective_month'] = df['revenue_month'] + 1
+        _overflow = df['effective_month'] > 12
+        df.loc[_overflow, 'effective_year']  = df.loc[_overflow, 'effective_year'] + 1
+        df.loc[_overflow, 'effective_month'] = 1
+        df['effective_date'] = pd.to_datetime(
+            df['effective_year'].astype(str) + '-' +
+            df['effective_month'].astype(str).str.zfill(2) + '-15',
+            errors='coerce'
+        )
+
+        # 建 daily matrix:每個股每個交易日是否處於「雙紅生效中」
+        result = pd.DataFrame(False, index=daily_index, columns=daily_columns)
+        for sid, grp in df.groupby('stock_id'):
+            if sid not in daily_columns:
+                continue
+            grp = grp.sort_values('effective_date').dropna(subset=['effective_date'])
+            if grp.empty:
+                continue
+            stock_s = pd.Series(grp['double_red'].values, index=grp['effective_date'])
+            # 同月若有多筆(理論上不會),保留最後一筆
+            stock_s = stock_s[~stock_s.index.duplicated(keep='last')]
+            stock_s = stock_s.reindex(daily_index, method='ffill').fillna(False)
+            result[sid] = stock_s.astype(bool)
+        return result
+    except Exception as e:
+        print(f"⚠ 讀取雙紅營收 matrix 失敗: {e}")
+        return None
+
+
+def detect_revenue_breakout_signals(matrices, breakout_matrix, double_red_matrix):
+    """月營收雙紅突破:當日突破 60 日新高 AND 該股目前最新營收為雙紅(YoY>10% 且 MoM>0)。
+    結合基本面 + 技術面,過濾掉「炒短線無業績」的假突破。
+    """
+    close = matrices['close']
+    if double_red_matrix is None:
+        return pd.DataFrame(False, index=close.index, columns=close.columns)
+    dr = double_red_matrix.reindex(index=breakout_matrix.index,
+                                   columns=breakout_matrix.columns).fillna(False).astype(bool)
+    return breakout_matrix & dr
+
+
+def detect_ma_golden_cross_signals(matrices):
+    """MA 黃金交叉:MA20 上穿 MA60(中長線轉折),稀少但可靠。"""
+    close = matrices['close']
+    ma20 = close.rolling(window=20, min_periods=20).mean()
+    ma60 = close.rolling(window=60, min_periods=60).mean()
+    above       = ma20 > ma60
+    above_prev  = ma20.shift(1) <= ma60.shift(1)
+    not_na = ma20.notna() & ma60.notna() & ma20.shift(1).notna() & ma60.shift(1).notna()
+    return above & above_prev & not_na
+
+
+def detect_quality_breakout_signals(matrices, breakout_matrix):
+    """品質突破:當日突破 AND 突破前 10 日內有 ≥ 6 日量 < MA20 × 0.7(明顯量縮整理過)。
+    過濾「持續飆漲後勉強突破」,只保留「整理蓄勢後爆量突破」,品質更高。
+    """
+    close = matrices['close']
+    vol   = matrices['volume']
+    vol_ma20 = vol.rolling(window=20, min_periods=20).mean()
+    is_low_vol = vol < vol_ma20 * 0.7
+    quiet_count = is_low_vol.shift(1).rolling(window=10, min_periods=10).sum()
+    return breakout_matrix & (quiet_count >= 6)
 
 
 def detect_rs_market_signals(matrices, window: int = 20):
@@ -564,17 +662,26 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
     it_matrix     = _load_it_net_matrix(cache_dir)
     dealer_matrix = _load_dealer_net_matrix(cache_dir)
     retail_matrix = _load_retail_pct_matrix(cache_dir)
+    # 雙紅營收需要 daily matrix 的 index/columns 對齊
+    double_red_matrix = _load_double_red_revenue_matrix(
+        cache_dir, matrices['close'].index, matrices['close'].columns
+    )
 
-    # 計算 8 個訊號矩陣(對照圖一次算齊)
+    # 先算 breakout 給 revenue_breakout / quality_breakout 共用
+    _breakout = detect_breakout_signals(matrices)
+
+    # 計算 10 個訊號矩陣(對照圖一次算齊;rs_market 已移除)
     sig_matrices = {
-        "breakout":         detect_breakout_signals(matrices),
+        "breakout":         _breakout,
         "foreign":          detect_foreign_signals(matrices, fi_matrix),
         "kd_cross":         detect_kd_cross_signals(matrices),
         "investment_trust": detect_investment_trust_signals(matrices, it_matrix),
-        "rs_market":        detect_rs_market_signals(matrices),
         "resonance":        detect_resonance_signals(matrices, retail_matrix),
         "triple_buy":       detect_triple_buy_signals(matrices, fi_matrix, it_matrix, dealer_matrix),
         "ma20_pullback":    detect_ma20_pullback_signals(matrices),
+        "revenue_breakout": detect_revenue_breakout_signals(matrices, _breakout, double_red_matrix),
+        "ma_golden_cross":  detect_ma_golden_cross_signals(matrices),
+        "quality_breakout": detect_quality_breakout_signals(matrices, _breakout),
     }
 
     # ── 個股回測過濾:若指定 stock_filter,只保留該股票欄位 ──
