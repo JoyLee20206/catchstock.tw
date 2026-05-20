@@ -183,10 +183,9 @@ def get_margin_change(cache_dir) -> dict:
 # 位階偏熱會增加修正風險
 # 融資是輔助訊號,權重最小(且方向跟散戶相反,單獨判斷不可靠)
 WEIGHTS = {
-    "vix":           0.30,
-    "taiex_vix":     0.30,
-    "taiex_pos":     0.25,
-    "margin_change": 0.15,
+    "vix":           0.50, # 把恐慌情緒權重集中到美股 VIX
+    "taiex_pos":     0.30, # 大盤位階
+    "margin_change": 0.20, # 融資週變化
 }
 
 
@@ -197,7 +196,6 @@ def compute_sentiment(cache_dir) -> dict:
         {
             "indicators": {
                 "vix":           {value, label, score, icon},
-                "taiex_vix":     {value, pct_rank, label, score, icon},
                 "taiex_pos":     {value, label, score, icon},
                 "margin_change": {value, label, score, icon},
             },
@@ -208,7 +206,6 @@ def compute_sentiment(cache_dir) -> dict:
     """
     indicators = {
         "vix":           get_vix(),
-        "taiex_vix":     get_taiex_vix(),
         "taiex_pos":     get_taiex_position(),
         "margin_change": get_margin_change(cache_dir),
     }
@@ -265,12 +262,6 @@ def format_sentiment_for_tg(sentiment: dict) -> str:
     v = ind.get("vix", {})
     if v.get("value") is not None:
         lines.append(f"{v['icon']} VIX {v['value']}({v['label']})")
-
-    # 富邦 VIX
-    v = ind.get("taiex_vix", {})
-    if v.get("value") is not None:
-        pct_str = f",歷史 {int(v['pct_rank'])}% 位" if v.get("pct_rank") is not None else ""
-        lines.append(f"{v['icon']} 富邦VIX {v['value']}{pct_str}({v['label']})")
 
     # 加權位階
     v = ind.get("taiex_pos", {})
