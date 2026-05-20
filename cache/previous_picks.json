@@ -246,16 +246,22 @@
     "date": "2026-05-20",
     "picks": [
       {
-        "sid": "8069",
-        "score": 8,
-        "close": 230.0,
-        "industry": "光電業"
-      },
-      {
         "sid": "2542",
-        "score": 7,
+        "score": 8,
         "close": 43.7,
         "industry": "建材營造業"
+      },
+      {
+        "sid": "3227",
+        "score": 8,
+        "close": 223.5,
+        "industry": "半導體業"
+      },
+      {
+        "sid": "8069",
+        "score": 7,
+        "close": 230.0,
+        "industry": "光電業"
       },
       {
         "sid": "3034",
@@ -276,12 +282,6 @@
         "industry": "電腦及週邊設備業"
       },
       {
-        "sid": "3227",
-        "score": 7,
-        "close": 223.5,
-        "industry": "半導體業"
-      },
-      {
         "sid": "3526",
         "score": 7,
         "close": 355.5,
@@ -292,6 +292,12 @@
         "score": 7,
         "close": 481.0,
         "industry": "電子零組件業"
+      },
+      {
+        "sid": "5536",
+        "score": 7,
+        "close": 916.0,
+        "industry": "其他電子業"
       }
     ]
   }
