@@ -10,41 +10,13 @@ from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS, CACHE_DIR
 # 共用模組
 from ai_helper import call_openrouter_ai
 from cache_status import cache_freshness
-from picks_history import load_history, save_history, compute_streak, build_picks_from_df, get_sids
+from picks_history import load_history, save_history, compute_streak, build_picks_from_df
 from data_health import check_data_health, format_health_for_tg
 from watchlist_alerts import check_watchlist, format_alerts_for_tg
 from performance import compute_performance, format_performance_summary
+from market_sentiment import compute_sentiment, format_sentiment_for_tg
 
-WATCHLIST_FILE  = "cache/watchlist.json"  # 由 UI 寫入,TG 讀取做警示
-AI_CACHE_FILE   = CACHE_DIR / "ai_comment_cache.json"  # AI 評論日快取,避免一天內重複打 API
-
-
-# ══════════════════════════════════════════════════════════════════════
-# AI 評論快取(以日期+冠軍標的+分數當 key)
-# ══════════════════════════════════════════════════════════════════════
-def load_ai_cache() -> dict:
-    """讀取 AI 評論快取(同一天若已成功生成則沿用,不重打 API)。"""
-    if not AI_CACHE_FILE.exists():
-        return {}
-    try:
-        with open(AI_CACHE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"⚠ AI cache 讀取失敗(將從空累積): {e}")
-        return {}
-
-
-def save_ai_cache(cache: dict) -> None:
-    """寫回 AI 評論快取,只保留最近 7 個 key(以日期排序)。"""
-    try:
-        # 用 key 字串排序(today_str 在前 → 字典序自然就是時間序)取最後 7 個
-        recent_keys = sorted(cache.keys())[-7:]
-        recent = {k: cache[k] for k in recent_keys}
-        AI_CACHE_FILE.parent.mkdir(exist_ok=True)
-        with open(AI_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(recent, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"⚠ AI cache 寫入失敗(略過): {e}")
+WATCHLIST_FILE = "cache/watchlist.json"  # 由 UI 寫入,TG 讀取做警示
 
 # ── 環境變數 ───────────────────────────────────────────────────────────
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -231,7 +203,7 @@ def main():
 
         # 同日重跑保護:剔除 history 中「今日」的項目,避免污染 yesterday_sids/streak/退場偵測
         history = [h for h in history if h.get("date") != today_str]
-        yesterday_sids = set(get_sids(history[-1])) if history else set()
+        yesterday_sids = set(history[-1]["sids"]) if history else set()
 
         def _safe_num(v, default=0.0):
             return float(v) if pd.notna(v) else default
@@ -283,33 +255,6 @@ def main():
         except Exception as e:
             print(f"⚠ 健康度檢查失敗(略過): {e}")
 
-        # ── 4b. 重點摘要(一行濃縮今日盤勢、達標數、冠軍、最強產業) ──
-        # 設計目的:手機通知一眼能看完最關鍵資訊,不用滑半天
-        try:
-            _summary_parts = []
-            if df is not None and not df.empty:
-                _top  = df.iloc[0]
-                _stop = html.escape(str(_top['代號']))
-                _ntop = html.escape(str(_top['名稱']))   # 防 & / < / > 等字元破壞 HTML
-                _sscr = int(_top['總分']) if pd.notna(_top['總分']) else _top['總分']
-                _summary_parts.append(f"<b>{_stop} {_ntop} {_sscr}分</b>(冠軍)/ {len(df)} 檔達標")
-
-                # 最強產業
-                if '產業' in df.columns:
-                    _v = df['產業'].dropna()
-                    _v = _v[_v != ""]
-                    if not _v.empty:
-                        _top_ind = html.escape(str(_v.value_counts().idxmax()))
-                        _top_cnt = int(_v.value_counts().max())
-                        _summary_parts.append(f"主流 <b>{_top_ind}</b> {_top_cnt} 檔")
-            # 大盤狀態警示
-            if not meta.get('market_bullish', True):
-                _summary_parts.append("⚠️ <b>大盤空頭防禦</b>")
-            if _summary_parts:
-                header += f"📌 <b>今日重點:</b>{' / '.join(_summary_parts)}\n"
-        except Exception as e:
-            print(f"⚠ 重點摘要產生失敗(略過): {e}")
-
         header += "━━━━━━━━━━━━━━\n\n"
 
         # ── 5. AI 點評(模型輪替) ──────────────────────────
@@ -334,29 +279,23 @@ def main():
                 f"直接輸出純文字,絕對不要使用任何 Markdown 語法(不要星號、井號、反引號)。"
             )
 
-            # ── AI 點評日快取:同日同冠軍同分數視為「同一份評論」,不重打 API ──
-            # key 涵蓋日期 + 冠軍 + 分數,任一變動就重新生成
-            ai_cache = load_ai_cache()
-            ai_cache_key = f"{today_str}|{sid_top}|{int(score_top) if pd.notna(score_top) else 'na'}"
-            cached = ai_cache.get(ai_cache_key)
-
-            if cached and cached.get("text"):
-                model_name = cached.get("model", "cache")
-                ai_text    = cached["text"]
-                print(f"   ♻️  AI 評論沿用今日快取({model_name},不打 API)")
-            else:
-                model_name, ai_text = call_openrouter_ai(prompt, max_tokens=250)
-                # 寫回 cache(僅成功才寫,失敗下次推播再試)
-                if model_name and ai_text:
-                    ai_cache[ai_cache_key] = {"model": model_name, "text": ai_text}
-                    save_ai_cache(ai_cache)
-
+            model_name, ai_text = call_openrouter_ai(prompt, max_tokens=250)
             if ai_text:
                 ai_comment = (
                     f"🧠 <b>AI 分析師({model_name}):</b>\n"
                     f"<i>「{html.escape(ai_text)}」</i>\n"
                     f"━━━━━━━━━━━━━━\n"
                 )
+
+        # ── 5b. 大盤情緒指標(獨立區塊,放在個股清單前) ──
+        sentiment_section = ""
+        try:
+            sentiment = compute_sentiment(CACHE_DIR)
+            sentiment_text = format_sentiment_for_tg(sentiment)
+            if sentiment_text:
+                sentiment_section = sentiment_text + "━━━━━━━━━━━━━━\n"
+        except Exception as e:
+            print(f"⚠ 大盤情緒指標產生失敗(略過): {e}")
 
         # ── 6. 個股清單 + tags(新進 / 連 N 日 / 突破)+ 漲跌幅 ─
         change_pct_map = load_change_pct_map()  # {sid: pct}
@@ -458,7 +397,7 @@ def main():
         )
 
         # ── 7. 合體並發送(自動分段) ──────────────────────
-        send_ok = send_telegram_message(header + ai_comment + content)
+        send_ok = send_telegram_message(header + ai_comment + sentiment_section + content)
         n_hit = len(df) if df is not None else 0
         if send_ok:
             print(f"✅ 推播完成!今日共 {n_hit} 檔達標。")
@@ -476,21 +415,13 @@ def main():
         save_history(history)
 
     except Exception as e:
-        import traceback
-        tb_str = traceback.format_exc()
-        # 從 traceback 抽出最後一個 frame(實際出錯的檔案:行號)
-        tb_lines = [ln for ln in tb_str.strip().split("\n") if ln.strip().startswith("File ")]
-        last_frame = tb_lines[-1] if tb_lines else "(無 frame)"
-        safe_error = html.escape(f"{type(e).__name__}: {e}")
-        safe_frame = html.escape(last_frame)
+        safe_error = html.escape(str(e))
         error_msg = (
             f"❌ <b>選股機器人罷工求救!</b>\n\n"
-            f"系統發生致命錯誤:\n<code>{safe_error}</code>\n\n"
-            f"<b>出錯位置:</b>\n<code>{safe_frame}</code>"
+            f"系統發生致命錯誤,請至 GitHub 檢查:\n<code>{safe_error}</code>"
         )
         send_telegram_message(error_msg)
         print(f"❌ 選股推播發生致命錯誤:{e}")
-        print(tb_str)  # 完整 traceback 進 GitHub Actions log,方便事後查
 
 
 if __name__ == "__main__":
