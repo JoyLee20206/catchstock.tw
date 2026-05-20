@@ -10,7 +10,7 @@ from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS, CACHE_DIR
 # 共用模組
 from ai_helper import call_openrouter_ai
 from cache_status import cache_freshness
-from picks_history import load_history, save_history, compute_streak, build_picks_from_df
+from picks_history import load_history, save_history, compute_streak, build_picks_from_df, get_sids
 from data_health import check_data_health, format_health_for_tg
 from watchlist_alerts import check_watchlist, format_alerts_for_tg
 from performance import compute_performance, format_performance_summary
@@ -203,7 +203,8 @@ def main():
 
         # 同日重跑保護:剔除 history 中「今日」的項目,避免污染 yesterday_sids/streak/退場偵測
         history = [h for h in history if h.get("date") != today_str]
-        yesterday_sids = set(history[-1]["sids"]) if history else set()
+        # ✅ 修改為（透過 get_sids 函式安全提取，自動兼容新舊格式）：
+        yesterday_sids = set(get_sids(history[-1])) if history else set()
 
         def _safe_num(v, default=0.0):
             return float(v) if pd.notna(v) else default
