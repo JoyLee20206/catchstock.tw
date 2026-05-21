@@ -14,7 +14,7 @@ from picks_history import load_history, save_history, compute_streak, build_pick
 from data_health import check_data_health, format_health_for_tg
 from watchlist_alerts import check_watchlist, format_alerts_for_tg
 from performance import compute_performance, format_performance_summary
-from market_sentiment import compute_sentiment, format_sentiment_for_tg
+from market_sentiment import compute_sentiment, format_sentiment_for_tg, format_sentiment_summary_line
 
 WATCHLIST_FILE = "cache/watchlist.json"  # 由 UI 寫入,TG 讀取做警示
 
@@ -288,10 +288,16 @@ def main():
                     f"━━━━━━━━━━━━━━\n"
                 )
 
-        # ── 5b. 大盤情緒指標(獨立區塊,放在個股清單前) ──
+        # ── 5b. 大盤情緒指標 ──────────────────────────────
+        # 先算好,一線摘要放標頭,詳細區塊放個股清單前
         sentiment_section = ""
         try:
             sentiment = compute_sentiment(CACHE_DIR)
+            # 一行摘要嵌入 header
+            summary_line = format_sentiment_summary_line(sentiment)
+            if summary_line:
+                header += summary_line + "━━━━━━━━━━━━━━\n\n"
+            # 詳細區塊(含全部子指標)
             sentiment_text = format_sentiment_for_tg(sentiment)
             if sentiment_text:
                 sentiment_section = sentiment_text + "━━━━━━━━━━━━━━\n"

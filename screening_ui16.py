@@ -42,6 +42,7 @@ from data_health import check_data_health
 from industry_rotation import compute_industry_rotation
 from performance import compute_performance
 from backtest import run_backtest, SIGNAL_LABELS
+from market_sentiment import compute_sentiment
 
 # ── 自選股與交易筆記持久化 ────────────────────────────────────────────────
 # 🐛 已修正：路徑改為 cache 資料夾，確保網頁與 Telegram 小助理資料完全同步！
@@ -591,12 +592,46 @@ if meta is not None and df is not None:
 
     st.divider()
 
-# ── 4 個分析區塊改用 Tabs 並排,省直向空間 ──
-_tab_hot, _tab_rot, _tab_perf, _tab_bt = st.tabs([
+# ── 大盤情緒指標(快取 5 分鐘,TAIFEX 每日更新一次故無需更短) ──
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_sentiment_cached():
+    return compute_sentiment(CACHE_DIR)
+
+# 緊接在速覽卡片下方:一行摘要橫幅
+try:
+    _sent = _load_sentiment_cached()
+    if _sent and _sent.get("temperature") is not None:
+        _ind = _sent["indicators"]
+        _parts = []
+        _v = _ind.get("vix", {})
+        if _v.get("value") is not None:
+            _parts.append(f"VIX {_v['value']} {_v['label']}")
+        _v = _ind.get("taiex_vix", {})
+        if _v.get("pct_rank") is not None:
+            _parts.append(f"台指波動 {int(_v['pct_rank'])}%位 {_v['label']}")
+        _v = _ind.get("margin_level", {})
+        if _v.get("pct_rank") is not None:
+            _parts.append(f"融資水位 {int(_v['pct_rank'])}%位 {_v['label']}")
+        _v = _ind.get("fi_futures", {})
+        if _v.get("value") is not None:
+            _sign = "+" if _v["value"] >= 0 else ""
+            _parts.append(f"外資期貨 {_sign}{_v['value']:,}口 {_v['label']}")
+        _sent_banner = (
+            f"📊 **大盤情緒** 溫度 **{_sent['temperature']}/100** "
+            f"{_sent['icon']} {_sent['label']}"
+            + (f"　|　{' | '.join(_parts)}" if _parts else "")
+        )
+        st.info(_sent_banner)
+except Exception:
+    pass
+
+# ── 5 個分析區塊改用 Tabs 並排,省直向空間 ──
+_tab_hot, _tab_rot, _tab_perf, _tab_bt, _tab_sent = st.tabs([
     f"🔥 入選熱度榜({_hist_days}日)",
     "🔄 產業輪動",
     "📊 策略績效",
     "🔬 訊號回測",
+    "🌡️ 大盤情緒",
 ])
 
 with _tab_hot:
@@ -1147,6 +1182,122 @@ with _tab_bt:
                 mime="text/csv",
                 use_container_width=False,
             )
+
+
+with _tab_sent:
+    st.caption(
+        "整合 7 個市場訊號的綜合溫度計 — 分數高(偏熱/樂觀)代表多頭情緒強,"
+        "分數低(偏冷/恐慌)代表市場恐慌或空頭佔優。"
+        "任一指標抓取失敗自動降級計算,不影響其他指標。"
+    )
+
+    try:
+        _s = _load_sentiment_cached()
+    except Exception as _e:
+        _s = None
+        st.error(f"情緒指標計算失敗: {_e}")
+
+    if _s and _s.get("temperature") is not None:
+        # ── 溫度計主數字 ──
+        _temp = _s["temperature"]
+        _tlabel = _s["label"]
+        _ticon  = _s["icon"]
+
+        _tcolor = (
+            "#16a34a" if _temp >= 70 else
+            "#65a30d" if _temp >= 55 else
+            "#ca8a04" if _temp >= 45 else
+            "#ea580c" if _temp >= 30 else
+            "#dc2626"
+        )
+        st.markdown(
+            f"""<div style="
+                text-align:center;
+                padding:18px 12px 10px;
+                background:rgba(0,0,0,0.04);
+                border-radius:12px;
+                margin-bottom:16px;
+            ">
+            <div style="font-size:52px;font-weight:800;color:{_tcolor};">{_temp}</div>
+            <div style="font-size:20px;color:#666;">/ 100 &nbsp; {_ticon} &nbsp; {_tlabel}</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+        # ── 各指標卡片 ──
+        _ind = _s["indicators"]
+        _CARD_DEFS = [
+            ("vix",            "🇺🇸 美股 VIX",       lambda v: f"{v['value']}" if v.get('value') is not None else "N/A",
+             lambda v: v.get('label','N/A'), "美股恐慌指數。< 15 樂觀；> 30 恐慌。"),
+            ("taiex_vix",      "🇹🇼 台指波動率",     lambda v: f"{v['value']}" if v.get('value') is not None else "N/A",
+             lambda v: f"歷史 {int(v['pct_rank'])}%位 {v['label']}" if v.get('pct_rank') is not None else v.get('label','N/A'),
+             "從 ^TWII 算 20 日年化實現波動率(std × √252)。高百分位 = 波動升溫、恐慌情緒高。"),
+            ("taiex_pos",      "📐 大盤位階",        lambda v: f"{v['value']:+}%" if v.get('value') is not None else "N/A",
+             lambda v: v.get('label','N/A'), "加權指數 vs MA60 乖離率。> +8% 過熱；< -8% 深跌逢低。"),
+            ("margin_change",  "📉 融資週變化",      lambda v: f"{v['value']:+.1f}%" if v.get('value') is not None else "N/A",
+             lambda v: v.get('label','N/A'), "近 5 日 vs 前 5 日全市場融資餘額變化。急增為散戶過熱反指標。"),
+            ("margin_level",   "💰 融資水位",        lambda v: f"{int(v['pct_rank'])}%位" if v.get('pct_rank') is not None else "N/A",
+             lambda v: v.get('label','N/A'), "全市場融資餘額近 90 日百分位。高水位代表散戶槓桿偏重。"),
+            ("fi_futures",     "🏦 外資期貨",        lambda v: f"{v['value']:+,}口" if v.get('value') is not None else "N/A",
+             lambda v: v.get('label','N/A'), "外資大台期貨淨口數(TAIFEX)。正值偏多，負值偏空。"),
+            ("retail_futures", "👥 散戶估算",        lambda v: f"{v['value']:+,}口" if v.get('value') is not None else "N/A",
+             lambda v: v.get('label','N/A'), "小台 MTX 三大法人淨口數取反估算散戶方向(零和市場近似)。"),
+        ]
+
+        _cols = st.columns(4)
+        for _i, (_key, _title, _val_fn, _lbl_fn, _help) in enumerate(_CARD_DEFS):
+            _v = _ind.get(_key, {})
+            _score = _v.get("score")
+            _card_icon = _v.get("icon", "⚪")
+            _val_str = _val_fn(_v)
+            _lbl_str = _lbl_fn(_v)
+            with _cols[_i % 4]:
+                st.metric(
+                    label=f"{_card_icon} {_title}",
+                    value=_val_str,
+                    delta=_lbl_str if _lbl_str != "N/A" else None,
+                    delta_color="off",
+                    help=_help,
+                )
+
+        # ── 分數條形圖 ──
+        st.divider()
+        _bar_rows = []
+        _LABELS = {
+            "vix": "美股 VIX", "taiex_vix": "台指波動率", "taiex_pos": "大盤位階",
+            "margin_change": "融資週變化", "margin_level": "融資水位",
+            "fi_futures": "外資期貨", "retail_futures": "散戶估算",
+        }
+        for _k, _lbl in _LABELS.items():
+            _v = _ind.get(_k, {})
+            if _v.get("score") is not None:
+                _bar_rows.append({"指標": _lbl, "分數": _v["score"], "標籤": _v.get("label","")})
+        if _bar_rows:
+            import plotly.express as px
+            _bar_df = pd.DataFrame(_bar_rows)
+            _bar_colors = [
+                "#16a34a" if s >= 65 else "#84cc16" if s >= 50 else "#eab308" if s >= 40 else "#f97316" if s >= 25 else "#dc2626"
+                for s in _bar_df["分數"]
+            ]
+            _fig_bar = go.Figure(go.Bar(
+                x=_bar_df["指標"], y=_bar_df["分數"],
+                text=_bar_df["標籤"], textposition="outside",
+                marker_color=_bar_colors,
+            ))
+            _fig_bar.update_layout(
+                height=280, margin=dict(l=10, r=10, t=10, b=10),
+                yaxis=dict(range=[0, 105], title="情緒分數(0=極冷, 100=極熱)"),
+                plot_bgcolor="rgba(0,0,0,0)",
+            )
+            _fig_bar.add_hline(y=50, line_dash="dot", line_color="gray", opacity=0.5)
+            st.plotly_chart(_fig_bar, use_container_width=True)
+
+        st.caption(
+            "⚠️ 情緒指標為輔助參考，不構成買賣建議。"
+            "外資期貨 / 散戶估算資料來源為 TAIFEX 公開揭露，每交易日盤後更新一次。"
+        )
+    else:
+        st.info("情緒指標資料暫時無法取得(網路限制或資料尚未更新),將在下次重整後自動重試。")
 
 
 # ── 資料健康度警告(只在 warn/error 級才顯示) ──
