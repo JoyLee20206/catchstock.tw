@@ -43,7 +43,11 @@ from data_health import check_data_health
 from industry_rotation import compute_industry_rotation
 from performance import compute_performance
 from backtest import run_backtest, SIGNAL_LABELS
-from market_sentiment import compute_sentiment, load_sentiment_history
+from market_sentiment import (
+    compute_sentiment,
+    load_sentiment_history,
+    persist_sentiment_history,
+)
 
 # ── 自選股與交易筆記持久化 ────────────────────────────────────────────────
 # 🐛 已修正：路徑改為 cache 資料夾，確保網頁與 Telegram 小助理資料完全同步！
@@ -198,7 +202,27 @@ ui_name_map = get_ui_name_map()
 # ── 大盤情緒(快取 5 分鐘,提前定義供「狀態總覽」 + 大盤情緒 tab 共用) ──
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_sentiment_cached():
+    """純讀取:回傳 compute_sentiment 結果,被 Streamlit 快取 5 分鐘。
+
+    ⚠ 純函式:不含副作用。寫歷史檔由 _get_sentiment_and_persist 在快取外負責。
+    """
     return compute_sentiment(CACHE_DIR)
+
+
+def _get_sentiment_and_persist():
+    """拿快取結果 + 在快取外做副作用(寫歷史檔)。
+
+    為什麼這樣設計:把寫檔放進 _load_sentiment_cached 會被 @st.cache_data 擋住
+    (第二次呼叫直接回快取值,副作用不會跑)。改成讀寫分離,所有呼叫端都能
+    保證歷史檔每次重整都會更新。
+    """
+    s = _load_sentiment_cached()
+    if s and s.get("temperature") is not None:
+        try:
+            persist_sentiment_history(CACHE_DIR, s["temperature"], s.get("label", ""))
+        except Exception as e:
+            print(f"⚠ persist_sentiment_history 失敗: {e}")
+    return s
 
 
 # ── 從 ^TWII parquet 算「多/空 + 今日漲跌% + 季線乖離」 ──
@@ -289,7 +313,7 @@ with _status_cols[1]:
 # 第 3 欄:市場情緒溫度
 with _status_cols[2]:
     try:
-        _sent_overview = _load_sentiment_cached()
+        _sent_overview = _get_sentiment_and_persist()
     except Exception:
         _sent_overview = None
     if _sent_overview and _sent_overview.get("temperature") is not None:
@@ -726,8 +750,8 @@ if meta is not None and df is not None:
     # 2. 市場溫度 + 7 日趨勢(原「大盤」訊息已在頂部狀態總覽,改放溫度)
     # 雙重保險:
     #   ① 優先用 sentiment_history.json 算「近 N 日趨勢」
-    #   ② 若歷史檔還沒累積,降級用 _load_sentiment_cached() 拿今日值
-    # 解決 Streamlit cache_data 快取住舊版 compute_sentiment 結果、永遠不寫檔的問題
+    #   ② 若歷史檔還沒累積,降級用 _get_sentiment_and_persist() 拿今日值
+    # 此邏輯仍保留 fallback,即便 wrapper 已負責讀寫分離,首次部署時 history 仍為空
     _temp_metric_value, _temp_metric_delta = "—", ""
     try:
         _hist_sent = load_sentiment_history(CACHE_DIR)
@@ -745,7 +769,7 @@ if meta is not None and df is not None:
                 _temp_metric_delta = f"{_today_label} · 累積中(目前 1 日)"
         else:
             # 模式 ②:歷史檔空 → 用快取的當日 sentiment 直接顯示
-            _s_fallback = _load_sentiment_cached()
+            _s_fallback = _get_sentiment_and_persist()
             if _s_fallback and _s_fallback.get("temperature") is not None:
                 _today_temp = _s_fallback["temperature"]
                 _temp_metric_value = f"{_today_temp}/100"
@@ -777,14 +801,10 @@ if meta is not None and df is not None:
 
     st.divider()
 
-# ── 大盤情緒指標(快取 5 分鐘,TAIFEX 每日更新一次故無需更短) ──
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_sentiment_cached():
-    return compute_sentiment(CACHE_DIR)
-
 # 緊接在速覽卡片下方:一行摘要橫幅
+# (_load_sentiment_cached / _get_sentiment_and_persist 已於檔案頂部定義,此處直接用)
 try:
-    _sent = _load_sentiment_cached()
+    _sent = _get_sentiment_and_persist()
     if _sent and _sent.get("temperature") is not None:
         _ind = _sent["indicators"]
         _parts = []
@@ -1377,7 +1397,7 @@ with _tab_sent:
     )
 
     try:
-        _s = _load_sentiment_cached()
+        _s = _get_sentiment_and_persist()
     except Exception as _e:
         _s = None
         st.error(f"情緒指標計算失敗: {_e}")

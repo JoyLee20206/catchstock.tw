@@ -564,24 +564,25 @@ def compute_sentiment(cache_dir) -> dict:
     else:
         label, icon = "偏冷(恐慌)", "❄️"
 
-    # 持久化今日溫度供「7 日趨勢」metric / 未來趨勢圖使用
-    # 失敗不影響回傳,只 log
-    try:
-        _persist_sentiment_history(cache_dir, temp, label)
-    except Exception as e:
-        print(f"   ⚠ sentiment history 寫入失敗: {e}")
-
+    # ⚠ 注意:這裡**不寫檔**。寫檔(side effect)由呼叫端在拿到結果後執行,
+    # 避免 @st.cache_data 快取住結果後副作用永遠不跑。
+    # 寫檔請呼叫 persist_sentiment_history(cache_dir, temp, label)。
     return {"indicators": indicators, "temperature": temp, "label": label, "icon": icon}
 
 
 # ── 大盤情緒歷史持久化(給「7 日趨勢」metric / 趨勢圖) ───────────────────
-# 每次 compute_sentiment 成功就 append 今日溫度,同日重跑覆蓋,保留最近 90 日。
+# 每次成功算出溫度時由 caller 呼叫一次,同日重跑覆蓋,保留最近 90 日。
+# 設計原則:寫檔是副作用,**不放在 compute_sentiment 內**,避免被 Streamlit 快取擋住。
 _SENTIMENT_HISTORY_FILE = "sentiment_history.json"
 _SENTIMENT_HISTORY_KEEP = 90
 
 
-def _persist_sentiment_history(cache_dir, temp, label):
-    """寫入今日溫度到 cache/sentiment_history.json。"""
+def persist_sentiment_history(cache_dir, temp, label):
+    """寫入今日溫度到 cache/sentiment_history.json(公開 API)。
+
+    呼叫端在拿到 compute_sentiment 結果後呼叫一次。
+    每天首次寫入會 append;同日重複呼叫會覆蓋當日紀錄(不重複)。
+    """
     if cache_dir is None:
         return
     f = Path(cache_dir) / _SENTIMENT_HISTORY_FILE
