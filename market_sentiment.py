@@ -2,16 +2,20 @@
 
 整合 7 個訊號算出市場溫度計(0~100):
 1. VIX(美股恐慌指數)        — yfinance ^VIX
-2. 富邦 VIX(台指 VIX ETF)    — yfinance 00677U.TW
+2. 台指實現波動率            — yfinance ^TWII (20 日年化 std × √252,
+                              原 00677U 富邦 VIX ETF 2024 下市改用實現波動率)
 3. 大盤位階(乖離率)         — yfinance ^TWII vs MA60
 4. 融資週變化                 — 既有 margin parquet 算
-5. 融資水位百分位             — 既有 margin parquet 算(近90日)
-6. 外資期貨淨口數             — TAIFEX 三大法人期貨未平倉 (TX)
-7. 散戶方向估算               — MTX 非法人淨口數取反
+5. 融資水位百分位             — 既有 margin parquet 算(近 90 日)
+6. 外資期貨淨口數             — TAIFEX 大台「臺股期貨」未平倉
+                              (門檻 ±5k/±20k,2024~2025 規模校準)
+7. 散戶方向估算               — TAIFEX 微型臺指期貨非法人淨口數取反
+                              (微台散戶占比 ~ 90%,小型臺指期貨為備援)
 
 設計原則:
 - 任一資料源失敗,該指標標 N/A,但**其他指標仍正常算溫度**(部分降級)
 - 全部失敗時,回傳 sentiment=None,讓呼叫端決定是否略過
+- 期貨門檻 / 散戶來源 隨市場結構演進,需定期校準
 """
 import time
 from datetime import datetime, timedelta
@@ -222,7 +226,7 @@ def get_margin_balance_level(cache_dir) -> dict:
 
 
 # ── TAIFEX 三大法人期貨未平倉 ──────────────────────────────────────────────
-# 模組級記憶體快取:同一次 process 內,大台/小台兩支函式共用一次 fetch
+# 模組級記憶體快取:同一次 process 內,大台 / 微台 兩支函式共用一次 fetch
 _TAIFEX_CACHE = {"df": None, "ts": 0.0}
 _TAIFEX_TTL_SEC = 1800  # 30 分鐘
 
@@ -317,7 +321,10 @@ def get_fi_futures_net() -> dict:
     """外資期貨淨口數(大台 臺股期貨)。
 
     外資未平倉淨多口 > 0 → 偏多;< 0 → 偏空。
-    台股大台外資淨口數區間經驗值:±3,000 中性;±10,000 為顯著方向。
+    門檻區間(2024~2025 規模校準):
+        ±5,000   = 中性
+        ±20,000  = 顯著方向
+    歷史背景:2018~2020 區間約 ±15k,2024 後因外資總部位放大常見 ±20k 以上。
     """
     _EMPTY = {"value": None, "pct_rank": None, "label": "N/A", "score": None, "icon": "⚪"}
     try:
@@ -333,13 +340,13 @@ def get_fi_futures_net() -> dict:
 
         net = int(row["oi_net_vol"].iloc[0])
 
-        if net > 10000:
+        if net > 20000:
             label, icon, score = "強多", "🟢", 75
-        elif net > 3000:
+        elif net > 5000:
             label, icon, score = "偏多", "🟢", 65
-        elif net > -3000:
+        elif net > -5000:
             label, icon, score = "中性", "🟡", 50
-        elif net > -10000:
+        elif net > -20000:
             label, icon, score = "偏空", "🟠", 35
         else:
             label, icon, score = "強空", "🔴", 20
@@ -351,24 +358,28 @@ def get_fi_futures_net() -> dict:
 
 
 def get_retail_futures_ratio() -> dict:
-    """散戶方向估算(小型臺指期貨 / 微型臺指期貨 — 散戶占比高)。
+    """散戶方向估算(微型臺指期貨 — 最純散戶代理)。
 
     用「三大法人淨口數加總取反」估算散戶方向(零和市場近似):
-    散戶淨口數 ≈ -(自營商 + 投信 + 外資 合計淨口數)
+        散戶淨口數 ≈ -(自營商 + 投信 + 外資 合計淨口數)
     正值 = 散戶偏多(反指標,偏謹慎);負值 = 散戶偏空(逆勢可能偏多)。
 
-    優先用「小型臺指期貨」(MXF),散戶活躍度高;若無資料退回「微型臺指期貨」。
+    主來源:微型臺指期貨(散戶占比 ~ 90%,訊號最純)
+    備援:  小型臺指期貨(MXF,散戶占比 ~ 50%)
+    門檻區間以微台尺度標定;若降級為小台,雜訊較高但方向仍可參考。
     """
-    _EMPTY = {"value": None, "label": "N/A", "score": None, "icon": "⚪"}
+    _EMPTY = {"value": None, "label": "N/A", "score": None, "icon": "⚪", "source": None}
     try:
         df = _fetch_taifex_institutional()
         if df is None or df.empty:
             return _EMPTY
 
-        # 優先小型臺指期貨,沒有就用微型臺指期貨
-        for target in ("小型臺指期貨", "微型臺指期貨"):
+        # 微台優先(最純散戶),沒資料才退回小台
+        source = None
+        for target in ("微型臺指期貨", "小型臺指期貨"):
             sub = df[df["product"] == target]
             if not sub.empty:
+                source = target
                 break
         else:
             return _EMPTY
@@ -376,18 +387,20 @@ def get_retail_futures_ratio() -> dict:
         inst_net_total = int(sub["oi_net_vol"].sum())
         retail_est = -inst_net_total
 
-        if retail_est > 5000:
+        # 微台合約值 ~ 1/10 小台,絕對口數天然較大,門檻照微台尺度
+        # (萬一降級為小台,雜訊較高但區間方向仍對)
+        if retail_est > 20000:
             label, icon, score = "散戶多", "🟠", 40   # 反向警訊
-        elif retail_est > 1000:
+        elif retail_est > 5000:
             label, icon, score = "略偏多", "🟡", 48
-        elif retail_est > -1000:
-            label, icon, score = "中性", "🟢", 55
         elif retail_est > -5000:
+            label, icon, score = "中性", "🟢", 55
+        elif retail_est > -20000:
             label, icon, score = "略偏空", "🟢", 62
         else:
             label, icon, score = "散戶空", "🟢", 70   # 反向利多
 
-        return {"value": retail_est, "label": label, "score": score, "icon": icon}
+        return {"value": retail_est, "label": label, "score": score, "icon": icon, "source": source}
     except Exception as e:
         print(f"   ⚠ 散戶方向估算失敗: {e}")
         return _EMPTY
