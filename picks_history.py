@@ -13,9 +13,13 @@ Legacy:   ["2330", ...]                                    ← 向下相容
 """
 import os
 import json
+from pathlib import Path
 
-
-HISTORY_FILE = "cache/previous_picks.json"
+# 使用相對於套件根目錄的 cache,跟 fetch_cache.py / screening0515.py 一致
+# 不從 screening0515 import CACHE_DIR 是為了避免循環 import(picks_history 被 screening_ui 與
+# telegram_notify 兩處 import,而 screening0515 本身也會 import picks_history-related 模組)
+CACHE_DIR = Path("cache")
+HISTORY_FILE = str(CACHE_DIR / "previous_picks.json")
 HISTORY_DAYS = 30  # 績效追蹤需要 N 天歷史,擴大到 30 天(原 7 天)
 
 

@@ -16,7 +16,7 @@ from watchlist_alerts import check_watchlist, format_alerts_for_tg
 from performance import compute_performance, format_performance_summary
 from market_sentiment import compute_sentiment, format_sentiment_for_tg, format_sentiment_summary_line
 
-WATCHLIST_FILE = "cache/watchlist.json"  # 由 UI 寫入,TG 讀取做警示
+WATCHLIST_FILE = str(CACHE_DIR / "watchlist.json")  # 由 UI 寫入,TG 讀取做警示
 
 # ── 環境變數 ───────────────────────────────────────────────────────────
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")

@@ -50,9 +50,9 @@ from market_sentiment import (
 )
 
 # ── 自選股與交易筆記持久化 ────────────────────────────────────────────────
-# 🐛 已修正：路徑改為 cache 資料夾，確保網頁與 Telegram 小助理資料完全同步！
-WATCHLIST_FILE = "cache/watchlist.json"
-NOTES_FILE = "cache/notes.json"
+# 路徑統一以 CACHE_DIR 為基準,避免散落各處改 cache 位置時遺漏
+WATCHLIST_FILE = str(CACHE_DIR / "watchlist.json")
+NOTES_FILE     = str(CACHE_DIR / "notes.json")
 
 def load_watchlist() -> list:
     """讀取自選股。優先順序:URL query param > 檔案 > 空清單。
