@@ -393,12 +393,17 @@ def get_fi_futures_net(cache_dir=None) -> dict:
 
         net = int(row["oi_net_vol"].iloc[0])
 
+        # 讀過去歷史(不含今天) + 虛擬補上今天的值,讓 n_days 與百分位的分母都包含今日
+        # (寫檔仍由 caller 透過 persist_fi_history 負責,維持讀寫分離)
         history = _load_fi_history(cache_dir)
-        n_days = len(history)
+        _today_str = datetime.now().strftime("%Y-%m-%d")
+        past_vols = [h["net_vol"] for h in history if h.get("date") != _today_str]
+        all_vols = past_vols + [net]   # 今天併入用來計算
+        n_days = len(all_vols)
 
         if n_days >= _FI_HISTORY_MIN:
             # ① 百分位制
-            arr = sorted([h["net_vol"] for h in history])
+            arr = sorted(all_vols)
             below = sum(1 for v in arr if v < net)
             pct = float(below / len(arr) * 100)
             mode = "percentile"
