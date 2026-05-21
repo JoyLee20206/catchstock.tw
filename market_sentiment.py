@@ -1,18 +1,20 @@
-"""大盤情緒指標(第 2 波)
+"""大盤情緒指標(精簡版 — 6 訊號)
 
-整合 7 個訊號算出市場溫度計(0~100):
+整合 6 個訊號算出市場溫度計(0~100):
 1. VIX(美股恐慌指數)        — yfinance ^VIX
 2. 台指實現波動率            — yfinance ^TWII (20 日年化 std × √252,
                               原 00677U 富邦 VIX ETF 2024 下市改用實現波動率)
 3. 大盤位階(乖離率)         — yfinance ^TWII vs MA60
-4. 融資週變化                 — 既有 margin parquet 算
-5. 融資水位百分位             — 既有 margin parquet 算(近 90 日)
-6. 外資期貨淨口數             — TAIFEX 大台「臺股期貨」未平倉
+4. 融資水位百分位             — 既有 margin parquet 算(近 90 日)
+5. 外資期貨淨口數             — TAIFEX 大台「臺股期貨」未平倉
                               (門檻 ±10k/±30k,2025~2026 規模校準)
-7. 散戶方向估算               — TAIFEX 微型臺指期貨非法人淨口數取反
+6. 散戶方向估算               — TAIFEX 微型臺指期貨非法人淨口數取反
                               (微台散戶占比 ~ 90%,小型臺指期貨為備援)
                               一律輸出 0~100% 部位指數(反指標);
                               累積 ≥ 20 日後自動切換到歷史百分位
+
+已下架:
+- 融資週變化(get_margin_change) — 與融資水位重疊度高,函式保留供直接調用
 
 設計原則:
 - 任一資料源失敗,該指標標 N/A,但**其他指標仍正常算溫度**(部分降級)
@@ -507,14 +509,16 @@ def get_retail_futures_ratio(cache_dir=None) -> dict:
 # ══════════════════════════════════════════════════════════════════════
 # 組合溫度計
 # ══════════════════════════════════════════════════════════════════════
-# 權重設計(總和 1.0):
-# 外資期貨方向最直接反映大型資金觀點
-# VIX 反映恐慌情緒;大盤位階反映估值;融資類反映散戶籌碼
+# 權重設計(compute_sentiment 會把實際有效指標再做歸一化,
+# 因此這些絕對值的相對比例才是重點,不需強制 sum = 1.0):
+#   主軸 (×3 @ 0.20)  : VIX / 大盤位階 / 外資期貨
+#   輔助 (×3 @ 0.10)  : 台指波動率 / 融資水位 / 散戶估算
+# 拿掉 margin_change(與 margin_level 重疊度高,後者反映「絕對位階」更穩);
+# get_margin_change() 函式仍保留供需要短期動能訊號的人直接調用。
 WEIGHTS = {
     "vix":             0.20,
     "taiex_vix":       0.10,
     "taiex_pos":       0.20,
-    "margin_change":   0.10,
     "margin_level":    0.10,
     "fi_futures":      0.20,
     "retail_futures":  0.10,
@@ -536,7 +540,6 @@ def compute_sentiment(cache_dir) -> dict:
         "vix":            get_vix(),
         "taiex_vix":      get_taiex_vix(),
         "taiex_pos":      get_taiex_position(),
-        "margin_change":  get_margin_change(cache_dir),
         "margin_level":   get_margin_balance_level(cache_dir),
         "fi_futures":     get_fi_futures_net(),
         "retail_futures": get_retail_futures_ratio(cache_dir),
@@ -599,14 +602,13 @@ def format_sentiment_for_tg(sentiment: dict) -> str:
 
     範例:
         📊 <b>大盤情緒指標</b>
-        🌡️ 溫度計：<b>65 / 100</b> 🌤️ 略偏多
+        🌡️ 溫度計:<b>65 / 100</b> 🌤️ 略偏多
         🟢 VIX 18.2(偏低)
         🟢 台指波動 14.5(歷史 28%位,偏低)
         🟢 加權位階 +5.2%(略高)
-        🟢 融資週變化 -2.1%(減少)
         🟡 融資水位 62%位(偏高)
         🟢 外資期貨 +8,234口(偏多)
-        🟠 散戶估算 +5,100口(散戶多)
+        🟠 散戶估算 72%(散戶偏多)
     """
     if not sentiment or sentiment.get("temperature") is None:
         return ""
@@ -631,11 +633,6 @@ def format_sentiment_for_tg(sentiment: dict) -> str:
         sign = "+" if v["value"] >= 0 else ""
         lines.append(f"{v['icon']} 加權位階 {sign}{v['value']}%({v['label']})")
 
-    v = ind.get("margin_change", {})
-    if v.get("value") is not None:
-        sign = "+" if v["value"] >= 0 else ""
-        lines.append(f"{v['icon']} 融資週變化 {sign}{v['value']}%({v['label']})")
-
     v = ind.get("margin_level", {})
     if v.get("pct_rank") is not None:
         lines.append(f"{v['icon']} 融資水位 {int(v['pct_rank'])}%位({v['label']})")
@@ -646,8 +643,7 @@ def format_sentiment_for_tg(sentiment: dict) -> str:
         lines.append(f"{v['icon']} 外資期貨 {sign}{v['value']:,}口({v['label']})")
 
     v = ind.get("retail_futures", {})
-    if v.get("value") is not None:
-        sign = "+" if v["value"] >= 0 else ""
-        lines.append(f"{v['icon']} 散戶估算 {sign}{v['value']:,}口({v['label']})")
+    if v.get("pct") is not None:
+        lines.append(f"{v['icon']} 散戶估算 {int(v['pct'])}%({v['label']})")
 
     return "\n".join(lines) + "\n"
