@@ -10,6 +10,7 @@ import sys
 import json
 import re
 import time
+import html
 import subprocess
 import tempfile
 import textwrap
@@ -1324,6 +1325,145 @@ with _tab_sent:
             "⚠️ 情緒指標為輔助參考，不構成買賣建議。"
             "外資期貨 / 散戶估算資料來源為 TAIFEX 公開揭露，每交易日盤後更新一次。"
         )
+
+        # ── 🤖 AI 大盤操作建議 ─────────────────────────────────────
+        # 把 6 個情緒指標 + 今日達標數 + 歷史 5 日勝率 + 大盤多空狀態
+        # 餵給 AI,請它給今日具體部位建議 + 風險點。
+        # Button-triggered (節省 API 配額) + session_state 快取
+        st.divider()
+        st.markdown("#### 🤖 AI 大盤操作建議")
+        st.caption(
+            "把 6 個情緒指標 + 今日達標數 + 歷史勝率餵給 AI,"
+            "請它給今日具體部位建議與風險點。**仍非投資建議,自行判斷。**"
+        )
+
+        # 取得既有的績效 / 大盤 / 達標數 三項背景資料(都有就加進 prompt)
+        _bg_perf = ""
+        try:
+            _perf_for_ai = _load_performance_cached()
+            _o = _perf_for_ai.get("overall", {})
+            if "win_rate_5d" in _o:
+                _bg_perf = (
+                    f"\n- 過去 5 日勝率: {_o['win_rate_5d']*100:.0f}% "
+                    f"(avg {_o.get('avg_return_5d', 0):+.2f}%, 樣本 {_o.get('n_5d', 0)} 筆)"
+                )
+        except Exception:
+            pass
+
+        _bg_market = ""
+        if meta is not None:
+            _bull = meta.get('market_bullish', None)
+            _twii_pct = meta.get('twii_pct')
+            if _bull is not None:
+                _bg_market = f"\n- 大盤狀態: {'多頭(站上季線)' if _bull else '空頭(跌破季線)'}"
+                if pd.notna(_twii_pct):
+                    _bg_market += f", 今日 {_twii_pct:+.2f}%"
+
+        _bg_hit = ""
+        if df is not None:
+            _bg_hit = f"\n- 今日達標個股: {len(df)} 檔"
+            if len(df) > 0 and '產業' in df.columns:
+                _ti_series = df['產業'].dropna()
+                _ti_series = _ti_series[_ti_series != ""]
+                if not _ti_series.empty:
+                    _ti_vc = _ti_series.value_counts()
+                    _bg_hit += f", 主流產業: {_ti_vc.idxmax()} ({_ti_vc.max()} 檔)"
+
+        # 把每個指標的「原始值 + 標籤 + 分數」攤平給 AI
+        _IND_NAMES_AI = {
+            "vix":            "美股 VIX",
+            "taiex_vix":      "台指波動率",
+            "taiex_pos":      "大盤位階",
+            "margin_level":   "融資水位",
+            "fi_futures":     "外資期貨",
+            "retail_futures": "散戶估算",
+        }
+        _ind_detail_lines = []
+        for _k, _name in _IND_NAMES_AI.items():
+            _v = _ind.get(_k, {})
+            if _v.get("score") is None:
+                continue
+            _val = _v.get("value")
+            _val_str = "?"
+            if _k == "vix" and _val is not None:
+                _val_str = f"{_val}"
+            elif _k == "taiex_vix" and _val is not None:
+                _val_str = (f"{_val}% (歷史 {int(_v['pct_rank'])}%位)"
+                            if _v.get('pct_rank') is not None else f"{_val}%")
+            elif _k == "taiex_pos" and _val is not None:
+                _val_str = f"{_val:+}% (vs MA60 乖離率)"
+            elif _k == "margin_level" and _v.get('pct_rank') is not None:
+                _val_str = f"{int(_v['pct_rank'])}%位 (90 日)"
+            elif _k == "fi_futures" and _val is not None:
+                _val_str = f"{_val:+,}口"
+            elif _k == "retail_futures" and _v.get('pct') is not None:
+                _val_str = f"{int(_v['pct'])}% 部位指數"
+            _ind_detail_lines.append(
+                f"  - {_name}: {_val_str} → {_v.get('label', '?')} (分數 {_v.get('score')}/100)"
+            )
+        _ind_detail_str = "\n".join(_ind_detail_lines)
+
+        _ai_market_prompt = (
+            f"你是一位台灣股市的資深策略分析師。基於以下今日數據,給出具體操作建議。\n\n"
+            f"【大盤情緒溫度計】\n"
+            f"- 綜合溫度: {_temp}/100 ({_tlabel})\n"
+            f"- 各指標詳情:\n{_ind_detail_str}\n\n"
+            f"【市場現況】{_bg_market}{_bg_hit}{_bg_perf}\n\n"
+            f"請用繁體中文(台灣用語)給出 120~180 字的具體建議,涵蓋三點:\n"
+            f"1. 部位建議:滿倉/七成/五成/三成/減碼,並說明為什麼\n"
+            f"2. 選股聚焦:是否只挑高分(≥9)、避開哪類產業或型態\n"
+            f"3. 風險點 + 觸發條件:哪些訊號出現時要調整部位\n\n"
+            f"直接輸出純文字,絕對不要使用 Markdown 語法(不要 *、#、反引號、項目符號)。"
+            f"語氣專業客觀,避免「肯定會漲」這類絕對化用詞,多用「可考慮」「留意」等語氣。"
+        )
+
+        _btn_col1, _btn_col2 = st.columns([3, 1])
+        with _btn_col2:
+            _gen_advice_clicked = st.button(
+                "🤖 產生 AI 建議",
+                type="primary",
+                use_container_width=True,
+                help=("呼叫 OpenRouter 免費模型(10~20 秒)。同一 session 結果會快取,"
+                      "可手動重新產生。"),
+            )
+
+        if _gen_advice_clicked:
+            with st.spinner("AI 分析中(預計 10~20 秒)..."):
+                _model_name_adv, _ai_advice_text = call_openrouter_ai(
+                    _ai_market_prompt, max_tokens=500
+                )
+                if _ai_advice_text:
+                    st.session_state["ai_market_advice"] = {
+                        "model":       _model_name_adv,
+                        "text":        _ai_advice_text,
+                        "temp_when":   _temp,
+                        "label_when":  _tlabel,
+                        "ts":          pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d %H:%M"),
+                    }
+                else:
+                    st.error("❌ AI 暫時無法回應(可能當日 API 配額已滿,稍後再試)。")
+
+        _a_cached = st.session_state.get("ai_market_advice")
+        if _a_cached:
+            # 若快取時的溫度跟當下差 > 5 度,提示資訊可能過時
+            _stale = abs(_a_cached["temp_when"] - _temp) > 5
+            _stale_note = (" · ⚠️ 溫度已變化,建議重新產生"
+                           if _stale else "")
+            st.markdown(
+                f"<div style='background:#fff7ed;border-left:4px solid #f97316;"
+                f"padding:14px 16px;border-radius:8px;margin-top:8px;'>"
+                f"<div style='font-size:12px;color:#6b7280;margin-bottom:8px;'>"
+                f"🤖 <b>{html.escape(str(_a_cached['model']))}</b> · "
+                f"產生於 {_a_cached['ts']} · "
+                f"當時溫度 {_a_cached['temp_when']}/100 ({html.escape(_a_cached['label_when'])})"
+                f"{_stale_note}</div>"
+                f"<div style='font-size:15px;line-height:1.75;color:#1f2937;"
+                f"white-space:pre-wrap;'>{html.escape(_a_cached['text'])}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("👆 點上方按鈕產生今日操作建議(免費模型,10~20 秒)")
 
         # ── 📚 各指標完整說明 ──
         with st.expander("📚 各指標完整說明 / FAQ", expanded=False):
