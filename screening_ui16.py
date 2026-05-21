@@ -724,10 +724,15 @@ if meta is not None and df is not None:
                 "🔥 高張力" if _n_hit >= 20 else ("✅ 正常" if _n_hit >= 5 else "⚠ 稀少"))
 
     # 2. 市場溫度 + 7 日趨勢(原「大盤」訊息已在頂部狀態總覽,改放溫度)
+    # 雙重保險:
+    #   ① 優先用 sentiment_history.json 算「近 N 日趨勢」
+    #   ② 若歷史檔還沒累積,降級用 _load_sentiment_cached() 拿今日值
+    # 解決 Streamlit cache_data 快取住舊版 compute_sentiment 結果、永遠不寫檔的問題
     _temp_metric_value, _temp_metric_delta = "—", ""
     try:
         _hist_sent = load_sentiment_history(CACHE_DIR)
         if _hist_sent:
+            # 模式 ①:歷史檔有資料
             _today_temp  = _hist_sent[-1].get("temp")
             _today_label = _hist_sent[-1].get("label", "")
             _temp_metric_value = f"{_today_temp}/100" if _today_temp is not None else "—"
@@ -737,7 +742,14 @@ if meta is not None and df is not None:
                 _arrow = "↗" if _delta > 2 else ("↘" if _delta < -2 else "→")
                 _temp_metric_delta = f"{_arrow} 近 {len(_hist_sent)} 日 {_delta:+d} · {_today_label}"
             else:
-                _temp_metric_delta = f"{_today_label} (累積中)"
+                _temp_metric_delta = f"{_today_label} · 累積中(目前 1 日)"
+        else:
+            # 模式 ②:歷史檔空 → 用快取的當日 sentiment 直接顯示
+            _s_fallback = _load_sentiment_cached()
+            if _s_fallback and _s_fallback.get("temperature") is not None:
+                _today_temp = _s_fallback["temperature"]
+                _temp_metric_value = f"{_today_temp}/100"
+                _temp_metric_delta = f"{_s_fallback.get('label','')} · 累積中(明日起有趨勢)"
     except Exception:
         pass
     _qc2.metric("🌡️ 市場溫度", _temp_metric_value, _temp_metric_delta, delta_color="off")
