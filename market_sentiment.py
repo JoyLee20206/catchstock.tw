@@ -564,7 +564,56 @@ def compute_sentiment(cache_dir) -> dict:
     else:
         label, icon = "偏冷(恐慌)", "❄️"
 
+    # 持久化今日溫度供「7 日趨勢」metric / 未來趨勢圖使用
+    # 失敗不影響回傳,只 log
+    try:
+        _persist_sentiment_history(cache_dir, temp, label)
+    except Exception as e:
+        print(f"   ⚠ sentiment history 寫入失敗: {e}")
+
     return {"indicators": indicators, "temperature": temp, "label": label, "icon": icon}
+
+
+# ── 大盤情緒歷史持久化(給「7 日趨勢」metric / 趨勢圖) ───────────────────
+# 每次 compute_sentiment 成功就 append 今日溫度,同日重跑覆蓋,保留最近 90 日。
+_SENTIMENT_HISTORY_FILE = "sentiment_history.json"
+_SENTIMENT_HISTORY_KEEP = 90
+
+
+def _persist_sentiment_history(cache_dir, temp, label):
+    """寫入今日溫度到 cache/sentiment_history.json。"""
+    if cache_dir is None:
+        return
+    f = Path(cache_dir) / _SENTIMENT_HISTORY_FILE
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    history = []
+    if f.exists():
+        try:
+            history = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            history = []
+    # 覆蓋今日紀錄,避免同日多次寫入重複
+    history = [h for h in history if h.get("date") != today_str]
+    history.append({"date": today_str, "temp": int(temp), "label": label})
+    history = sorted(history, key=lambda h: h["date"])[-_SENTIMENT_HISTORY_KEEP:]
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"   ⚠ sentiment_history.json 寫入失敗: {e}")
+
+
+def load_sentiment_history(cache_dir):
+    """讀取大盤情緒歷史,給 UI 算趨勢。回傳 list[{date,temp,label}] 由舊到新。"""
+    if cache_dir is None:
+        return []
+    f = Path(cache_dir) / _SENTIMENT_HISTORY_FILE
+    if not f.exists():
+        return []
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return []
 
 
 # ══════════════════════════════════════════════════════════════════════

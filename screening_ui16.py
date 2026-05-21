@@ -43,7 +43,7 @@ from data_health import check_data_health
 from industry_rotation import compute_industry_rotation
 from performance import compute_performance
 from backtest import run_backtest, SIGNAL_LABELS
-from market_sentiment import compute_sentiment
+from market_sentiment import compute_sentiment, load_sentiment_history
 
 # ── 自選股與交易筆記持久化 ────────────────────────────────────────────────
 # 🐛 已修正：路徑改為 cache 資料夾，確保網頁與 Telegram 小助理資料完全同步！
@@ -194,6 +194,35 @@ def get_ui_name_map() -> dict:
 
 ui_name_map = get_ui_name_map()
 
+
+# ── 大盤情緒(快取 5 分鐘,提前定義供「狀態總覽」 + 大盤情緒 tab 共用) ──
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_sentiment_cached():
+    return compute_sentiment(CACHE_DIR)
+
+
+# ── 從 ^TWII parquet 算「多/空 + 今日漲跌% + 季線乖離」 ──
+# 不依賴 meta(meta 要等使用者按過「開始選股」才有),讓狀態列冷啟動就有大盤資訊
+@st.cache_data(ttl=300, show_spinner=False)
+def _market_summary_from_twii():
+    df_twii = _load_twii_cached()
+    if df_twii is None or df_twii.empty or len(df_twii) < 60:
+        return None
+    closes = df_twii['Close'].dropna()
+    if len(closes) < 60:
+        return None
+    today_close = float(closes.iloc[-1])
+    prev_close  = float(closes.iloc[-2])
+    ma60        = float(closes.tail(60).mean())
+    return {
+        "close":    today_close,
+        "ma60":     ma60,
+        "pct":      (today_close - prev_close) / prev_close * 100,
+        "bias":     (today_close - ma60) / ma60 * 100,
+        "bullish":  today_close >= ma60,
+    }
+
+
 # ── 頁面設定與快取狀態橫幅 ──────────────────────────────────────────────────
 st.set_page_config(page_title="台股選股", page_icon="📊", layout="wide")
 st.title("📊 台股選股工具")
@@ -211,15 +240,79 @@ def _get_cache_max_date():
 
 _cache_date = _get_cache_max_date()
 _freshness = cache_freshness(_cache_date)
-# Level → Streamlit 顯示元件對映(顏色一致由 cache_status 控制)
-_level_fn = {
-    "missing": st.error,
-    "ok":      st.success,
-    "info":    st.info,
-    "warn":    st.warning,
-    "error":   st.error,
-}
-_level_fn[_freshness["level"]](f"📅 {_freshness['msg']}")
+
+# ── 📊 狀態總覽(資料 / 大盤 / 情緒 三欄合一,取代 3 個獨立 banner) ────────
+# 顏色用 freshness level 對應 emoji 顯示,避免重度 styling
+_LEVEL_EMOJI = {"missing": "❌", "ok": "✅", "info": "ℹ️", "warn": "⚠️", "error": "❌"}
+_status_cols = st.columns(3)
+
+# 第 1 欄:資料新鮮度
+with _status_cols[0]:
+    _emoji = _LEVEL_EMOJI.get(_freshness["level"], "ℹ️")
+    _data_lines = [f"**{_emoji} {_freshness['msg']}**"]
+    # 嘗試讀抓取時戳
+    try:
+        _ts_file = CACHE_DIR / "last_fetch_daily.txt"
+        if _ts_file.exists():
+            _fetch_raw = _ts_file.read_text(encoding="utf-8").strip()
+            _is_fallback = "FALLBACK" in _fetch_raw
+            _fetch_ts = _fetch_raw.replace("FALLBACK", "").strip()
+            try:
+                _hh_mm = _fetch_ts.split(" ")[1][:5]
+                _h, _m = int(_hh_mm.split(":")[0]), int(_hh_mm.split(":")[1])
+                _suffix = "🌙 盤後" if (_h, _m) >= (13, 30) else "⏰ 盤中"
+            except Exception:
+                _suffix = ""
+            if _is_fallback:
+                _suffix += " ⚠️ 抓取失敗用舊檔"
+            _data_lines.append(f"🕐 {_fetch_ts} {_suffix}")
+    except Exception:
+        pass
+    st.markdown("<br>".join(_data_lines), unsafe_allow_html=True)
+
+# 第 2 欄:大盤(冷啟動就有,不等使用者按開始選股)
+with _status_cols[1]:
+    _mkt = _market_summary_from_twii()
+    if _mkt is None:
+        st.markdown("**📈 大盤** N/A<br>_(yfinance 暫無資料)_", unsafe_allow_html=True)
+    else:
+        _bull_icon = "📈" if _mkt["bullish"] else "📉"
+        _bull_txt  = "多頭" if _mkt["bullish"] else "空頭"
+        _pct_color = "#dc2626" if _mkt["pct"] > 0 else ("#16a34a" if _mkt["pct"] < 0 else "#6b7280")
+        st.markdown(
+            f"**{_bull_icon} {_bull_txt}** "
+            f"<span style='color:{_pct_color};font-weight:600'>{_mkt['pct']:+.2f}%</span><br>"
+            f"TWII {_mkt['close']:,.0f} / 乖離 {_mkt['bias']:+.1f}%",
+            unsafe_allow_html=True,
+        )
+
+# 第 3 欄:市場情緒溫度
+with _status_cols[2]:
+    try:
+        _sent_overview = _load_sentiment_cached()
+    except Exception:
+        _sent_overview = None
+    if _sent_overview and _sent_overview.get("temperature") is not None:
+        _t  = _sent_overview["temperature"]
+        _tl = _sent_overview["label"]
+        _ti = _sent_overview["icon"]
+        _tcolor = (
+            "#16a34a" if _t >= 70 else
+            "#65a30d" if _t >= 55 else
+            "#ca8a04" if _t >= 45 else
+            "#ea580c" if _t >= 30 else
+            "#dc2626"
+        )
+        st.markdown(
+            f"**🌡️ 市場溫度** "
+            f"<span style='color:{_tcolor};font-weight:700;font-size:18px'>{_t}/100</span><br>"
+            f"{_ti} {_tl} <span style='color:#6b7280;font-size:12px'>(詳情看「大盤情緒」tab)</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("**🌡️ 市場溫度** N/A<br>_(情緒指標暫時無法取得)_", unsafe_allow_html=True)
+
+st.divider()
 
 # ── 🔍 快速搜尋(永遠顯示,不依賴 cache 狀態) ─────────────────────────────
 # 輸入代號 → 設定 target_sid → rerun,自動跳到下方個股分析區。
@@ -271,141 +364,144 @@ if (_search_query.strip()) and (_search_clicked or _search_query.strip().isdigit
 
 if _freshness["level"] != "missing":
 
-    # ── 雲端更新按鈕區塊(含資料日期 + 抓取時戳)──
-    st.markdown("#### 🔄 資料更新")
-    _caption_parts = ["雲端環境專用:點擊後從網路抓取最新台股資料。"]
-    try:
-        daily_files = sorted(CACHE_DIR.glob('daily_*.parquet'))
-        if daily_files:
-            _stem = daily_files[-1].stem
-            _fetch_day = _stem.replace('daily_', '')
-            _data_max = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "?"
-            if _fetch_day == _data_max:
-                _caption_parts.append(f"📅 資料日期 **{_fetch_day}**")
-            else:
-                _caption_parts.append(f"📅 檔名 **{_fetch_day}** / 最新交易日 **{_data_max}**")
-
-        # ── 抓取時戳:讀 last_fetch_daily.txt 的「內容」,不靠 mtime(git pull 會重置) ──
-        # 含時間才能判斷盤中 (< 13:30) 或盤後 (≥ 13:30);若帶 FALLBACK 標記 = 本次抓失敗用舊檔
-        _ts_file = CACHE_DIR / "last_fetch_daily.txt"
-        if _ts_file.exists():
-            _fetch_raw = _ts_file.read_text(encoding="utf-8").strip()
-            _is_fallback = "FALLBACK" in _fetch_raw
-            _fetch_ts = _fetch_raw.replace("FALLBACK", "").strip()
-            _suffix = ""
-            try:
-                _hh_mm = _fetch_ts.split(" ")[1][:5]   # 'HH:MM'
-                _h, _m = int(_hh_mm.split(":")[0]), int(_hh_mm.split(":")[1])
-                _suffix = " 🌙 盤後" if (_h, _m) >= (13, 30) else " ⏰ 盤中"
-            except Exception:
-                pass
-            if _is_fallback:
-                _suffix += " ⚠️ <span style='color:#d97706'>**本次抓取失敗,仍為前次資料**</span>"
-            _caption_parts.append(f"🕐 抓取於 **{_fetch_ts}**{_suffix}")
-    except Exception:
-        pass
-    st.caption(" · ".join(_caption_parts))
-
-    # ── 盤中提醒:< 14:00 抓的是即時價,警告使用者 ──
-    _now = datetime.now()
-    _is_market_hours = (
-        _now.weekday() < 5 and
-        ((_now.hour == 9 and _now.minute >= 0) or
-         (10 <= _now.hour < 13) or
-         (_now.hour == 13 and _now.minute <= 30))
-    )
-    if _is_market_hours:
-        st.warning(
-            "⏰ **目前盤中**,抓的會是『即時價』而非『收盤價』。\n"
-            "**建議 14:00 後再強制重抓**,才會拿到完整收盤資料。"
-        )
-
-    if st.session_state.get('show_update_success'):
-        st.toast("✅ 雲端資料檢查/更新完成!", icon="🎉")
-        st.session_state.show_update_success = False
-    if st.session_state.get('show_force_daily_success'):
-        st.toast("✅ 日 K 強制更新完成!", icon="🔄")
-        st.session_state.show_force_daily_success = False
-
-    # ── 兩顆按鈕並排顯示(左:標準抓取 / 右:強制更新日 K) ──
-    FORCE_DAILY_COOLDOWN = 120  # 2 分鐘
-    _last_force_ts = st.session_state.get('last_force_daily_ts', 0)
-    _elapsed = time.time() - _last_force_ts
-    _on_cooldown = _elapsed < FORCE_DAILY_COOLDOWN
-
-    _btn_col1, _btn_col2 = st.columns(2)
-
-    with _btn_col1:
-        _click_fetch = st.button(
-            "📥 抓取今日最新資料", type="secondary", use_container_width=True,
-            help="標準模式:若各類資源今天已抓過就略過。預設排程跑的就是這個。"
-        )
-
-    with _btn_col2:
-        if _on_cooldown:
-            _remaining = int(FORCE_DAILY_COOLDOWN - _elapsed)
-            st.button(
-                f"🔄 強制更新日 K(冷卻 {_remaining} 秒)",
-                disabled=True, use_container_width=True
-            )
-            _click_force = False
-        else:
-            _click_force = st.button(
-                "🔄 強制更新日 K", type="primary", use_container_width=True,
-                help=(
-                    "無視當日 cache,重新抓取**所有股票**的日 K 資料。\n\n"
-                    "**用途**:盤中已經跑過、要拿到真正收盤價時(14:00 後再按)。\n"
-                    "**只重抓 daily**:法人/融資券/營收/大戶 仍沿用今日 cache,不浪費 API 額度。\n"
-                    "**冷卻**:2 分鐘內只能按一次。"
-                )
-            )
-
-    # ── 按鈕 1:標準抓取(略過已有當日 cache) ──
-    if _click_fetch:
-        st.toast("⏳ 系統已收到請求,開始比對資料...", icon="🤖")
-        with st.spinner("正在執行資料更新... (若轉圈超過 2 分鐘,可能是主機記憶體不足崩潰)"):
-            try:
-                result = subprocess.run([sys.executable, "fetch_cache.py"],
-                                        capture_output=True, text=True, check=True)
-                st.cache_data.clear()
-                st.session_state.show_update_success = True
-                st.rerun()
-            except subprocess.CalledProcessError as e:
-                st.error("❌ 雲端腳本執行失敗!")
-                st.code(e.stderr)
-            except Exception as e:
-                st.error(f"❌ 發生未知的錯誤:{e}")
-
-    # ── 按鈕 2:強制更新日 K(無視 cache,只重抓 daily) ──
-    if _click_force:
-        with st.status("正在強制重抓 daily K 線...", expanded=True) as _status:
-            try:
-                st.write("⏳ 啟動 `fetch_cache.py --force-daily`,預估 1~3 分鐘...")
-                result = subprocess.run(
-                    [sys.executable, "fetch_cache.py", "--force-daily"],
-                    capture_output=True, text=True, timeout=600
-                )
-                if result.returncode == 0:
-                    # 只顯示最後 8 行 log,避免訊息太長
-                    _last_lines = result.stdout.strip().split('\n')[-8:]
-                    st.code('\n'.join(_last_lines))
-                    st.session_state.last_force_daily_ts = time.time()
-                    st.session_state.show_force_daily_success = True
-                    # 清掉所有 cache_data,讓 UI 重新讀新檔
-                    st.cache_data.clear()
-                    _status.update(label="✅ daily K 線已更新", state="complete")
-                    time.sleep(1)
-                    st.rerun()
+    # ── 雲端更新按鈕區塊(預設摺疊,需要時點開) ─────────────────────────
+    # 改成 expander 是為了把「平常不會用到的兩顆按鈕」收起來,讓頂部更乾淨。
+    # 預設只在 freshness 為 warn / error 時自動展開(代表使用者該抓資料)。
+    _update_default_expanded = _freshness["level"] in ("warn", "error")
+    with st.expander("🔄 資料更新 / 上次抓取時戳", expanded=_update_default_expanded):
+        _caption_parts = ["雲端環境專用:點擊後從網路抓取最新台股資料。"]
+        try:
+            daily_files = sorted(CACHE_DIR.glob('daily_*.parquet'))
+            if daily_files:
+                _stem = daily_files[-1].stem
+                _fetch_day = _stem.replace('daily_', '')
+                _data_max = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "?"
+                if _fetch_day == _data_max:
+                    _caption_parts.append(f"📅 資料日期 **{_fetch_day}**")
                 else:
-                    st.error(f"❌ 抓取失敗(returncode={result.returncode})")
-                    st.code(result.stderr[-500:] if result.stderr else "(無錯誤輸出)")
-                    _status.update(label="❌ 失敗", state="error")
-            except subprocess.TimeoutExpired:
-                st.error("⏱️ 抓取逾時(超過 10 分鐘),已中止。可能是 yfinance 異常。")
-                _status.update(label="❌ 逾時", state="error")
-            except Exception as e:
-                st.error(f"❌ 例外:{e}")
-                _status.update(label="❌ 例外", state="error")
+                    _caption_parts.append(f"📅 檔名 **{_fetch_day}** / 最新交易日 **{_data_max}**")
+
+            # ── 抓取時戳:讀 last_fetch_daily.txt 的「內容」,不靠 mtime(git pull 會重置) ──
+            # 含時間才能判斷盤中 (< 13:30) 或盤後 (≥ 13:30);若帶 FALLBACK 標記 = 本次抓失敗用舊檔
+            _ts_file = CACHE_DIR / "last_fetch_daily.txt"
+            if _ts_file.exists():
+                _fetch_raw = _ts_file.read_text(encoding="utf-8").strip()
+                _is_fallback = "FALLBACK" in _fetch_raw
+                _fetch_ts = _fetch_raw.replace("FALLBACK", "").strip()
+                _suffix = ""
+                try:
+                    _hh_mm = _fetch_ts.split(" ")[1][:5]   # 'HH:MM'
+                    _h, _m = int(_hh_mm.split(":")[0]), int(_hh_mm.split(":")[1])
+                    _suffix = " 🌙 盤後" if (_h, _m) >= (13, 30) else " ⏰ 盤中"
+                except Exception:
+                    pass
+                if _is_fallback:
+                    _suffix += " ⚠️ <span style='color:#d97706'>**本次抓取失敗,仍為前次資料**</span>"
+                _caption_parts.append(f"🕐 抓取於 **{_fetch_ts}**{_suffix}")
+        except Exception:
+            pass
+        st.caption(" · ".join(_caption_parts))
+
+        # ── 盤中提醒:< 14:00 抓的是即時價,警告使用者 ──
+        _now = datetime.now()
+        _is_market_hours = (
+            _now.weekday() < 5 and
+            ((_now.hour == 9 and _now.minute >= 0) or
+             (10 <= _now.hour < 13) or
+             (_now.hour == 13 and _now.minute <= 30))
+        )
+        if _is_market_hours:
+            st.warning(
+                "⏰ **目前盤中**,抓的會是『即時價』而非『收盤價』。\n"
+                "**建議 14:00 後再強制重抓**,才會拿到完整收盤資料。"
+            )
+
+        if st.session_state.get('show_update_success'):
+            st.toast("✅ 雲端資料檢查/更新完成!", icon="🎉")
+            st.session_state.show_update_success = False
+        if st.session_state.get('show_force_daily_success'):
+            st.toast("✅ 日 K 強制更新完成!", icon="🔄")
+            st.session_state.show_force_daily_success = False
+
+        # ── 兩顆按鈕並排顯示(左:標準抓取 / 右:強制更新日 K) ──
+        FORCE_DAILY_COOLDOWN = 120  # 2 分鐘
+        _last_force_ts = st.session_state.get('last_force_daily_ts', 0)
+        _elapsed = time.time() - _last_force_ts
+        _on_cooldown = _elapsed < FORCE_DAILY_COOLDOWN
+
+        _btn_col1, _btn_col2 = st.columns(2)
+
+        with _btn_col1:
+            _click_fetch = st.button(
+                "📥 抓取今日最新資料", type="secondary", use_container_width=True,
+                help="標準模式:若各類資源今天已抓過就略過。預設排程跑的就是這個。"
+            )
+
+        with _btn_col2:
+            if _on_cooldown:
+                _remaining = int(FORCE_DAILY_COOLDOWN - _elapsed)
+                st.button(
+                    f"🔄 強制更新日 K(冷卻 {_remaining} 秒)",
+                    disabled=True, use_container_width=True
+                )
+                _click_force = False
+            else:
+                _click_force = st.button(
+                    "🔄 強制更新日 K", type="primary", use_container_width=True,
+                    help=(
+                        "無視當日 cache,重新抓取**所有股票**的日 K 資料。\n\n"
+                        "**用途**:盤中已經跑過、要拿到真正收盤價時(14:00 後再按)。\n"
+                        "**只重抓 daily**:法人/融資券/營收/大戶 仍沿用今日 cache,不浪費 API 額度。\n"
+                        "**冷卻**:2 分鐘內只能按一次。"
+                    )
+                )
+
+        # ── 按鈕 1:標準抓取(略過已有當日 cache) ──
+        if _click_fetch:
+            st.toast("⏳ 系統已收到請求,開始比對資料...", icon="🤖")
+            with st.spinner("正在執行資料更新... (若轉圈超過 2 分鐘,可能是主機記憶體不足崩潰)"):
+                try:
+                    result = subprocess.run([sys.executable, "fetch_cache.py"],
+                                            capture_output=True, text=True, check=True)
+                    st.cache_data.clear()
+                    st.session_state.show_update_success = True
+                    st.rerun()
+                except subprocess.CalledProcessError as e:
+                    st.error("❌ 雲端腳本執行失敗!")
+                    st.code(e.stderr)
+                except Exception as e:
+                    st.error(f"❌ 發生未知的錯誤:{e}")
+
+        # ── 按鈕 2:強制更新日 K(無視 cache,只重抓 daily) ──
+        if _click_force:
+            with st.status("正在強制重抓 daily K 線...", expanded=True) as _status:
+                try:
+                    st.write("⏳ 啟動 `fetch_cache.py --force-daily`,預估 1~3 分鐘...")
+                    result = subprocess.run(
+                        [sys.executable, "fetch_cache.py", "--force-daily"],
+                        capture_output=True, text=True, timeout=600
+                    )
+                    if result.returncode == 0:
+                        # 只顯示最後 8 行 log,避免訊息太長
+                        _last_lines = result.stdout.strip().split('\n')[-8:]
+                        st.code('\n'.join(_last_lines))
+                        st.session_state.last_force_daily_ts = time.time()
+                        st.session_state.show_force_daily_success = True
+                        # 清掉所有 cache_data,讓 UI 重新讀新檔
+                        st.cache_data.clear()
+                        _status.update(label="✅ daily K 線已更新", state="complete")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(f"❌ 抓取失敗(returncode={result.returncode})")
+                        st.code(result.stderr[-500:] if result.stderr else "(無錯誤輸出)")
+                        _status.update(label="❌ 失敗", state="error")
+                except subprocess.TimeoutExpired:
+                    st.error("⏱️ 抓取逾時(超過 10 分鐘),已中止。可能是 yfinance 異常。")
+                    _status.update(label="❌ 逾時", state="error")
+                except Exception as e:
+                    st.error(f"❌ 例外:{e}")
+                    _status.update(label="❌ 例外", state="error")
 
 # ── Session state 初始化 ────────────────────────────────────────────────────
 DEFAULTS = {
@@ -627,12 +723,24 @@ if meta is not None and df is not None:
     _qc1.metric("📋 今日達標", f"{_n_hit} 檔",
                 "🔥 高張力" if _n_hit >= 20 else ("✅ 正常" if _n_hit >= 5 else "⚠ 稀少"))
 
-    # 2. 大盤狀態(台股紅漲綠跌,用 inverse 讓正報酬顯紅)
-    _bull = meta.get('market_bullish', True)
-    _twii_pct = meta.get('twii_pct')
-    _qc2.metric("📈 大盤", "多頭" if _bull else "空頭",
-                f"{_twii_pct:+.2f}%" if pd.notna(_twii_pct) else "N/A",
-                delta_color="inverse")
+    # 2. 市場溫度 + 7 日趨勢(原「大盤」訊息已在頂部狀態總覽,改放溫度)
+    _temp_metric_value, _temp_metric_delta = "—", ""
+    try:
+        _hist_sent = load_sentiment_history(CACHE_DIR)
+        if _hist_sent:
+            _today_temp  = _hist_sent[-1].get("temp")
+            _today_label = _hist_sent[-1].get("label", "")
+            _temp_metric_value = f"{_today_temp}/100" if _today_temp is not None else "—"
+            if len(_hist_sent) >= 2:
+                _ref = _hist_sent[-min(7, len(_hist_sent))]
+                _delta = _today_temp - _ref.get("temp", _today_temp)
+                _arrow = "↗" if _delta > 2 else ("↘" if _delta < -2 else "→")
+                _temp_metric_delta = f"{_arrow} 近 {len(_hist_sent)} 日 {_delta:+d} · {_today_label}"
+            else:
+                _temp_metric_delta = f"{_today_label} (累積中)"
+    except Exception:
+        pass
+    _qc2.metric("🌡️ 市場溫度", _temp_metric_value, _temp_metric_delta, delta_color="off")
 
     # 3. 最強產業
     _top_industry = "—"
