@@ -8,7 +8,7 @@
 4. 融資週變化                 — 既有 margin parquet 算
 5. 融資水位百分位             — 既有 margin parquet 算(近 90 日)
 6. 外資期貨淨口數             — TAIFEX 大台「臺股期貨」未平倉
-                              (門檻 ±5k/±20k,2024~2025 規模校準)
+                              (門檻 ±10k/±30k,2025~2026 規模校準)
 7. 散戶方向估算               — TAIFEX 微型臺指期貨非法人淨口數取反
                               (微台散戶占比 ~ 90%,小型臺指期貨為備援)
 
@@ -18,8 +18,10 @@
 - 期貨門檻 / 散戶來源 隨市場結構演進,需定期校準
 """
 import time
+import json
 from datetime import datetime, timedelta
 from io import StringIO
+from pathlib import Path
 
 import pandas as pd
 import numpy as np
@@ -321,10 +323,13 @@ def get_fi_futures_net() -> dict:
     """外資期貨淨口數(大台 臺股期貨)。
 
     外資未平倉淨多口 > 0 → 偏多;< 0 → 偏空。
-    門檻區間(2024~2025 規模校準):
-        ±5,000   = 中性
-        ±20,000  = 顯著方向
-    歷史背景:2018~2020 區間約 ±15k,2024 後因外資總部位放大常見 ±20k 以上。
+    門檻區間(2025~2026 規模校準):
+        ±10,000  = 中性
+        ±30,000  = 顯著方向
+    歷史演進:
+        2018~2020  ±15k 即顯著(門檻 ±5k/±15k)
+        2021~2023  外資部位放大(門檻 ±10k/±20k)
+        2025~2026  動輒 ±30k+,2025-Q4~2026 出現 -40k 以上紀錄 → 現行門檻
     """
     _EMPTY = {"value": None, "pct_rank": None, "label": "N/A", "score": None, "icon": "⚪"}
     try:
@@ -340,13 +345,13 @@ def get_fi_futures_net() -> dict:
 
         net = int(row["oi_net_vol"].iloc[0])
 
-        if net > 20000:
+        if net > 30000:
             label, icon, score = "強多", "🟢", 75
-        elif net > 5000:
+        elif net > 10000:
             label, icon, score = "偏多", "🟢", 65
-        elif net > -5000:
+        elif net > -10000:
             label, icon, score = "中性", "🟡", 50
-        elif net > -20000:
+        elif net > -30000:
             label, icon, score = "偏空", "🟠", 35
         else:
             label, icon, score = "強空", "🔴", 20
@@ -357,18 +362,63 @@ def get_fi_futures_net() -> dict:
         return _EMPTY
 
 
-def get_retail_futures_ratio() -> dict:
+# ── 散戶期貨歷史(用於百分位計算)─────────────────────────────────────────
+# 每次成功抓到當日散戶淨口數時,就 append 到這個 JSON 檔,
+# 累積到 ≥ 20 日後改用「歷史百分位」評分(更穩健、不需手動校準門檻)。
+_RETAIL_HISTORY_FILE = "retail_futures_history.json"
+_RETAIL_HISTORY_KEEP = 90    # 只保留最近 90 日
+_RETAIL_HISTORY_MIN  = 20    # 低於此筆數時,百分位不可靠 → 退回絕對門檻評分
+
+
+def _load_retail_history(cache_dir):
+    f = Path(cache_dir) / _RETAIL_HISTORY_FILE
+    if not f.exists():
+        return []
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _save_retail_history(cache_dir, history):
+    f = Path(cache_dir) / _RETAIL_HISTORY_FILE
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"   ⚠ retail history 寫入失敗: {e}")
+
+
+def _update_retail_history(cache_dir, retail_net, source):
+    """寫入今日散戶淨口數,維持最近 90 日;同日重跑會覆蓋。回傳更新後的 history。"""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    history = _load_retail_history(cache_dir)
+    history = [h for h in history if h.get("date") != today_str]
+    history.append({"date": today_str, "retail_net": int(retail_net), "source": source})
+    history = sorted(history, key=lambda h: h["date"])[-_RETAIL_HISTORY_KEEP:]
+    _save_retail_history(cache_dir, history)
+    return history
+
+
+def get_retail_futures_ratio(cache_dir=None) -> dict:
     """散戶方向估算(微型臺指期貨 — 最純散戶代理)。
 
     用「三大法人淨口數加總取反」估算散戶方向(零和市場近似):
         散戶淨口數 ≈ -(自營商 + 投信 + 外資 合計淨口數)
-    正值 = 散戶偏多(反指標,偏謹慎);負值 = 散戶偏空(逆勢可能偏多)。
+
+    評分方式(雙模式):
+      - 累積歷史 ≥ 20 日 → 用「過去 90 日百分位」評分(主要,反指標)
+            高百分位 = 散戶比近 3 個月任何時候都多單 → 反向警訊
+            低百分位 = 散戶極度悲觀 → 反向利多
+      - 累積歷史 < 20 日 → 用絕對口數門檻 ±5k/±20k 評分(過渡用)
+            門檻會隨市場規模演進,長期不可靠,故僅當歷史累積期間使用
 
     主來源:微型臺指期貨(散戶占比 ~ 90%,訊號最純)
     備援:  小型臺指期貨(MXF,散戶占比 ~ 50%)
-    門檻區間以微台尺度標定;若降級為小台,雜訊較高但方向仍可參考。
+    歷史檔:cache/retail_futures_history.json,自動累積維持最近 90 日
     """
-    _EMPTY = {"value": None, "label": "N/A", "score": None, "icon": "⚪", "source": None}
+    _EMPTY = {"value": None, "pct_rank": None, "n_days": 0,
+              "label": "N/A", "score": None, "icon": "⚪", "source": None}
     try:
         df = _fetch_taifex_institutional()
         if df is None or df.empty:
@@ -387,20 +437,57 @@ def get_retail_futures_ratio() -> dict:
         inst_net_total = int(sub["oi_net_vol"].sum())
         retail_est = -inst_net_total
 
-        # 微台合約值 ~ 1/10 小台,絕對口數天然較大,門檻照微台尺度
-        # (萬一降級為小台,雜訊較高但區間方向仍對)
-        if retail_est > 20000:
-            label, icon, score = "散戶多", "🟠", 40   # 反向警訊
-        elif retail_est > 5000:
+        # 寫入歷史(若提供 cache_dir);無 cache_dir 時跳過,該次只用絕對門檻
+        history = []
+        if cache_dir is not None:
+            try:
+                history = _update_retail_history(cache_dir, retail_est, source)
+            except Exception as e:
+                print(f"   ⚠ retail history 更新失敗(略過,用絕對門檻): {e}")
+
+        # 評分:百分位優先,不足退回絕對門檻
+        # ────────────────────────────────────────────────────────────────
+        # 為了百分位的穩定性,只用相同 source 的歷史記錄(避免微台/小台混算)
+        same_source_hist = [h["retail_net"] for h in history if h.get("source") == source]
+        n_days = len(same_source_hist)
+
+        if n_days >= _RETAIL_HISTORY_MIN:
+            # 百分位制(反指標):
+            # 當前值在過去歷史中的百分位,> 80% = 散戶極多;< 20% = 散戶極空
+            arr = sorted(same_source_hist)
+            below = sum(1 for v in arr if v < retail_est)
+            pct = float(below / len(arr) * 100)
+
+            if pct > 80:
+                label, icon, score = "散戶極多", "🔴", 25   # 反向警訊(分數低)
+            elif pct > 60:
+                label, icon, score = "散戶偏多", "🟠", 40
+            elif pct >= 40:
+                label, icon, score = "中性", "🟡", 55
+            elif pct >= 20:
+                label, icon, score = "散戶偏空", "🟢", 65
+            else:
+                label, icon, score = "散戶極空", "🟢", 75   # 反向利多(分數高)
+
+            return {"value": retail_est, "pct_rank": round(pct, 0), "n_days": n_days,
+                    "label": label, "score": score, "icon": icon, "source": source}
+
+        # 資料不足 → 退回絕對門檻(微台尺度,2025~2026 校準)
+        # 註:此區間僅在歷史 < 20 日的過渡期使用,長期由百分位制接手
+        if retail_est > 30000:
+            label, icon, score = "散戶多", "🟠", 40
+        elif retail_est > 10000:
             label, icon, score = "略偏多", "🟡", 48
-        elif retail_est > -5000:
+        elif retail_est > -10000:
             label, icon, score = "中性", "🟢", 55
-        elif retail_est > -20000:
+        elif retail_est > -30000:
             label, icon, score = "略偏空", "🟢", 62
         else:
-            label, icon, score = "散戶空", "🟢", 70   # 反向利多
+            label, icon, score = "散戶空", "🟢", 70
 
-        return {"value": retail_est, "label": label, "score": score, "icon": icon, "source": source}
+        return {"value": retail_est, "pct_rank": None, "n_days": n_days,
+                "label": label, "score": score, "icon": icon, "source": source}
+
     except Exception as e:
         print(f"   ⚠ 散戶方向估算失敗: {e}")
         return _EMPTY
@@ -441,7 +528,7 @@ def compute_sentiment(cache_dir) -> dict:
         "margin_change":  get_margin_change(cache_dir),
         "margin_level":   get_margin_balance_level(cache_dir),
         "fi_futures":     get_fi_futures_net(),
-        "retail_futures": get_retail_futures_ratio(),
+        "retail_futures": get_retail_futures_ratio(cache_dir),
     }
 
     valid = {k: v for k, v in indicators.items() if v.get("score") is not None}
