@@ -168,7 +168,8 @@ def get_stock_institutional(stock_id: str) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-@st.cache_data(ttl=3600, show_spinner=False)
+# 1 hr → 5 min:yfinance 偶爾失敗會被快取空結果擋住,縮 TTL 讓恢復更快
+@st.cache_data(ttl=300, show_spinner=False)
 def _load_twii_cached() -> pd.DataFrame:
     try:
         data = yf.download("^TWII", period="2y", auto_adjust=True, progress=False, threads=False)
@@ -234,10 +235,16 @@ def _get_sentiment_and_persist():
 
 
 # ── 從 ^TWII parquet 算「多/空 + 今日漲跌% + 季線乖離」 ──
-# 不依賴 meta(meta 要等使用者按過「開始選股」才有),讓狀態列冷啟動就有大盤資訊
-@st.cache_data(ttl=300, show_spinner=False)
+# 不依賴 meta(meta 要等使用者按過「開始選股」才有),讓狀態列冷啟動就有大盤資訊。
+# 不自己加 @st.cache_data,直接用 _load_twii_cached 的 cache 即可,
+# 避免「上層也快取 None」造成雙重失敗卡住。
 def _market_summary_from_twii():
     df_twii = _load_twii_cached()
+    # 若上次抓失敗(空 df 被快取),session 內提供一次自動重試機會
+    if (df_twii is None or df_twii.empty) and not st.session_state.get("_twii_retry_used"):
+        st.session_state["_twii_retry_used"] = True
+        _load_twii_cached.clear()
+        df_twii = _load_twii_cached()
     if df_twii is None or df_twii.empty or len(df_twii) < 60:
         return None
     closes = df_twii['Close'].dropna()
