@@ -11,6 +11,8 @@
                               (門檻 ±10k/±30k,2025~2026 規模校準)
 7. 散戶方向估算               — TAIFEX 微型臺指期貨非法人淨口數取反
                               (微台散戶占比 ~ 90%,小型臺指期貨為備援)
+                              一律輸出 0~100% 部位指數(反指標);
+                              累積 ≥ 20 日後自動切換到歷史百分位
 
 設計原則:
 - 任一資料源失敗,該指標標 N/A,但**其他指標仍正常算溫度**(部分降級)
@@ -400,24 +402,55 @@ def _update_retail_history(cache_dir, retail_net, source):
     return history
 
 
+# 線性歸一化半幅(2025~2026 校準):±30k 對應 0% / 100%
+_RETAIL_LINEAR_FULLSCALE = 30000
+
+
+def _retail_linear_pct(retail_net: int) -> float:
+    """把散戶淨口數線性映射到 0~100%(50% = 中性)。
+        retail_net = 0      → 50%
+        retail_net = +30000 → 100% (極多)
+        retail_net = -30000 →   0% (極空)
+    超過 ±30k 會夾到 0% 或 100%。
+    歷史累積 ≥ 20 日後改用真實 90 日百分位取代此估算。
+    """
+    pct = 50.0 + (retail_net / _RETAIL_LINEAR_FULLSCALE) * 50.0
+    return max(0.0, min(100.0, pct))
+
+
+def _retail_label_by_pct(pct: float):
+    """把 0~100% 映射到標籤 / 圖示 / 分數(反指標 — % 高代表散戶多 → 警訊)。"""
+    if pct > 80:
+        return "散戶極多", "🔴", 25
+    elif pct > 60:
+        return "散戶偏多", "🟠", 40
+    elif pct >= 40:
+        return "中性", "🟡", 55
+    elif pct >= 20:
+        return "散戶偏空", "🟢", 65
+    else:
+        return "散戶極空", "🟢", 75
+
+
 def get_retail_futures_ratio(cache_dir=None) -> dict:
     """散戶方向估算(微型臺指期貨 — 最純散戶代理)。
 
     用「三大法人淨口數加總取反」估算散戶方向(零和市場近似):
         散戶淨口數 ≈ -(自營商 + 投信 + 外資 合計淨口數)
 
-    評分方式(雙模式):
-      - 累積歷史 ≥ 20 日 → 用「過去 90 日百分位」評分(主要,反指標)
-            高百分位 = 散戶比近 3 個月任何時候都多單 → 反向警訊
-            低百分位 = 散戶極度悲觀 → 反向利多
-      - 累積歷史 < 20 日 → 用絕對口數門檻 ±5k/±20k 評分(過渡用)
-            門檻會隨市場規模演進,長期不可靠,故僅當歷史累積期間使用
+    一律輸出 **散戶部位 0~100%**(50 = 中性、100 = 極多、0 = 極空),
+    使用者介面語意統一,內部依歷史長度自動切換量測方式:
+      - 累積歷史 ≥ 20 日 → **歷史百分位**(更穩、永不需校準) → pct = % rank
+      - 累積歷史 < 20 日 → **線性歸一化**(以 ±30k 為半幅做轉換,作過渡用)
 
     主來源:微型臺指期貨(散戶占比 ~ 90%,訊號最純)
     備援:  小型臺指期貨(MXF,散戶占比 ~ 50%)
     歷史檔:cache/retail_futures_history.json,自動累積維持最近 90 日
+
+    回傳 dict 多出 `mode` 欄位:"percentile" / "linear" / None,
+    UI 可據此標示「歷史百分位」或「線性估算」。
     """
-    _EMPTY = {"value": None, "pct_rank": None, "n_days": 0,
+    _EMPTY = {"value": None, "pct": None, "n_days": 0, "mode": None,
               "label": "N/A", "score": None, "icon": "⚪", "source": None}
     try:
         df = _fetch_taifex_institutional()
@@ -437,56 +470,34 @@ def get_retail_futures_ratio(cache_dir=None) -> dict:
         inst_net_total = int(sub["oi_net_vol"].sum())
         retail_est = -inst_net_total
 
-        # 寫入歷史(若提供 cache_dir);無 cache_dir 時跳過,該次只用絕對門檻
+        # 寫入歷史(若提供 cache_dir);無 cache_dir 時跳過(只能用線性估算)
         history = []
         if cache_dir is not None:
             try:
                 history = _update_retail_history(cache_dir, retail_est, source)
             except Exception as e:
-                print(f"   ⚠ retail history 更新失敗(略過,用絕對門檻): {e}")
+                print(f"   ⚠ retail history 更新失敗(略過,改用線性估算): {e}")
 
-        # 評分:百分位優先,不足退回絕對門檻
-        # ────────────────────────────────────────────────────────────────
-        # 為了百分位的穩定性,只用相同 source 的歷史記錄(避免微台/小台混算)
+        # 只用相同 source 的歷史(避免微台/小台混算)
         same_source_hist = [h["retail_net"] for h in history if h.get("source") == source]
         n_days = len(same_source_hist)
 
         if n_days >= _RETAIL_HISTORY_MIN:
-            # 百分位制(反指標):
-            # 當前值在過去歷史中的百分位,> 80% = 散戶極多;< 20% = 散戶極空
+            # 模式 A:歷史百分位
             arr = sorted(same_source_hist)
             below = sum(1 for v in arr if v < retail_est)
             pct = float(below / len(arr) * 100)
-
-            if pct > 80:
-                label, icon, score = "散戶極多", "🔴", 25   # 反向警訊(分數低)
-            elif pct > 60:
-                label, icon, score = "散戶偏多", "🟠", 40
-            elif pct >= 40:
-                label, icon, score = "中性", "🟡", 55
-            elif pct >= 20:
-                label, icon, score = "散戶偏空", "🟢", 65
-            else:
-                label, icon, score = "散戶極空", "🟢", 75   # 反向利多(分數高)
-
-            return {"value": retail_est, "pct_rank": round(pct, 0), "n_days": n_days,
-                    "label": label, "score": score, "icon": icon, "source": source}
-
-        # 資料不足 → 退回絕對門檻(微台尺度,2025~2026 校準)
-        # 註:此區間僅在歷史 < 20 日的過渡期使用,長期由百分位制接手
-        if retail_est > 30000:
-            label, icon, score = "散戶多", "🟠", 40
-        elif retail_est > 10000:
-            label, icon, score = "略偏多", "🟡", 48
-        elif retail_est > -10000:
-            label, icon, score = "中性", "🟢", 55
-        elif retail_est > -30000:
-            label, icon, score = "略偏空", "🟢", 62
+            mode = "percentile"
         else:
-            label, icon, score = "散戶空", "🟢", 70
+            # 模式 B:線性歸一化(過渡用)
+            pct = _retail_linear_pct(retail_est)
+            mode = "linear"
 
-        return {"value": retail_est, "pct_rank": None, "n_days": n_days,
-                "label": label, "score": score, "icon": icon, "source": source}
+        label, icon, score = _retail_label_by_pct(pct)
+
+        return {"value": retail_est, "pct": round(pct, 0), "n_days": n_days,
+                "mode": mode, "label": label, "score": score, "icon": icon,
+                "source": source}
 
     except Exception as e:
         print(f"   ⚠ 散戶方向估算失敗: {e}")
