@@ -303,7 +303,12 @@ def session_get(url, params=None, method="GET", data=None, timeout=15, max_retri
     return None
 
 # ==========================================
-# [1] 官方股票清單爬蟲 (ISIN 主要 + OpenAPI 備用)
+# [1] 官方股票清單爬蟲 (OpenAPI 主要 + ISIN 備用)
+# ──────────────────────────────────────────
+# 原本以 isin.twse.com.tw HTML 為主來源,但對雲端 IP 限速嚴重,
+# 加上回應為 ~1MB HTML 表格 + pd.read_html 解析,單次 30-90 秒,
+# GitHub Actions 上常看起來像「卡住」。OpenAPI 走 JSON,
+# 體積小、速度快(< 10 秒)且無被封鎖紀錄,因此改為主要來源。
 # ==========================================
 def _filter_stock_info(df):
     """共用過濾邏輯：金融類 / ETF / -KY / 特別股"""
@@ -317,8 +322,8 @@ def _filter_stock_info(df):
     return df[mask].drop_duplicates(subset=["stock_id"]).reset_index(drop=True)
 
 def _fetch_stock_info_openapi():
-    """備用：從 TWSE OpenAPI 抓股票清單（無需 SSL，JSON 格式）"""
-    print("   [備用] 改用 TWSE OpenAPI 抓取股票清單...")
+    """主來源:從 TWSE OpenAPI 抓股票清單(JSON,< 10 秒)。"""
+    print("   主來源:TWSE OpenAPI(JSON,通常 < 10 秒)")
     api_urls = {
         "twse": "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",  # 上市
         "tpex": "https://openapi.twse.com.tw/v1/opendata/t187ap03_O",  # 上櫃
@@ -327,9 +332,12 @@ def _fetch_stock_info_openapi():
     for mode, url in api_urls.items():
         try:
             import requests as _req
+            t0 = time.time()
+            print(f"   ↓ 下載 OpenAPI {mode} ...", flush=True)
             resp = _req.get(url, timeout=20, verify=False)
+            elapsed = time.time() - t0
             if not resp.content.strip() or resp.text.lstrip().startswith("<"):
-                print(f"   !!! OpenAPI {mode} 無效回應，略過")
+                print(f"   !!! OpenAPI {mode} 無效回應({elapsed:.1f}s),略過")
                 continue
             data = resp.json()
             rows = []
@@ -345,18 +353,28 @@ def _fetch_stock_info_openapi():
                 })
             if rows:
                 all_stocks.append(pd.DataFrame(rows))
-                print(f"   OpenAPI {mode}: {len(rows)} 檔")
+                print(f"   OpenAPI {mode}: {len(rows)} 檔({elapsed:.1f}s)", flush=True)
         except Exception as e:
             print(f"   !!! OpenAPI {mode} 失敗: {e}")
     if not all_stocks:
         return pd.DataFrame()
     return _filter_stock_info(pd.concat(all_stocks, ignore_index=True))
 
-def fetch_public_stock_info():
-    urls = {
+def _fetch_stock_info_isin(modes: list = None):
+    """備援:從 isin.twse.com.tw 抓 HTML 股票清單(慢,雲端 IP 限速重)。
+
+    modes: 指定要抓的子集(['twse']/['tpex']/None=全抓)。
+           OpenAPI 部分失敗時,只補抓缺的市場可省一半時間。
+    """
+    all_urls = {
         "twse": "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",  # 上市
         "tpex": "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4",  # 上櫃
     }
+    urls = {k: v for k, v in all_urls.items() if (modes is None or k in modes)}
+    if not urls:
+        return pd.DataFrame()
+    print(f"   [備援] 改用 isin.twse.com.tw HTML 來源 modes={list(urls.keys())} "
+          f"(可能 1-3 分鐘)...", flush=True)
     import ssl, urllib.request
     _ssl_ctx = ssl.create_default_context()
     _ssl_ctx.check_hostname = False
@@ -366,8 +384,12 @@ def fetch_public_stock_info():
     for mode, url in urls.items():
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, context=_ssl_ctx, timeout=20) as r:
+            t0 = time.time()
+            print(f"   ↓ 下載 ISIN {mode} (timeout=30s,逾時改用昨日清單降級)...", flush=True)
+            with urllib.request.urlopen(req, context=_ssl_ctx, timeout=30) as r:
                 raw = r.read()
+            print(f"      下載完成 {len(raw)/1024:.0f} KB ({time.time()-t0:.1f}s),解析 HTML 表格中...",
+                  flush=True)
             text = raw.decode("ms950", errors="replace")
             df = pd.read_html(StringIO(text))[0]
         except Exception as e:
@@ -392,19 +414,73 @@ def fetch_public_stock_info():
             df["industry_category"] = df["產業別"]
             df["type"]              = mode
             all_stocks.append(df[["stock_id", "stock_name", "industry_category", "type"]])
-            print(f"   ISIN {mode}: {len(df)} 檔解析完成")
+            print(f"   ISIN {mode}: {len(df)} 檔解析完成", flush=True)
         except Exception as e:
             print(f"   !!! {mode} 清單解析失敗: {type(e).__name__}: {e}")
             continue
         time.sleep(2)
 
-    # ISIN 全部失敗 → 自動切換備用 OpenAPI
     if not all_stocks:
-        print("   !!! ISIN 來源全部失敗，自動切換備用 OpenAPI...")
-        return _fetch_stock_info_openapi()
+        return pd.DataFrame()
 
     final_info = pd.concat(all_stocks, ignore_index=True)
     return _filter_stock_info(final_info)
+
+
+def _load_yesterday_info_subset(modes):
+    """讀最近一份 info_*.parquet,只回需要 modes 的部分(降級用)。
+    用昨日清單頂替缺失市場——每日上下市異動極少,延一天可接受。
+    """
+    try:
+        files = sorted(CACHE_DIR.glob("info_*.parquet"))
+        if not files:
+            return pd.DataFrame()
+        df = pd.read_parquet(files[-1])
+        if "type" not in df.columns:
+            return pd.DataFrame()
+        sub = df[df["type"].isin(modes)].copy()
+        if sub.empty:
+            return pd.DataFrame()
+        print(f"   ⤵ 降級:用昨日 {files[-1].name} 補抓 {modes} {len(sub)} 檔", flush=True)
+        return sub
+    except Exception as e:
+        print(f"   !!! 昨日 info parquet 讀取失敗: {e}")
+        return pd.DataFrame()
+
+
+def fetch_public_stock_info():
+    """股票清單主入口:三層降級。
+
+    Tier 1 — OpenAPI(快,< 10 秒)
+    Tier 2 — ISIN HTML(慢,1–3 分鐘,只補缺的市場)
+    Tier 3 — 昨日 info parquet(瞬時,只補仍缺的市場)
+    任一 tier 補齊就停。
+    """
+    df_api = _fetch_stock_info_openapi()
+    api_modes = set(df_api["type"].unique()) if (not df_api.empty and "type" in df_api.columns) else set()
+    missing = {"twse", "tpex"} - api_modes
+    if not missing:
+        return df_api
+
+    print(f"   !!! OpenAPI 缺 {sorted(missing)} 市場,試 ISIN HTML 補抓...", flush=True)
+    df_isin = _fetch_stock_info_isin(modes=sorted(missing))
+    isin_modes = set(df_isin["type"].unique()) if (not df_isin.empty and "type" in df_isin.columns) else set()
+    still_missing = missing - isin_modes
+
+    parts = [df for df in (df_api, df_isin) if not df.empty]
+
+    if still_missing:
+        print(f"   !!! ISIN 也未補齊,缺 {sorted(still_missing)},改用昨日 parquet 降級...", flush=True)
+        df_yest = _load_yesterday_info_subset(sorted(still_missing))
+        if not df_yest.empty:
+            parts.append(df_yest)
+
+    if not parts:
+        return pd.DataFrame()
+
+    combined = pd.concat(parts, ignore_index=True)
+    combined = combined.drop_duplicates(subset=["stock_id"], keep="first").reset_index(drop=True)
+    return combined
 
 # ==========================================
 # [2-3] TWSE / TPEx 法人與資券
@@ -859,7 +935,7 @@ print("=" * 65)
 # [1] 股票清單
 # info 為每日全量重抓（需反映最新上市/下市/更名），不做增量累積
 if need_fetch("info"):
-    print("[1] 抓取官方股票清單 (ISIN)...")
+    print("[1] 抓取官方股票清單 (OpenAPI 優先,ISIN 備援)...", flush=True)
     info = fetch_public_stock_info()
     if info.empty:
         print("!!! 清單取得失敗"); sys.exit(1)
