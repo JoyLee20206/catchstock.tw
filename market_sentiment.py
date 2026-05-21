@@ -222,18 +222,34 @@ def get_margin_balance_level(cache_dir) -> dict:
 
 
 # ── TAIFEX 三大法人期貨未平倉 ──────────────────────────────────────────────
-def _fetch_taifex_institutional(commodity_id: str = "TX") -> pd.DataFrame | None:
-    """從 TAIFEX 抓最近交易日三大法人期貨未平倉口數 CSV。
+# 模組級記憶體快取:同一次 process 內,大台/小台兩支函式共用一次 fetch
+_TAIFEX_CACHE = {"df": None, "ts": 0.0}
+_TAIFEX_TTL_SEC = 1800  # 30 分鐘
 
-    commodity_id: 'TX' (大台指) / 'MTX' (小台指)
-    欄位: date, contract, trader, long_vol, long_amt, short_vol, short_amt, net_vol, net_amt
+
+def _fetch_taifex_institutional() -> "pd.DataFrame | None":
+    """從 TAIFEX 抓最近交易日「三大法人期貨未平倉口數」(POST 表單)。
+
+    歷史上的 CSV GET 端點現在會回「查無資料」alert,改用 POST 抓 HTML 表格。
+    一次回傳全部商品 × 三身份別(自營商 / 投信 / 外資),呼叫端自行篩商品。
+
+    回傳 DataFrame,欄位:
+        product:     商品名稱(例:臺股期貨 / 小型臺指期貨 / 微型臺指期貨)
+        trader:      身份別(自營商 / 投信 / 外資)
+        oi_net_vol:  未平倉多空淨額口數(正=淨多、負=淨空)
     """
     import requests
 
+    # 模組級快取(同一進程 30 分鐘內共用)
+    now_ts = time.time()
+    if _TAIFEX_CACHE["df"] is not None and (now_ts - _TAIFEX_CACHE["ts"]) < _TAIFEX_TTL_SEC:
+        return _TAIFEX_CACHE["df"]
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-        "Referer": "https://www.taifex.com.tw/",
+        "Referer": "https://www.taifex.com.tw/cht/3/futContractsDate",
     }
+    url = "https://www.taifex.com.tw/cht/3/futContractsDate"
     today = datetime.now()
 
     for delta in range(0, 8):
@@ -241,78 +257,82 @@ def _fetch_taifex_institutional(commodity_id: str = "TX") -> pd.DataFrame | None
         if dt.weekday() >= 5:
             continue
         date_str = dt.strftime("%Y/%m/%d")
-        url = (
-            "https://www.taifex.com.tw/cht/3/futContractsDateDown"
-            f"?queryType=1&marketCode=0&dateaddcnt=0"
-            f"&commodity_id={commodity_id}&queryDate={date_str}"
-        )
+        form = {
+            "queryType":   "1",
+            "marketCode":  "0",
+            "dateaddcnt":  "",
+            "commodity_id": "TXF",      # 任填一個有效商品,回應會列出全部商品
+            "queryDate":   date_str,
+        }
         try:
-            resp = requests.get(url, headers=headers, timeout=12)
+            resp = requests.post(url, data=form, headers=headers, timeout=15)
             if resp.status_code != 200:
                 continue
 
-            # TAIFEX 可能回 UTF-8-sig 或 Big5
-            for enc in ("utf-8-sig", "big5", "utf-8"):
-                try:
-                    text = resp.content.decode(enc)
-                    break
-                except Exception:
-                    text = None
-            if not text or "外資" not in text:
+            text = resp.content.decode("utf-8", errors="replace")
+            if "外資" not in text or "臺股期貨" not in text:
                 continue
 
-            # 跳過標題行,只取含數字的資料行
-            rows = []
-            for line in text.splitlines():
-                stripped = line.strip().strip('"')
-                if not stripped or stripped.startswith("期貨"):
-                    continue
-                parts = [p.strip().strip('"').replace(",", "") for p in line.split(",")]
-                if len(parts) >= 8 and parts[0].startswith("20"):
-                    rows.append(parts[:9])
+            tables = pd.read_html(StringIO(text))
+            if not tables:
+                continue
+            tb = tables[0]
 
-            if not rows:
+            # 多層 header → 攤平為單層
+            if isinstance(tb.columns, pd.MultiIndex):
+                tb.columns = [c[-1] if isinstance(c, tuple) else c for c in tb.columns]
+
+            # 標準格式 15 欄:
+            #   0=序號, 1=商品名稱, 2=身份別,
+            #   3~8=交易口數欄,
+            #   9~14=未平倉餘額欄(多方口、多方金額、空方口、空方金額、多空淨額口、多空淨額金額)
+            if tb.shape[1] < 14:
                 continue
 
-            col_names = ["date", "contract", "trader",
-                         "long_vol", "long_amt", "short_vol", "short_amt",
-                         "net_vol", "net_amt"]
-            df = pd.DataFrame(rows, columns=col_names[:len(rows[0])])
+            df = pd.DataFrame({
+                "product":    tb.iloc[:, 1].astype(str).str.strip(),
+                "trader":     tb.iloc[:, 2].astype(str).str.strip(),
+                "oi_net_vol": pd.to_numeric(tb.iloc[:, 13], errors="coerce"),
+            })
+            # 只留三大法人列
+            df = df[df["trader"].isin(["自營商", "投信", "外資"])].copy()
+            df = df.dropna(subset=["oi_net_vol"])
+            df["oi_net_vol"] = df["oi_net_vol"].astype(int)
 
-            # 數值欄轉型
-            for c in ["long_vol", "short_vol", "net_vol"]:
-                if c in df.columns:
-                    df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+            if df.empty:
+                continue
 
+            _TAIFEX_CACHE["df"] = df
+            _TAIFEX_CACHE["ts"] = now_ts
             return df
 
         except Exception as e:
-            print(f"   ⚠ TAIFEX {commodity_id} {date_str} 抓取失敗: {str(e)[:80]}")
+            print(f"   ⚠ TAIFEX {date_str} POST 失敗: {str(e)[:100]}")
             continue
 
     return None
 
 
 def get_fi_futures_net() -> dict:
-    """外資期貨淨口數(大台 TX)。
+    """外資期貨淨口數(大台 臺股期貨)。
 
-    外資淨多口 > 0 → 偏多;< 0 → 偏空。
-    用過去 20 個可用交易日的歷史百分位判讀信號強度。
+    外資未平倉淨多口 > 0 → 偏多;< 0 → 偏空。
+    台股大台外資淨口數區間經驗值:±3,000 中性;±10,000 為顯著方向。
     """
     _EMPTY = {"value": None, "pct_rank": None, "label": "N/A", "score": None, "icon": "⚪"}
     try:
-        df = _fetch_taifex_institutional("TX")
+        df = _fetch_taifex_institutional()
         if df is None or df.empty:
             return _EMPTY
 
-        fi_row = df[df["trader"].str.contains("外資", na=False)]
-        if fi_row.empty:
+        # 篩臺股期貨且排除小型/微型(大台精確比對)
+        mask = (df["product"] == "臺股期貨") & (df["trader"] == "外資")
+        row = df[mask]
+        if row.empty:
             return _EMPTY
 
-        net = int(fi_row["net_vol"].iloc[0])
+        net = int(row["oi_net_vol"].iloc[0])
 
-        # 百分位:用過去幾個工作日的 net_vol 快取無法取得,直接用絕對值閾值判讀
-        # 台指大台未平倉淨口數,±5000 以上為顯著方向
         if net > 10000:
             label, icon, score = "強多", "🟢", 75
         elif net > 3000:
@@ -331,30 +351,33 @@ def get_fi_futures_net() -> dict:
 
 
 def get_retail_futures_ratio() -> dict:
-    """散戶方向估算(小台 MTX)。
+    """散戶方向估算(小型臺指期貨 / 微型臺指期貨 — 散戶占比高)。
 
-    用「三大法人淨口數加總取反」估算散戶方向:
-    零和市場中,散戶淨口數 ≈ -(自營+投信+外資合計淨口數)
-    正值 = 散戶偏多(反指標,偏謹慎);負值 = 散戶偏空(逆勢偏多)
+    用「三大法人淨口數加總取反」估算散戶方向(零和市場近似):
+    散戶淨口數 ≈ -(自營商 + 投信 + 外資 合計淨口數)
+    正值 = 散戶偏多(反指標,偏謹慎);負值 = 散戶偏空(逆勢可能偏多)。
+
+    優先用「小型臺指期貨」(MXF),散戶活躍度高;若無資料退回「微型臺指期貨」。
     """
     _EMPTY = {"value": None, "label": "N/A", "score": None, "icon": "⚪"}
     try:
-        df = _fetch_taifex_institutional("MTX")
+        df = _fetch_taifex_institutional()
         if df is None or df.empty:
             return _EMPTY
 
-        institutional_traders = ["自營商", "投信", "外資"]
-        mask = df["trader"].str.contains("|".join(institutional_traders), na=False)
-        inst_df = df[mask]
-        if inst_df.empty:
+        # 優先小型臺指期貨,沒有就用微型臺指期貨
+        for target in ("小型臺指期貨", "微型臺指期貨"):
+            sub = df[df["product"] == target]
+            if not sub.empty:
+                break
+        else:
             return _EMPTY
 
-        inst_net_total = int(inst_df["net_vol"].sum())
-        # 散戶 ≈ 法人淨口數的反方向
+        inst_net_total = int(sub["oi_net_vol"].sum())
         retail_est = -inst_net_total
 
         if retail_est > 5000:
-            label, icon, score = "散戶多", "🟠", 40   # 散戶偏多 → 反向警訊
+            label, icon, score = "散戶多", "🟠", 40   # 反向警訊
         elif retail_est > 1000:
             label, icon, score = "略偏多", "🟡", 48
         elif retail_est > -1000:
@@ -362,7 +385,7 @@ def get_retail_futures_ratio() -> dict:
         elif retail_est > -5000:
             label, icon, score = "略偏空", "🟢", 62
         else:
-            label, icon, score = "散戶空", "🟢", 70   # 散戶偏空 → 反向利多
+            label, icon, score = "散戶空", "🟢", 70   # 反向利多
 
         return {"value": retail_est, "label": label, "score": score, "icon": icon}
     except Exception as e:
