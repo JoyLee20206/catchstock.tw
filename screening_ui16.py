@@ -489,6 +489,8 @@ if _freshness["level"] != "missing":
                                             capture_output=True, text=True, check=True)
                     st.cache_data.clear()
                     st.session_state.show_update_success = True
+                    # 抓完自動重跑選股 (避免使用者忘記再按一次「開始選股」)
+                    st.session_state["_auto_rerun_screening"] = True
                     st.rerun()
                 except subprocess.CalledProcessError as e:
                     st.error("❌ 雲端腳本執行失敗!")
@@ -513,7 +515,9 @@ if _freshness["level"] != "missing":
                         st.session_state.show_force_daily_success = True
                         # 清掉所有 cache_data,讓 UI 重新讀新檔
                         st.cache_data.clear()
-                        _status.update(label="✅ daily K 線已更新", state="complete")
+                        # 抓完 daily 自動重跑選股 (避免使用者忘記再按一次「開始選股」)
+                        st.session_state["_auto_rerun_screening"] = True
+                        _status.update(label="✅ daily K 線已更新,自動重跑選股中...", state="complete")
                         time.sleep(1)
                         st.rerun()
                     else:
@@ -696,8 +700,12 @@ def show_market_banner(meta: dict) -> None:
     else:
         st.warning(msg)
 
-if run_clicked:
-    with st.spinner("選股中..."):
+# 自動重跑旗標:強制更新日 K / 標準抓取完成後設置,讓選股不需手動再按一次
+_auto_rerun = st.session_state.pop("_auto_rerun_screening", False)
+
+if run_clicked or _auto_rerun:
+    _spinner_msg = ("資料已更新,自動重跑選股中..." if _auto_rerun else "選股中...")
+    with st.spinner(_spinner_msg):
         with tempfile.TemporaryDirectory() as tmpdir:
             df, file_paths, meta = run_screening(
                 pass_score=st.session_state.pass_score, lookback_days=st.session_state.lookback_days,
@@ -713,7 +721,10 @@ if run_clicked:
         st.session_state.result_df = df
         st.session_state.result_files = files_bytes
         st.session_state.result_meta = meta
-    st.success("✅ 完成，看下方結果")
+    if _auto_rerun:
+        st.success("✅ 資料已更新,選股結果自動重跑完成")
+    else:
+        st.success("✅ 完成，看下方結果")
 
 # ── 結果顯示區 ─────────────────────────────────────────────────────────────
 df = st.session_state.result_df
