@@ -221,6 +221,54 @@ _level_fn = {
 }
 _level_fn[_freshness["level"]](f"📅 {_freshness['msg']}")
 
+# ── 🔍 快速搜尋(永遠顯示,不依賴 cache 狀態) ─────────────────────────────
+# 輸入代號 → 設定 target_sid → rerun,自動跳到下方個股分析區。
+# 不在 picks 名單內的也能查(會在下方提示「未進入今日達標」)。
+_search_cols = st.columns([5, 1, 1])
+with _search_cols[0]:
+    _search_query = st.text_input(
+        "🔍 代號 / 名稱搜尋",
+        value="",
+        placeholder="輸入代號 (例 2330) 或名稱關鍵字 (例 台積),按 Enter 或點旁邊按鈕",
+        label_visibility="collapsed",
+        key="_quick_search_input",
+    )
+with _search_cols[1]:
+    _search_clicked = st.button(
+        "🔍 跳轉", type="primary", use_container_width=True,
+        help="跳到個股分析區。已存在於今日達標清單會自動高亮對應 row。"
+    )
+with _search_cols[2]:
+    _search_clear = st.button(
+        "↺ 清除", use_container_width=True,
+        help="清除目前選定的個股,回到「未指定」狀態。"
+    )
+
+if _search_clear:
+    st.session_state.target_sid = None
+    st.rerun()
+
+# 處理搜尋:支援「純代號」 或「中文名稱關鍵字」
+if (_search_query.strip()) and (_search_clicked or _search_query.strip().isdigit()):
+    _q = _search_query.strip()
+    _hit_sid = None
+    # 純 4 位數字 → 直接當代號
+    if _q.isdigit() and 3 <= len(_q) <= 6:
+        _hit_sid = _q
+    else:
+        # 名稱關鍵字 → 從 ui_name_map 模糊比對(第一筆命中)
+        for _sid, _name in ui_name_map.items():
+            if _q in str(_name):
+                _hit_sid = _sid
+                break
+    if _hit_sid:
+        st.session_state.target_sid = _hit_sid
+        # 不直接 rerun,讓畫面提示後再讓使用者繼續滾動
+        _name_hit = ui_name_map.get(_hit_sid, "")
+        st.success(f"✅ 已跳轉至 {_hit_sid} {_name_hit}(請滾動到下方個股分析區)")
+    else:
+        st.warning(f"⚠️ 找不到「{_q}」對應的股票(代號需 4 位數字,名稱關鍵字需精確)")
+
 if _freshness["level"] != "missing":
 
     # ── 雲端更新按鈕區塊(含資料日期 + 抓取時戳)──
