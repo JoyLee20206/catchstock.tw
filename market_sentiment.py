@@ -7,7 +7,8 @@
 3. 大盤位階(乖離率)         — yfinance ^TWII vs MA60
 4. 融資水位百分位             — 既有 margin parquet 算(近 90 日)
 5. 外資期貨淨口數             — TAIFEX 大台「臺股期貨」未平倉
-                              (門檻 ±10k/±30k,2025~2026 規模校準)
+                              累積 ≥ 20 日後自動切換到 90 日歷史百分位;
+                              過渡期用絕對門檻 ±15k/±40k(2025~2026 放寬版)
 6. 散戶方向估算               — TAIFEX 微型臺指期貨非法人淨口數取反
                               (微台散戶占比 ~ 90%,小型臺指期貨為備援)
                               一律輸出 0~100% 部位指數(反指標);
@@ -323,19 +324,62 @@ def _fetch_taifex_institutional() -> "pd.DataFrame | None":
     return None
 
 
-def get_fi_futures_net() -> dict:
-    """外資期貨淨口數(大台 臺股期貨)。
+# ── 外資期貨歷史持久化(給「90 日百分位」評分) ─────────────────────────
+# 為什麼要做:外資期貨淨口數絕對門檻會隨市場規模演進(2018 ±15k、2023 ±20k、
+# 2026 ±30k+),每隔一段時間就要重新校準。改用百分位制後永久不用調。
+# 累積期間(< 20 日)用放寬的絕對門檻(±15k/±40k)當 fallback。
+_FI_HISTORY_FILE = "fi_futures_history.json"
+_FI_HISTORY_KEEP = 90
+_FI_HISTORY_MIN  = 20
 
-    外資未平倉淨多口 > 0 → 偏多;< 0 → 偏空。
-    門檻區間(2025~2026 規模校準):
-        ±10,000  = 中性
-        ±30,000  = 顯著方向
-    歷史演進:
-        2018~2020  ±15k 即顯著(門檻 ±5k/±15k)
-        2021~2023  外資部位放大(門檻 ±10k/±20k)
-        2025~2026  動輒 ±30k+,2025-Q4~2026 出現 -40k 以上紀錄 → 現行門檻
+
+def _load_fi_history(cache_dir):
+    if cache_dir is None:
+        return []
+    f = Path(cache_dir) / _FI_HISTORY_FILE
+    if not f.exists():
+        return []
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def persist_fi_history(cache_dir, net_vol):
+    """公開 API:寫入今日外資期貨淨口數,由 UI 在快取外呼叫。
+
+    同日重跑覆蓋,自動保留最近 90 日。設計同 persist_sentiment_history,
+    避免被 Streamlit @st.cache_data 擋住而漏寫。
     """
-    _EMPTY = {"value": None, "pct_rank": None, "label": "N/A", "score": None, "icon": "⚪"}
+    if cache_dir is None:
+        return
+    f = Path(cache_dir) / _FI_HISTORY_FILE
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    history = _load_fi_history(cache_dir)
+    history = [h for h in history if h.get("date") != today_str]
+    history.append({"date": today_str, "net_vol": int(net_vol)})
+    history = sorted(history, key=lambda h: h["date"])[-_FI_HISTORY_KEEP:]
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"   ⚠ fi_futures_history.json 寫入失敗: {e}")
+
+
+def get_fi_futures_net(cache_dir=None) -> dict:
+    """外資期貨淨口數(大台 臺股期貨)+ 雙模式評分。
+
+    評分模式(自動切換):
+      - 累積歷史 ≥ 20 日 → 用「過去 90 日百分位」評分(主要)
+            高百分位 = 外資相對近 3 個月更偏多 → 樂觀
+            低百分位 = 外資相對近 3 個月更偏空 → 恐慌
+      - 累積歷史 < 20 日 → 用絕對門檻 ±15k/±40k(放寬版,過渡用)
+            避免 2026 規模下「強空」被誤判得太頻繁
+
+    寫檔由呼叫端負責(persist_fi_history),這裡只讀 + 計算。
+    """
+    _EMPTY = {"value": None, "pct_rank": None, "n_days": 0, "mode": None,
+              "label": "N/A", "score": None, "icon": "⚪"}
     try:
         df = _fetch_taifex_institutional()
         if df is None or df.empty:
@@ -349,18 +393,45 @@ def get_fi_futures_net() -> dict:
 
         net = int(row["oi_net_vol"].iloc[0])
 
-        if net > 30000:
-            label, icon, score = "強多", "🟢", 75
-        elif net > 10000:
-            label, icon, score = "偏多", "🟢", 65
-        elif net > -10000:
-            label, icon, score = "中性", "🟡", 50
-        elif net > -30000:
-            label, icon, score = "偏空", "🟠", 35
-        else:
-            label, icon, score = "強空", "🔴", 20
+        history = _load_fi_history(cache_dir)
+        n_days = len(history)
 
-        return {"value": net, "pct_rank": None, "label": label, "score": score, "icon": icon}
+        if n_days >= _FI_HISTORY_MIN:
+            # ① 百分位制
+            arr = sorted([h["net_vol"] for h in history])
+            below = sum(1 for v in arr if v < net)
+            pct = float(below / len(arr) * 100)
+            mode = "percentile"
+            if pct > 80:
+                label, icon, score = "強多", "🟢", 75
+            elif pct > 60:
+                label, icon, score = "偏多", "🟢", 65
+            elif pct >= 40:
+                label, icon, score = "中性", "🟡", 50
+            elif pct >= 20:
+                label, icon, score = "偏空", "🟠", 35
+            else:
+                label, icon, score = "強空", "🔴", 20
+        else:
+            # ② 絕對門檻(放寬版,過渡用)
+            pct = None
+            mode = "absolute"
+            if net > 40000:
+                label, icon, score = "強多", "🟢", 75
+            elif net > 15000:
+                label, icon, score = "偏多", "🟢", 65
+            elif net > -15000:
+                label, icon, score = "中性", "🟡", 50
+            elif net > -40000:
+                label, icon, score = "偏空", "🟠", 35
+            else:
+                label, icon, score = "強空", "🔴", 20
+
+        return {"value": net,
+                "pct_rank": round(pct, 0) if pct is not None else None,
+                "n_days":   n_days,
+                "mode":     mode,
+                "label": label, "score": score, "icon": icon}
     except Exception as e:
         print(f"   ⚠ 外資期貨淨口數計算失敗: {e}")
         return _EMPTY
@@ -541,7 +612,7 @@ def compute_sentiment(cache_dir) -> dict:
         "taiex_vix":      get_taiex_vix(),
         "taiex_pos":      get_taiex_position(),
         "margin_level":   get_margin_balance_level(cache_dir),
-        "fi_futures":     get_fi_futures_net(),
+        "fi_futures":     get_fi_futures_net(cache_dir),
         "retail_futures": get_retail_futures_ratio(cache_dir),
     }
 

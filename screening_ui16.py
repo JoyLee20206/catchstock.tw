@@ -47,6 +47,7 @@ from market_sentiment import (
     compute_sentiment,
     load_sentiment_history,
     persist_sentiment_history,
+    persist_fi_history,
 )
 
 # ── 自選股與交易筆記持久化 ────────────────────────────────────────────────
@@ -222,6 +223,13 @@ def _get_sentiment_and_persist():
             persist_sentiment_history(CACHE_DIR, s["temperature"], s.get("label", ""))
         except Exception as e:
             print(f"⚠ persist_sentiment_history 失敗: {e}")
+        # 同步寫外資期貨歷史(支援百分位制累積)
+        try:
+            _fi = s.get("indicators", {}).get("fi_futures", {})
+            if _fi.get("value") is not None:
+                persist_fi_history(CACHE_DIR, _fi["value"])
+        except Exception as e:
+            print(f"⚠ persist_fi_history 失敗: {e}")
     return s
 
 
@@ -1452,9 +1460,18 @@ with _tab_sent:
              lambda v: v.get('label','N/A'), "加權指數 vs MA60 乖離率。> +8% 過熱；< -8% 深跌逢低。"),
             ("margin_level",   "💰 融資水位",        lambda v: f"{int(v['pct_rank'])}%位" if v.get('pct_rank') is not None else "N/A",
              lambda v: v.get('label','N/A'), "全市場融資餘額近 90 日百分位。高水位代表散戶槓桿偏重。"),
-            ("fi_futures",     "🏦 外資期貨",        lambda v: f"{v['value']:+,}口" if v.get('value') is not None else "N/A",
-             lambda v: v.get('label','N/A'),
-             "外資大台期貨未平倉淨口數(TAIFEX)。±10k=中性、±30k=顯著(2025~2026 規模校準)。"),
+            ("fi_futures",     "🏦 外資期貨",
+             lambda v: f"{v['value']:+,}口" if v.get('value') is not None else "N/A",
+             lambda v: (
+                 f"{v.get('label','N/A')}"
+                 + (f" · 歷史 {int(v['pct_rank'])}%位"
+                    if v.get('mode') == 'percentile' and v.get('pct_rank') is not None
+                    else (f" · 累積{v.get('n_days',0)}/20日"
+                          if v.get('mode') == 'absolute' else ""))
+             ),
+             "外資大台期貨未平倉淨口數(TAIFEX)。"
+             "累積 ≥ 20 日後改用 90 日歷史百分位(更穩,永久不用校準),"
+             "之前用絕對門檻 ±15k/±40k(2025~2026 放寬版)。"),
             ("retail_futures", "👥 散戶估算",
              lambda v: (f"{int(v['pct'])}%" if v.get('pct') is not None else "N/A"),
              lambda v: (
@@ -1781,28 +1798,46 @@ with _tab_sent:
 
 - **資料來源**:TAIFEX 三大法人未平倉(每交易日盤後 ~15:00 更新)
 - **意義**:外資在大台指期貨的多空淨部位
-- **判讀**(2025~2026 規模校準):
+- **評分**(雙模式自動切換,跟散戶估算同一招):
+
+**模式 A — 90 日歷史百分位(累積 ≥ 20 日後啟用,主要)**
+
+當前淨口數放進「過去 90 日的分布」算百分位:
+
+| 百分位 | 標籤 | 分數 | 解讀 |
+|---|---|---|---|
+| > 80% | 強多 🟢 | 75 | 比近 3 個月任何時候都更偏多 |
+| 60~80% | 偏多 🟢 | 65 | |
+| 40~60% | 中性 🟡 | 50 | |
+| 20~40% | 偏空 🟠 | 35 | |
+| < 20% | 強空 🔴 | 20 | 比近 3 個月任何時候都更偏空 |
+
+**模式 B — 絕對門檻(歷史不足 20 日的過渡用,2025~2026 放寬版)**
 
 | 淨口數 | 標籤 | 分數 |
 |---|---|---|
-| > +30,000 | 強多 🟢 | 75 |
-| +10,000~+30,000 | 偏多 🟢 | 65 |
-| -10,000~+10,000 | 中性 🟡 | 50 |
-| -30,000~-10,000 | 偏空 🟠 | 35 |
-| < -30,000 | 強空 🔴 | 20 |
+| > +40,000 | 強多 🟢 | 75 |
+| +15,000~+40,000 | 偏多 🟢 | 65 |
+| -15,000~+15,000 | 中性 🟡 | 50 |
+| -40,000~-15,000 | 偏空 🟠 | 35 |
+| < -40,000 | 強空 🔴 | 20 |
 
-> 📌 **為什麼門檻不是固定的?** 門檻會隨市值規模與外資總部位演進:
+> 📌 **為什麼從絕對門檻改成百分位?** 外資總部位會隨市值規模演進:
 >
 > | 時期 | 顯著方向門檻 |
 > |---|---|
 > | 2018~2020 | ±15k |
 > | 2021~2023 | ±20k |
-> | **2025~2026** | **±30k**(目前) |
+> | 2025~2026 上半 | ±30k |
+> | 2025~2026 近期 | 動輒 ±40~50k |
 >
-> 2025-Q4~2026 出現過 -40k 以上的紀錄,所以「強空」往上拉到 -30k 才觸發,
-> 避免任何中度偏空都被誤標為「強空」。
+> **每隔一段時間就要重新校準絕對門檻**,有點累。改用百分位制是**相對自己過去 3 個月**,
+> 自動隨市場結構演進、永久不用調,跟散戶估算同一套邏輯。
 >
-> 外資期貨被視為「聰明錢的方向盤」,持續強空往往伴隨現貨賣壓。但要避免**單日翻轉就追**,看趨勢比看單日重要。
+> 📌 **歷史檔位置**:`cache/fi_futures_history.json`,每天 append、保留最近 90 日。
+> 累積到 20 日後自動切換到百分位模式。
+>
+> 外資期貨被視為「聰明錢的方向盤」,持續強空往往伴隨現貨賣壓。但**單日翻轉就追**容易被洗,看趨勢比看單日重要。
 
 ---
 
