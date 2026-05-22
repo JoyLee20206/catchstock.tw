@@ -395,5 +395,142 @@
         "industry": "電子零組件業"
       }
     ]
+  },
+  {
+    "date": "2026-05-22",
+    "picks": [
+      {
+        "sid": "6282",
+        "score": 8,
+        "close": 57.4,
+        "industry": "28"
+      },
+      {
+        "sid": "1605",
+        "score": 8,
+        "close": 36.5,
+        "industry": "06"
+      },
+      {
+        "sid": "3034",
+        "score": 8,
+        "close": 485.5,
+        "industry": "24"
+      },
+      {
+        "sid": "2357",
+        "score": 8,
+        "close": 682.0,
+        "industry": "25"
+      },
+      {
+        "sid": "8926",
+        "score": 8,
+        "close": 60.9,
+        "industry": "23"
+      },
+      {
+        "sid": "3088",
+        "score": 8,
+        "close": 142.0,
+        "industry": "電腦及週邊設備業"
+      },
+      {
+        "sid": "3231",
+        "score": 8,
+        "close": 144.5,
+        "industry": "25"
+      },
+      {
+        "sid": "2356",
+        "score": 7,
+        "close": 59.5,
+        "industry": "25"
+      },
+      {
+        "sid": "2492",
+        "score": 7,
+        "close": 292.5,
+        "industry": "28"
+      },
+      {
+        "sid": "2542",
+        "score": 7,
+        "close": 43.2,
+        "industry": "14"
+      },
+      {
+        "sid": "5425",
+        "score": 7,
+        "close": 87.1,
+        "industry": "半導體業"
+      },
+      {
+        "sid": "6509",
+        "score": 7,
+        "close": 50.1,
+        "industry": "化學工業"
+      },
+      {
+        "sid": "2352",
+        "score": 7,
+        "close": 28.75,
+        "industry": "25"
+      },
+      {
+        "sid": "8069",
+        "score": 7,
+        "close": 224.0,
+        "industry": "光電業"
+      },
+      {
+        "sid": "1582",
+        "score": 7,
+        "close": 115.0,
+        "industry": "28"
+      },
+      {
+        "sid": "6831",
+        "score": 7,
+        "close": 786.0,
+        "industry": "25"
+      },
+      {
+        "sid": "6679",
+        "score": 7,
+        "close": 335.5,
+        "industry": "半導體業"
+      },
+      {
+        "sid": "3526",
+        "score": 7,
+        "close": 366.5,
+        "industry": "電子零組件業"
+      },
+      {
+        "sid": "6202",
+        "score": 7,
+        "close": 60.8,
+        "industry": "24"
+      },
+      {
+        "sid": "2328",
+        "score": 7,
+        "close": 54.8,
+        "industry": "28"
+      },
+      {
+        "sid": "2458",
+        "score": 7,
+        "close": 162.0,
+        "industry": "24"
+      },
+      {
+        "sid": "2401",
+        "score": 7,
+        "close": 30.75,
+        "industry": "24"
+      }
+    ]
   }
 ]
