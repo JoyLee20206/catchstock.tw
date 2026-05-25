@@ -1,10 +1,13 @@
+streamlit>=1.30
 pandas>=2.1
-yfinance>=0.2.40
+# yfinance 鎖版本理由:
+#   - 該套件 patch-level 改版頻繁,常有 breaking change(例如欄名 Date→Datetime)
+#   - 2026-05-21 GA 上抓到的最新版會讓 fetch_cache.py KeyError: 'date'
+#   - 鎖在 0.2.48 此版相容性穩定;程式碼仍保留多欄名相容邏輯做雙保險
+#   - 升級前請先在分支測試 fetch_cache.py + yf_download_with_retry 都能正常跑
+yfinance==0.2.48
 pyarrow>=14.0
 openpyxl>=3.1
 requests>=2.31
 lxml>=4.9
 beautifulsoup4>=4.12
-xlwt
-streamlit>=1.30
-plotly
