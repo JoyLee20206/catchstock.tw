@@ -1,11 +1,13 @@
 streamlit>=1.30
 pandas>=2.1
-# yfinance 鎖版本理由:
-#   - 該套件 patch-level 改版頻繁,常有 breaking change(例如欄名 Date→Datetime)
-#   - 2026-05-21 GA 上抓到的最新版會讓 fetch_cache.py KeyError: 'date'
-#   - 鎖在 0.2.48 此版相容性穩定;程式碼仍保留多欄名相容邏輯做雙保險
-#   - 升級前請先在分支測試 fetch_cache.py + yf_download_with_retry 都能正常跑
-yfinance==0.2.48
+# yfinance 版本策略(經 2026-05-21 兩次踩雷後定案):
+#   試過 ==0.2.48 但 GitHub Actions IP 抓 Yahoo 出現大量「Expecting value JSON
+#   decode error」── 舊版 yfinance 的 anti-bot 機制跟不上 Yahoo 最新限制。
+#   試過最新版會有「Date → Datetime 欄名變動」KeyError,該問題已在
+#   fetch_cache.py 加入多欄名相容邏輯(_date_aliases)修掉。
+#   結論:不鎖上限,允許最新版,靠程式碼相容性撐住。
+#   未來 yfinance 若再有 API 變動,優先修程式碼相容,而非鎖版本。
+yfinance>=0.2.40
 pyarrow>=14.0
 openpyxl>=3.1
 requests>=2.31
