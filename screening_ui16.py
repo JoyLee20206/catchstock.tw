@@ -944,6 +944,11 @@ with _tab_perf:
             if by_score:
                 st.divider()
                 st.markdown("**各分數區間 5 日勝率**")
+                st.caption(
+                    "⚠️ 統計類數字(上方整體勝率、各分數區間勝率)使用**完整訊號觸發紀錄**"
+                    "(每次入選獨立評估,同檔可能多次計入);下方樣本明細表已套用「同檔只留最新」去重,"
+                    "因此明細的「檔數」會少於這裡的「筆數」。"
+                )
                 rows = []
                 for score in sorted(by_score.keys(), reverse=True):
                     s = by_score[score]
@@ -965,10 +970,11 @@ with _tab_perf:
                 latest = {}
                 for r in rows:
                     sid_k = str(r.get("sid", ""))
+                    r_date = r.get("date", "")     # 防呆:缺欄位給空字串(排序時會被後來的取代)
                     if not sid_k:
                         continue
                     cur = latest.get(sid_k)
-                    if cur is None or r["date"] > cur["date"]:
+                    if cur is None or r_date > cur.get("date", ""):
                         latest[sid_k] = r
                 return list(latest.values())
 
