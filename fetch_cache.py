@@ -752,7 +752,19 @@ def fetch_yfinance_daily(info_df, default_start_date, chunk_size=400):
                 df_flat = data.stack(level=1, future_stack=True).reset_index()
             except TypeError:
                 df_flat = data.stack(level=1).reset_index()
-                
+
+        # 標準化日期欄名:yfinance 不同版本可能產出 Date / Datetime / index / level_0
+        # 若 reset_index 拿到無名 index,Pandas 會給它 "index" 這個欄名
+        _date_aliases = ('Date', 'Datetime', 'index', 'level_0')
+        _found_date_col = next((c for c in _date_aliases if c in df_flat.columns), None)
+        if _found_date_col is None:
+            print(f"   !!! 第 {ci} 批找不到日期欄,columns = {list(df_flat.columns)[:8]},略過")
+            consecutive_fail += 1
+            if consecutive_fail >= MAX_YF_FAIL: break
+            continue
+        if _found_date_col != 'Date':
+            df_flat = df_flat.rename(columns={_found_date_col: 'Date'})
+
         all_frames.append(df_flat)
         time.sleep(2)
 
