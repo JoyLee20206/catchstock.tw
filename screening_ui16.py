@@ -957,7 +957,23 @@ with _tab_perf:
 
             # ── 進行中觀察樣本(剛入選還沒滿 5 個交易日,目前浮動報酬) ──
             samples = perf.get("samples", [])
-            pending = [s for s in samples if s.get("return_5d") is None]
+
+            def _dedup_keep_latest(rows: list) -> list:
+                """同 sid 只留 date 最大那筆(分流去重 = 模式 B)。
+                rows 內每筆需含 'sid' 與 'date' 欄。
+                """
+                latest = {}
+                for r in rows:
+                    sid_k = str(r.get("sid", ""))
+                    if not sid_k:
+                        continue
+                    cur = latest.get(sid_k)
+                    if cur is None or r["date"] > cur["date"]:
+                        latest[sid_k] = r
+                return list(latest.values())
+
+            pending_raw = [s for s in samples if s.get("return_5d") is None]
+            pending = _dedup_keep_latest(pending_raw)   # 同檔股票只留最新一筆進行中
             if pending:
                 # 從 daily parquet 抓最新 close 算「目前浮動報酬」
                 @st.cache_data(ttl=300, show_spinner=False)
@@ -985,9 +1001,12 @@ with _tab_perf:
 
                 st.divider()
                 _today_naive = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
-                st.markdown(f"**⏳ 進行中觀察樣本(共 {len(pending)} 筆,尚未滿 5 個交易日)**")
+                _dedup_note = ""
+                if len(pending_raw) > len(pending):
+                    _dedup_note = f"(原 {len(pending_raw)} 筆,同檔已去重)"
+                st.markdown(f"**⏳ 進行中觀察樣本(共 {len(pending)} 檔{_dedup_note})**")
                 st.caption(
-                    f"這些是剛入選還沒成熟的樣本,目前浮動報酬以最新收盤價計算"
+                    f"剛入選還沒成熟的樣本,**同檔股票只保留最新一次**,目前浮動報酬以最新收盤價計算"
                     f"(快取日期:{latest_date_str or 'N/A'})。**不列入勝率統計**,僅供觀察。"
                 )
 
@@ -1073,12 +1092,18 @@ with _tab_perf:
                         mc3.info("⏳ 進行中樣本目前**接近平盤**,等待成熟")
 
             # ── 樣本明細表(顯示哪幾檔股票、實際報酬多少) ──
-            valid_samples = [s for s in samples if s.get("return_5d") is not None]
+            # 同檔股票只保留「日期最新的已完成樣本」 = 分流去重模式 B
+            valid_samples_raw = [s for s in samples if s.get("return_5d") is not None]
+            valid_samples = _dedup_keep_latest(valid_samples_raw)
             if valid_samples:
                 st.divider()
-                st.markdown(f"**樣本明細(已完成,共 {len(valid_samples)} 筆,顯示前 50)**")
+                _comp_note = ""
+                if len(valid_samples_raw) > len(valid_samples):
+                    _comp_note = f",原 {len(valid_samples_raw)} 筆同檔已去重"
+                st.markdown(f"**樣本明細(已完成,共 {len(valid_samples)} 檔{_comp_note},顯示前 50)**")
                 st.caption(
-                    "勾選欄頭可排序;台股紅漲綠跌。看到報酬巨大的個股可點進去研究是什麼條件讓它大漲/大跌。"
+                    "同檔股票只保留**最新一次的已完成樣本**;勾選欄頭可排序;台股紅漲綠跌。"
+                    "看到報酬巨大的個股可點進去研究是什麼條件讓它大漲/大跌。"
                 )
 
                 # 名稱對映用既有 ui_name_map(已從 daily parquet 載入)
@@ -1108,16 +1133,16 @@ with _tab_perf:
                     use_container_width=True, hide_index=True,
                 )
 
-                # CSV 完整匯出(含所有欄位 + 名稱)
-                full_df = pd.DataFrame(valid_samples)
+                # CSV 匯出:未去重的完整原始紀錄(含所有重複入選),方便 Excel 自行分析
+                full_df = pd.DataFrame(valid_samples_raw)
                 full_df["名稱"] = full_df["sid"].astype(str).map(ui_name_map).fillna("")
-                csv_bytes = full_df.to_csv(index=False).encode("utf-8-sig")
                 st.download_button(
-                    "📥 下載完整樣本 CSV",
-                    csv_bytes,
-                    file_name=f"performance_samples_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                    f"📥 下載完整原始樣本 CSV(未去重,{len(valid_samples_raw)} 筆)",
+                    full_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"performance_samples_raw_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
                     mime="text/csv",
                     use_container_width=False,
+                    help="UI 顯示已套用「同檔只留最新」去重,但這個 CSV 是原始完整紀錄(含所有重複入選),供 Excel 進階分析使用"
                 )
     else:
         st.info(f"目前累積 {_hist_days} 天歷史,需 ≥5 天才能算績效。每天執行 Telegram 推播自動累積。")
