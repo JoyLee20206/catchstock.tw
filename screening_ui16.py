@@ -954,6 +954,55 @@ with _tab_perf:
                         "平均報酬": f"{s.get('avg_return_5d', 0):+.2f}%" if "avg_return_5d" in s else "—",
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            # ── 樣本明細表(顯示哪幾檔股票、實際報酬多少) ──
+            samples = perf.get("samples", [])
+            valid_samples = [s for s in samples if s.get("return_5d") is not None]
+            if valid_samples:
+                st.divider()
+                st.markdown(f"**樣本明細(共 {len(valid_samples)} 筆,顯示前 50)**")
+                st.caption(
+                    "勾選欄頭可排序;台股紅漲綠跌。看到報酬巨大的個股可點進去研究是什麼條件讓它大漲/大跌。"
+                )
+
+                # 名稱對映用既有 ui_name_map(已從 daily parquet 載入)
+                rows_detail = []
+                for s in sorted(valid_samples, key=lambda x: x["date"], reverse=True)[:50]:
+                    sid_str = str(s["sid"])
+                    ret = s["return_5d"]
+                    # 台股紅漲綠跌:emoji + 數值
+                    if ret > 0.05:
+                        ret_str = f"🔴 +{ret:.2f}%"
+                    elif ret < -0.05:
+                        ret_str = f"🟢 {ret:.2f}%"
+                    else:
+                        ret_str = f"⚪ {ret:+.2f}%"
+
+                    rows_detail.append({
+                        "入選日":    s["date"],
+                        "代號":      sid_str,
+                        "名稱":      ui_name_map.get(sid_str, ""),
+                        "分數":      f"{s['score']} 分" if s.get("score") is not None else "—",
+                        "5 日後報酬": ret_str,
+                        "10 日後":   f"{s['return_10d']:+.2f}%" if s.get("return_10d") is not None else "—",
+                        "20 日後":   f"{s['return_20d']:+.2f}%" if s.get("return_20d") is not None else "—",
+                    })
+                st.dataframe(
+                    pd.DataFrame(rows_detail),
+                    use_container_width=True, hide_index=True,
+                )
+
+                # CSV 完整匯出(含所有欄位 + 名稱)
+                full_df = pd.DataFrame(valid_samples)
+                full_df["名稱"] = full_df["sid"].astype(str).map(ui_name_map).fillna("")
+                csv_bytes = full_df.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "📥 下載完整樣本 CSV",
+                    csv_bytes,
+                    file_name=f"performance_samples_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    use_container_width=False,
+                )
     else:
         st.info(f"目前累積 {_hist_days} 天歷史,需 ≥5 天才能算績效。每天執行 Telegram 推播自動累積。")
 
