@@ -955,12 +955,128 @@ with _tab_perf:
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-            # ── 樣本明細表(顯示哪幾檔股票、實際報酬多少) ──
+            # ── 進行中觀察樣本(剛入選還沒滿 5 個交易日,目前浮動報酬) ──
             samples = perf.get("samples", [])
+            pending = [s for s in samples if s.get("return_5d") is None]
+            if pending:
+                # 從 daily parquet 抓最新 close 算「目前浮動報酬」
+                @st.cache_data(ttl=300, show_spinner=False)
+                def _load_latest_close_for_pending():
+                    """回傳 {sid: (latest_date_str, latest_close)} 給進行中樣本算浮動報酬。"""
+                    try:
+                        files = sorted(CACHE_DIR.glob('daily_*.parquet'))
+                        if not files:
+                            return {}, None
+                        df = pd.read_parquet(files[-1], columns=['stock_id', 'date', 'close'])
+                        df['date'] = pd.to_datetime(df['date'])
+                        df['stock_id'] = df['stock_id'].astype(str)
+                        latest_date = df['date'].max()
+                        latest_rows = (
+                            df[df['date'] == latest_date]
+                              .drop_duplicates(subset='stock_id', keep='last')
+                              .set_index('stock_id')['close']
+                        )
+                        return latest_rows.to_dict(), latest_date.strftime('%Y-%m-%d')
+                    except Exception as e:
+                        print(f"進行中樣本 close 抓取失敗: {e}")
+                        return {}, None
+
+                latest_close_map, latest_date_str = _load_latest_close_for_pending()
+
+                st.divider()
+                _today_naive = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
+                st.markdown(f"**⏳ 進行中觀察樣本(共 {len(pending)} 筆,尚未滿 5 個交易日)**")
+                st.caption(
+                    f"這些是剛入選還沒成熟的樣本,目前浮動報酬以最新收盤價計算"
+                    f"(快取日期:{latest_date_str or 'N/A'})。**不列入勝率統計**,僅供觀察。"
+                )
+
+                pending_rows = []
+                pending_floats = []  # 蒐集浮動報酬給統計用
+                for s in sorted(pending, key=lambda x: x["date"], reverse=True):
+                    sid_str = str(s["sid"])
+                    entry_date_str = s["date"]
+                    score = s.get("score")
+                    entry_close = s.get("entry_close")  # v2 schema 有,v1 沒
+
+                    # v1 entry 可能沒 entry_close → 從 daily parquet 找入選日的 close
+                    if entry_close is None:
+                        try:
+                            ed = pd.Timestamp(entry_date_str)
+                            files = sorted(CACHE_DIR.glob('daily_*.parquet'))
+                            if files:
+                                # 用 ad-hoc 查詢,效能不重要因為 pending 通常 < 30 筆
+                                _d = pd.read_parquet(files[-1], filters=[('stock_id', '==', sid_str)])
+                                if not _d.empty:
+                                    _d['date'] = pd.to_datetime(_d['date'])
+                                    _d_match = _d[_d['date'] == ed]
+                                    if not _d_match.empty:
+                                        entry_close = float(_d_match['close'].iloc[0])
+                        except Exception:
+                            pass
+
+                    latest_close = latest_close_map.get(sid_str)
+
+                    if entry_close is not None and latest_close is not None and entry_close > 0:
+                        float_ret = (latest_close - entry_close) / entry_close * 100
+                        pending_floats.append(float_ret)
+                        # 台股紅漲綠跌
+                        if float_ret > 0.05:
+                            ret_str = f"🔴 +{float_ret:.2f}%"
+                        elif float_ret < -0.05:
+                            ret_str = f"🟢 {float_ret:.2f}%"
+                        else:
+                            ret_str = f"⚪ {float_ret:+.2f}%"
+                    else:
+                        ret_str = "—"
+                        latest_close = None
+
+                    # 算「還剩幾個交易日成熟」(用實際自然日近似:5 交易日 ≈ 7 自然日)
+                    try:
+                        days_since = (_today_naive - pd.Timestamp(entry_date_str)).days
+                        days_left = max(0, 7 - days_since)  # 粗估
+                        if days_left == 0:
+                            mature_status = "即將成熟"
+                        else:
+                            mature_status = f"剩 ~{days_left} 日"
+                    except Exception:
+                        mature_status = "—"
+
+                    pending_rows.append({
+                        "入選日":    entry_date_str,
+                        "代號":      sid_str,
+                        "名稱":      ui_name_map.get(sid_str, ""),
+                        "分數":      f"{score} 分" if score is not None else "—",
+                        "入選價":    f"{entry_close:.2f}" if entry_close else "—",
+                        "目前價":    f"{latest_close:.2f}" if latest_close else "—",
+                        "浮動報酬": ret_str,
+                        "成熟":      mature_status,
+                    })
+
+                st.dataframe(pd.DataFrame(pending_rows), use_container_width=True, hide_index=True)
+
+                # 進行中樣本的趨勢摘要
+                if pending_floats:
+                    wins = sum(1 for r in pending_floats if r > 0)
+                    avg_float = sum(pending_floats) / len(pending_floats)
+                    mc1, mc2, mc3 = st.columns(3)
+                    mc1.metric("目前浮動勝率", f"{wins / len(pending_floats) * 100:.0f}%",
+                               f"{wins} / {len(pending_floats)}")
+                    mc2.metric("平均浮動報酬", f"{avg_float:+.2f}%",
+                               delta_color="inverse")  # 台股紅漲綠跌 → metric 預設綠正紅負,要 inverse
+                    # 警示
+                    if avg_float > 3:
+                        mc3.success("📈 進行中樣本目前**整體偏紅**,系統訊號近期表現強勢")
+                    elif avg_float < -3:
+                        mc3.warning("📉 進行中樣本目前**整體偏綠**,留意近期訊號失效")
+                    else:
+                        mc3.info("⏳ 進行中樣本目前**接近平盤**,等待成熟")
+
+            # ── 樣本明細表(顯示哪幾檔股票、實際報酬多少) ──
             valid_samples = [s for s in samples if s.get("return_5d") is not None]
             if valid_samples:
                 st.divider()
-                st.markdown(f"**樣本明細(共 {len(valid_samples)} 筆,顯示前 50)**")
+                st.markdown(f"**樣本明細(已完成,共 {len(valid_samples)} 筆,顯示前 50)**")
                 st.caption(
                     "勾選欄頭可排序;台股紅漲綠跌。看到報酬巨大的個股可點進去研究是什麼條件讓它大漲/大跌。"
                 )
