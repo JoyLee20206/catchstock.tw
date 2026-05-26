@@ -10,7 +10,7 @@ from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS, CACHE_DIR
 # 共用模組
 from ai_helper import call_openrouter_ai
 from cache_status import cache_freshness
-from picks_history import load_history, save_history, compute_streak, build_picks_from_df, get_sids
+from picks_history import load_history, save_history, compute_streak, build_picks_from_df, get_sids, compute_hot_picks
 from data_health import check_data_health, format_health_for_tg
 from watchlist_alerts import check_watchlist, format_alerts_for_tg
 from performance import compute_performance, format_performance_summary
@@ -270,17 +270,69 @@ def main():
             is_breakout  = top_stock.get(breakout_col) == 1
             is_sync      = top_stock.get("★籌碼共振(大戶↑散戶↓)") == 1
 
+            # ── 補資料給 AI 看(讓點評更有層次,不要只重述冠軍訊息) ──
+            today_sids = set(df['代號'].astype(str).tolist())
+
+            # 1. 退場數(昨在今天沒了)
+            n_exit = len(yesterday_sids - today_sids) if yesterday_sids else 0
+
+            # 2. 主流產業(若有)
+            industry_ctx = ""
+            if '產業' in df.columns:
+                ind_series = df['產業'].dropna()
+                ind_series = ind_series[ind_series != ""]
+                if not ind_series.empty:
+                    top_ind = ind_series.value_counts().idxmax()
+                    top_cnt = int(ind_series.value_counts().max())
+                    pct_ind = top_cnt / len(df) * 100
+                    industry_ctx = f"主流產業:{top_ind}({top_cnt}/{len(df)} 檔,占 {pct_ind:.0f}%)\n"
+
+            # 3. 7 日熱度榜 TOP 3(過去最常上榜的強勢股)
+            hot_ctx = ""
+            try:
+                hot_picks = compute_hot_picks(history, top_n=3)
+                if hot_picks:
+                    hot_lines = []
+                    for h in hot_picks:
+                        sid_h = h['sid']
+                        # 從 df 找名稱;找不到就只用代號
+                        name_h = ""
+                        row_match = df[df['代號'].astype(str) == sid_h]
+                        if not row_match.empty:
+                            name_h = str(row_match.iloc[0]['名稱'])
+                        in_today = "★今日續入" if h['in_latest'] else "今日退場"
+                        hot_lines.append(
+                            f"{sid_h} {name_h}({h['hits']}/{h['total_days']}日,{in_today})"
+                        )
+                    hot_ctx = "近期熱門股:" + "、".join(hot_lines) + "\n"
+            except Exception as _e:
+                print(f"⚠ 熱度榜計算失敗,AI prompt 不含此項: {_e}")
+
             prompt = (
-                f"你是一位台灣股市的資深量化分析師。今日大盤狀態:{market_status} ({twii_pct_str}),"
-                f"共 {len(df)} 檔達標。\n"
-                f"冠軍標的:{sid_top} {name_top}(總分 {score_top}/10 分)"
+                f"你是台灣股市的盤後資深分析師,用 70~100 繁體中文字寫今日盤後重點。\n"
+                f"\n"
+                f"【今日盤勢】\n"
+                f"大盤:{market_status}({twii_pct_str})\n"
+                f"達標:{len(df)} 檔"
+                f"{f',退場 {n_exit} 檔' if n_exit > 0 else ''}\n"
+                f"{industry_ctx}"
+                f"{hot_ctx}"
+                f"\n"
+                f"【冠軍標的】\n"
+                f"{sid_top} {name_top}(總分 {score_top}/10)"
                 f"{'、帶量突破' if is_breakout else ''}"
-                f"{'、籌碼共振(大戶增散戶減)' if is_sync else ''}。\n"
-                f"請用繁體中文(台灣用語)寫一段 60~80 字的盤後精闢點評,語氣專業客觀。\n"
-                f"直接輸出純文字,絕對不要使用任何 Markdown 語法(不要星號、井號、反引號)。"
+                f"{'、籌碼共振(大戶增散戶減)' if is_sync else ''}\n"
+                f"\n"
+                f"【寫作規範】\n"
+                f"1. 先點出今日「最值得注意的 1 個現象」"
+                f"(例:產業集中度、退場潮、熱門股是否退場、冠軍特性)\n"
+                f"2. 接一句具體的「明日該觀察什麼」提醒\n"
+                f"3. 不要重複我給的數字。禁止使用以下廢話:"
+                f"「持續觀察」「值得關注」「動能強勁」「投資者情緒」「淨流入」「穩健向上」\n"
+                f"4. 簡單句,不堆疊形容詞,純文字無 Markdown\n"
             )
 
-            model_name, ai_text = call_openrouter_ai(prompt, max_tokens=250)
+            model_name, ai_text = call_openrouter_ai(prompt, max_tokens=300)
             if ai_text:
                 ai_comment = (
                     f"🧠 <b>AI 分析師({model_name}):</b>\n"
