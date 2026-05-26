@@ -1,5 +1,7 @@
 streamlit>=1.30
 pandas>=2.1
+numpy>=1.24                # market_sentiment.py 計算實現波動率需要
+plotly>=5.0                # screening_ui16.py K 線圖 / 情緒指標 bar chart
 # yfinance 版本策略(經 2026-05-21 兩次踩雷後定案):
 #   試過 ==0.2.48 但 GitHub Actions IP 抓 Yahoo 出現大量「Expecting value JSON
 #   decode error」── 舊版 yfinance 的 anti-bot 機制跟不上 Yahoo 最新限制。
@@ -9,7 +11,8 @@ pandas>=2.1
 #   未來 yfinance 若再有 API 變動,優先修程式碼相容,而非鎖版本。
 yfinance>=0.2.40
 pyarrow>=14.0
-openpyxl>=3.1
+openpyxl>=3.1              # Excel .xlsx 讀寫
+xlwt>=1.3                  # screening0515.py 匯出嘉實 .xls 格式
 requests>=2.31
 lxml>=4.9
 beautifulsoup4>=4.12
