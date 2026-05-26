@@ -48,6 +48,7 @@ from market_sentiment import (
     load_sentiment_history,
     persist_sentiment_history,
     persist_fi_history,
+    persist_retail_history,
 )
 
 # ── 自選股與交易筆記持久化 ────────────────────────────────────────────────
@@ -231,6 +232,13 @@ def _get_sentiment_and_persist():
                 persist_fi_history(CACHE_DIR, _fi["value"])
         except Exception as e:
             print(f"⚠ persist_fi_history 失敗: {e}")
+        # 同步寫散戶估算歷史(支援百分位制累積)
+        try:
+            _rt = s.get("indicators", {}).get("retail_futures", {})
+            if _rt.get("value") is not None and _rt.get("source"):
+                persist_retail_history(CACHE_DIR, _rt["value"], _rt["source"])
+        except Exception as e:
+            print(f"⚠ persist_retail_history 失敗: {e}")
     return s
 
 

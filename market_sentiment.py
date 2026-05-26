@@ -469,15 +469,20 @@ def _save_retail_history(cache_dir, history):
         print(f"   ⚠ retail history 寫入失敗: {e}")
 
 
-def _update_retail_history(cache_dir, retail_net, source):
-    """寫入今日散戶淨口數,維持最近 90 日;同日重跑會覆蓋。回傳更新後的 history。"""
+def persist_retail_history(cache_dir, retail_net, source):
+    """公開 API:寫入今日散戶淨口數,由 UI 在快取外呼叫。
+
+    同日重跑覆蓋,自動保留最近 90 日。設計同 persist_sentiment_history /
+    persist_fi_history,避免被 Streamlit @st.cache_data 擋住而漏寫。
+    """
+    if cache_dir is None:
+        return
     today_str = datetime.now().strftime("%Y-%m-%d")
     history = _load_retail_history(cache_dir)
     history = [h for h in history if h.get("date") != today_str]
     history.append({"date": today_str, "retail_net": int(retail_net), "source": source})
     history = sorted(history, key=lambda h: h["date"])[-_RETAIL_HISTORY_KEEP:]
     _save_retail_history(cache_dir, history)
-    return history
 
 
 # 線性歸一化半幅(2025~2026 校準):±30k 對應 0% / 100%
@@ -548,16 +553,15 @@ def get_retail_futures_ratio(cache_dir=None) -> dict:
         inst_net_total = int(sub["oi_net_vol"].sum())
         retail_est = -inst_net_total
 
-        # 寫入歷史(若提供 cache_dir);無 cache_dir 時跳過(只能用線性估算)
-        history = []
-        if cache_dir is not None:
-            try:
-                history = _update_retail_history(cache_dir, retail_est, source)
-            except Exception as e:
-                print(f"   ⚠ retail history 更新失敗(略過,改用線性估算): {e}")
+        # 讀歷史(不寫,寫檔由 UI 端 persist_retail_history 負責 — 讀寫分離 pattern)
+        # 跟 sentiment / fi_futures 一致,避免被 Streamlit @st.cache_data 擋住
+        history = _load_retail_history(cache_dir) if cache_dir is not None else []
 
-        # 只用相同 source 的歷史(避免微台/小台混算)
-        same_source_hist = [h["retail_net"] for h in history if h.get("source") == source]
+        # 只用相同 source 的歷史(避免微台/小台混算),且**虛擬包含今天**讓 n_days 從 day 1 即為 1
+        _today_str = datetime.now().strftime("%Y-%m-%d")
+        past_vols = [h["retail_net"] for h in history
+                     if h.get("source") == source and h.get("date") != _today_str]
+        same_source_hist = past_vols + [retail_est]
         n_days = len(same_source_hist)
 
         if n_days >= _RETAIL_HISTORY_MIN:
