@@ -87,47 +87,6 @@ def need_fetch(name):
         return True
     return not path_for(name).exists()
 
-
-def need_fetch_revenue() -> tuple:
-    """月營收專屬的智能判斷。
-
-    台灣法規:上市櫃公司月營收須在「次月 10 號前」公告完畢。
-    因此最佳抓取節奏:
-    - **1 ~ 12 號**:還在公告期,每天都可能有新公司加入,必須每天抓
-    - **13 號之後**:絕大多數公司已公告,**本月只要抓過一次就不必再抓**
-
-    Returns:
-        (should_fetch: bool, reason: str)
-    """
-    # FORCE 永遠強制抓
-    if FORCE:
-        return True, "FORCE 模式"
-
-    # 當日已抓過 → 永遠不重抓(現有規則)
-    if path_for("revenue").exists():
-        return False, "今日已抓過"
-
-    # 沒當日 cache,看日期決定
-    day_of_month = _now_tpe.day
-    if day_of_month <= 12:
-        return True, f"目前 {day_of_month} 號,仍在公告期(<=12 號),每天抓"
-
-    # 13 號之後 → 檢查本月最新的 revenue cache 抓過了沒
-    # 規則:找最近 N 天內(13~月底約 18 天)是否抓過
-    days_since_cutoff = day_of_month - 12  # 13 號當日 = 1 天前可能抓過
-    cutoff_date = _now_tpe - timedelta(days=days_since_cutoff)
-    cutoff_str = cutoff_date.strftime("%Y-%m-%d")
-    for f in CACHE_DIR.glob("revenue_*.parquet"):
-        # 從檔名取日期(格式:revenue_YYYY-MM-DD.parquet)
-        try:
-            file_date_str = f.stem.replace("revenue_", "")
-            # 只要這個檔的日期 >= cutoff(本月公告期結束後),就視為「本月已抓過」
-            if file_date_str >= cutoff_str:
-                return False, f"目前 {day_of_month} 號,公告期已過,且 {file_date_str} 已抓過本月"
-        except Exception:
-            continue
-    return True, f"目前 {day_of_month} 號,但本月尚未抓過,補抓一次"
-
 def cleanup_old_cache(name):
     """刪除同類型的舊快取,只保留今日這份。
     安全前提:所有累積型快取(institutional/margin/daily/holders/revenue)在寫入今日檔時,
@@ -362,17 +321,49 @@ def _filter_stock_info(df):
     )
     return df[mask].drop_duplicates(subset=["stock_id"]).reset_index(drop=True)
 
-def _fetch_stock_info_openapi():
-    """主來源:從 OpenAPI 抓股票清單(JSON,< 10 秒)。
+# TWSE 產業分類代碼 → 中文名稱對映
+# TWSE OpenAPI 的「產業別」欄位有時回 2 位數字代碼(05/22/24/...)、有時回中文名稱,
+# 不一致很煩,所以一律 normalize 成中文名。資料來源:TWSE 官方產業分類表。
+TWSE_INDUSTRY_CODE_MAP = {
+    "01": "水泥工業",      "02": "食品工業",      "03": "塑膠工業",
+    "04": "紡織纖維",      "05": "電機機械",      "06": "電器電纜",
+    "08": "玻璃陶瓷",      "09": "造紙工業",      "10": "鋼鐵工業",
+    "11": "橡膠工業",      "12": "汽車工業",      "14": "建材營造",
+    "15": "航運業",        "16": "觀光事業",      "17": "金融保險",
+    "18": "貿易百貨",      "20": "其他業",        "21": "化學工業",
+    "22": "生技醫療業",    "23": "油電燃氣業",    "24": "半導體業",
+    "25": "電腦及週邊設備業","26": "光電業",      "27": "通信網路業",
+    "28": "電子零組件業",  "29": "電子通路業",    "30": "資訊服務業",
+    "31": "其他電子業",    "32": "文化創意業",    "33": "農業科技業",
+    "34": "電子商務業",    "38": "觀光餐旅",      "39": "居家生活",
+    "40": "數位雲端",      "41": "運動休閒",      "80": "管理股票",
+}
 
-    上市走 TWSE OpenAPI、上櫃走 TPEx OpenAPI 自己的域名。
-    (歷史 bug:上櫃曾錯誤指向 openapi.twse.com.tw,導致無效回應每天卡 1-3 分鐘
-     等 ISIN HTML fallback,已於 2026-05 修正)
+
+def _normalize_industry(raw: str) -> str:
+    """把 TWSE OpenAPI 回的「產業別」標準化為中文名稱。
+
+    輸入可能是:
+      - 純數字代碼 "05"  → 對映到 "電機機械"
+      - 中文名稱 "半導體業" → 原樣回傳
+      - 不在 mapping 內的代碼 → 原樣回傳(讓使用者至少看到原始值)
+      - 空字串 / None → 回傳 ""
     """
-    print("   主來源:TWSE/TPEx OpenAPI(JSON,通常 < 10 秒)")
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    # 1-2 位數字代碼 → 查表;查不到原樣回傳
+    if s.isdigit() and len(s) <= 3:
+        return TWSE_INDUSTRY_CODE_MAP.get(s.zfill(2), s)
+    return s
+
+
+def _fetch_stock_info_openapi():
+    """主來源:從 TWSE OpenAPI 抓股票清單(JSON,< 10 秒)。"""
+    print("   主來源:TWSE OpenAPI(JSON,通常 < 10 秒)")
     api_urls = {
         "twse": "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",  # 上市
-        "tpex": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O_basic_info",  # 上櫃
+        "tpex": "https://openapi.twse.com.tw/v1/opendata/t187ap03_O",  # 上櫃
     }
     all_stocks = []
     for mode, url in api_urls.items():
@@ -388,27 +379,15 @@ def _fetch_stock_info_openapi():
             data = resp.json()
             rows = []
             for item in data:
-                # TWSE 用「公司代號/公司簡稱/產業別」中文欄位
-                # TPEx 可能用 SecuritiesCompanyCode/CompanyName/Industry 英文,或其變體
-                sid = str(
-                    item.get("公司代號") or
-                    item.get("SecuritiesCompanyCode") or
-                    item.get("Code") or ""
-                ).strip()
+                sid = str(item.get("公司代號", "")).strip()
                 if not sid or not sid.isdigit() or len(sid) != 4:
                     continue
-                name = str(
-                    item.get("公司簡稱") or item.get("公司名稱") or
-                    item.get("CompanyName") or item.get("CompanyAbbreviation") or ""
-                ).strip()
-                industry = str(
-                    item.get("產業別") or item.get("產業類別") or
-                    item.get("Industry") or item.get("IndustrialCategory") or ""
-                ).strip()
                 rows.append({
                     "stock_id":          sid,
-                    "stock_name":        name,
-                    "industry_category": industry,
+                    "stock_name":        str(item.get("公司簡稱", item.get("公司名稱", ""))).strip(),
+                    "industry_category": _normalize_industry(
+                        str(item.get("產業別", item.get("產業類別", "")))
+                    ),
                     "type":              mode,
                 })
             if rows:
@@ -1036,13 +1015,8 @@ fetch_tdcc_holders_latest()
 #   2. 呼叫 OpenAPI 取「目前最新一期」(MOPS 一般每月 10 日左右公告上月營收)
 #   3. 用 (stock_id, revenue_year, revenue_month) 去重後合併,keep='last' 讓新值覆蓋舊值
 #   4. 即使每天執行也只會新增/更新最新月份,不會重複抓歷史 → 純加法累積
-if True:  # 進入 revenue 區塊前先判斷
-    _rev_fetch, _rev_reason = need_fetch_revenue()
-    if not _rev_fetch:
-        print(f"[6] 月營收:略過({_rev_reason})")
-
-if _rev_fetch:
-    print(f"[6] 月營收 (TWSE/TPEx OpenAPI): 抓取最新一期並累積至快取... [{_rev_reason}]")
+if need_fetch("revenue"):
+    print("[6] 月營收 (TWSE/TPEx OpenAPI): 抓取最新一期並累積至快取...")
 
     # --- (a) 讀歷史快取 ---
     prev_files = sorted(CACHE_DIR.glob("revenue_*.parquet"))
