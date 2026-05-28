@@ -849,9 +849,58 @@ def fetch_yfinance_daily(info_df, default_start_date, chunk_size=400):
 # ==========================================
 # [5] TDCC 千張大戶 (增量更新)
 # ==========================================
+# TDCC 是「週」資料(統計基準日 = 每週五,通常下週六/日早上才上 OpenData),
+# 平日抓的都是同一份舊資料。比照月營收的 gate 邏輯:
+#   - cache 已有「最新一個週五」的資料 → 略過(省 API)
+#   - cache 沒有 → 嘗試抓(可能拿到也可能拿不到,看 TDCC 是否已上架)
+def _last_friday_str(today):
+    """回傳離 today 最近(含 today)的上一個星期五 YYYY-MM-DD。
+    例:今天是星期三 → 回上週五;今天是星期五 → 回今天。
+    """
+    # weekday(): Mon=0..Sun=6, Fri=4
+    days_back = (today.weekday() - 4) % 7
+    return (today - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+
+def _holders_should_skip(today_tpe) -> bool:
+    """判斷今天是否可以跳過 TDCC 抓取。"""
+    if FORCE:
+        return False
+    # 沒今日 cache 也沒有歷史 → 不能略過
+    prev_files = sorted(CACHE_DIR.glob("holders_*.parquet"))
+    if not prev_files:
+        return False
+    try:
+        df_p = pd.read_parquet(prev_files[-1])
+        if df_p.empty or "date" not in df_p.columns:
+            return False
+        max_date_in_cache = str(df_p["date"].max())  # YYYY-MM-DD
+        target_friday = _last_friday_str(today_tpe)
+        # cache 中最新資料 >= 最近的週五 → 已是最新,可略過
+        return max_date_in_cache >= target_friday
+    except Exception as e:
+        print(f"   ⚠ TDCC gate 檢查失敗,改走正常抓取: {e}")
+        return False
+
+
 def fetch_tdcc_holders_latest():
     if not need_fetch("holders"):
         print("[holders] 已有今日快取,略過"); return
+
+    _today_tpe = datetime.now(TPE_TZ)
+    if _holders_should_skip(_today_tpe):
+        _target = _last_friday_str(_today_tpe)
+        print(f"[holders] cache 已含上個週五({_target}) 資料,略過(省 API)")
+        # 把昨日 parquet 重命名為今日,讓 need_fetch 下次判斷一致
+        _prev_files = sorted(CACHE_DIR.glob("holders_*.parquet"))
+        if _prev_files and not path_for("holders").exists():
+            try:
+                pd.read_parquet(_prev_files[-1]).to_parquet(path_for("holders"))
+                cleanup_old_cache("holders")
+            except Exception as e:
+                print(f"   ⚠ 複製昨日 holders 失敗(不影響邏輯): {e}")
+        return
+
     print("[holders] 抓取 TDCC 最新大戶比例...")
     resp = session_get("https://opendata.tdcc.com.tw/getOD.ashx", params={"id": "1-5"}, timeout=30)
     time.sleep(TDCC_DELAY)
