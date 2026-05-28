@@ -1015,7 +1015,34 @@ fetch_tdcc_holders_latest()
 #   2. 呼叫 OpenAPI 取「目前最新一期」(MOPS 一般每月 10 日左右公告上月營收)
 #   3. 用 (stock_id, revenue_year, revenue_month) 去重後合併,keep='last' 讓新值覆蓋舊值
 #   4. 即使每天執行也只會新增/更新最新月份,不會重複抓歷史 → 純加法累積
-if need_fetch("revenue"):
+# 月營收特殊 gate(每月 12 日後通常公告完上月營收,若已有歷史就略過,省 API):
+#   - 12 日前(含):每日抓取(這時可能有公司剛公告、要捕捉)
+#   - 13 日後:已有上月資料就跳過,沒有才抓(例:fresh deploy 在 28 日仍需抓)
+#   - FORCE 仍會強制重抓
+_revenue_today_tpe = datetime.now(TPE_TZ)
+_skip_revenue = False
+if (not FORCE) and need_fetch("revenue") and _revenue_today_tpe.day >= 13:
+    _prev_files = sorted(CACHE_DIR.glob("revenue_*.parquet"))
+    if _prev_files:
+        try:
+            _df_check = pd.read_parquet(_prev_files[-1])
+            if (not _df_check.empty
+                    and {'revenue_year', 'revenue_month'}.issubset(_df_check.columns)):
+                _last_dt = _revenue_today_tpe.replace(day=1) - timedelta(days=1)
+                _ym_have = set(zip(_df_check['revenue_year'].astype(int),
+                                   _df_check['revenue_month'].astype(int)))
+                if (_last_dt.year, _last_dt.month) in _ym_have:
+                    _skip_revenue = True
+                    # 把昨日 parquet 重命名為今日,讓 need_fetch 後續判斷一致
+                    if not path_for("revenue").exists():
+                        _df_check.to_parquet(path_for("revenue"))
+                        cleanup_old_cache("revenue")
+                    print(f"[6] 月營收: 今日 {_revenue_today_tpe.day} 日 ≥13 且已有上月"
+                          f"({_last_dt.year}-{_last_dt.month:02d}) 資料,略過抓取(省 API 配額)")
+        except Exception as _e:
+            print(f"   ⚠ 月營收日期 gate 檢查失敗,改走正常抓取: {_e}")
+
+if (not _skip_revenue) and need_fetch("revenue"):
     print("[6] 月營收 (TWSE/TPEx OpenAPI): 抓取最新一期並累積至快取...")
 
     # --- (a) 讀歷史快取 ---
@@ -1058,7 +1085,9 @@ if need_fetch("revenue"):
     else:
         print("    !!! 無任何資料可寫入 (歷史空 + OpenAPI 失敗),保留現況。")
 else:
-    print("[revenue] 月營收: 已有今日快取,略過")
+    # 兩種情況:已被 day-of-month gate 略過,或當日已有 cache
+    if not _skip_revenue:
+        print("[revenue] 月營收: 已有今日快取,略過")
 
 print("=" * 65)
 print("✅ 快取建置完美收工!請接著執行 screening.py")
