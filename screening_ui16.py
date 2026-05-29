@@ -1119,13 +1119,28 @@ with _tab_perf:
                 st.caption(
                     "⚠️ 統計類數字(上方整體勝率、各分數區間勝率)使用**完整訊號觸發紀錄**"
                     "(每次入選獨立評估,同檔可能多次計入);下方樣本明細表已套用「同檔只留最新」去重,"
-                    "因此明細的「檔數」會少於這裡的「筆數」。"
+                    "因此明細的「檔數」會少於這裡的「筆數」。\n\n"
+                    "💡 **分級對照**:🔥 **8 分 = 頂級(系統實務最高分)** / ✅ 7 分 = 合格 / "
+                    "⚠️ 6 分 = 邊緣(大盤資料缺失自動降標)。"
+                    "本系統雖以 10 分為滿分,但 9~10 分要求「法人雙買+大戶散戶共振+RS 強+月營收 YoY」"
+                    "同時成立,實務極罕見,故 **8 分視同冠軍級訊號**。"
                 )
+                # 分數 → 標籤對映
+                def _score_label(score: int) -> str:
+                    if score >= 8:
+                        return f"🔥 頂級({score} 分)"
+                    elif score == 7:
+                        return f"✅ 合格({score} 分)"
+                    elif score == 6:
+                        return f"⚠️ 邊緣({score} 分)"
+                    else:
+                        return f"{score} 分"
+
                 rows = []
                 for score in sorted(by_score.keys(), reverse=True):
                     s = by_score[score]
                     rows.append({
-                        "分數": f"{score} 分",
+                        "分級": _score_label(score),
                         "樣本數": s.get("n_5d", 0),
                         "勝率":   f"{s.get('win_rate_5d', 0)*100:.0f}%" if "win_rate_5d" in s else "—",
                         "平均報酬": f"{s.get('avg_return_5d', 0):+.2f}%" if "avg_return_5d" in s else "—",
@@ -2900,6 +2915,17 @@ with col_chart:
                             except Exception as _pe:
                                 print(f"位階計算失敗(忽略): {_pe}")
 
+                        # 分級語意:讓 AI 知道分數高低的實際意義
+                        _score = row_data['總分']
+                        if _score >= 8:
+                            _score_tier = "🔥 頂級(本系統實務最高分)"
+                        elif _score == 7:
+                            _score_tier = "✅ 合格"
+                        elif _score == 6:
+                            _score_tier = "⚠️ 邊緣(大盤資料缺失自動降標)"
+                        else:
+                            _score_tier = ""
+
                         # 用 textwrap.dedent 清掉每行開頭的縮排,避免 24 spaces 進入 prompt
                         # 浪費 token 並可能影響 AI 對結構的理解
                         # ──「進場節奏」分析:本系統選出的標的本質上都是偏多的(已通過 10 項正向篩選)
@@ -2912,7 +2938,8 @@ with col_chart:
                             【個股數據報告】
                             股票標的:{sid} {sname}
                             當前股價:{row_data['現價']} 元
-                            綜合量化總分:{row_data['總分']} / 10 分
+                            綜合量化總分:{row_data['總分']} / 10 分  ({_score_tier})
+                            註:本系統雖以 10 分為滿分,但實務最高僅見 8 分(9~10 分要求法人雙買+大戶散戶共振+RS強+月營收YoY同時成立,極罕見),故 8 分即冠軍級訊號。
                             產業板塊:{row_data['產業']}
                             20日均成交量:{row_data['20日均量(張)']} 張
                             歷史波動度 (ATR%):{row_data['ATR%']}%

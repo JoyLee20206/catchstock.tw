@@ -323,6 +323,12 @@ def main():
                 f"{'、帶量突破' if is_breakout else ''}"
                 f"{'、籌碼共振(大戶增散戶減)' if is_sync else ''}\n"
                 f"\n"
+                f"【分數系統說明】\n"
+                f"本系統雖以 10 分為滿分,但實務最高僅見 8 分"
+                f"(法人雙買+大戶散戶共振+RS強+月營收YoY同時成立極罕見)。\n"
+                f"故 8 分視同冠軍級訊號,7 分為合格,6 分為邊緣"
+                f"(僅在大盤資料缺失自動降標時出現)。\n"
+                f"\n"
                 f"【寫作規範】\n"
                 f"1. 先點出今日「最值得注意的 1 個現象」"
                 f"(例:產業集中度、退場潮、熱門股是否退場、冠軍特性)\n"
@@ -364,7 +370,9 @@ def main():
 
             for _, row in df.head(TOP_N_DISPLAY).iterrows():
                 sid_str    = str(row['代號'])
-                score_icon = "🔥" if row['總分'] >= 9 else "•"
+                # 系統實務最高分為 8(法人雙買+大戶散戶共振+RS強+營收YoY 同時成立極罕見),
+                # 故 8 分視同冠軍級訊號
+                score_icon = "🔥" if row['總分'] >= 8 else "•"
                 stock_name = html.escape(str(row['名稱']))   # 防禦 ETF 名稱含 &/< 等字元
 
                 # 漲跌幅(緊接在分數後,訊息密度高)
