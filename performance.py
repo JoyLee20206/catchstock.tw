@@ -115,12 +115,26 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
             valid = [s[f"return_{n}d"] for s in samples if s[f"return_{n}d"] is not None]
             if valid:
                 wins = sum(1 for v in valid if v > 0)
+                gains = [v for v in valid if v > 0]
+                losses = [v for v in valid if v <= 0]
                 overall[f"n_{n}d"] = len(valid)
                 overall[f"win_rate_{n}d"] = wins / len(valid)
                 overall[f"avg_return_{n}d"] = sum(valid) / len(valid)
                 overall[f"median_return_{n}d"] = sorted(valid)[len(valid) // 2]
                 overall[f"max_return_{n}d"] = max(valid)
                 overall[f"min_return_{n}d"] = min(valid)
+                overall[f"avg_gain_{n}d"] = sum(gains) / len(gains) if gains else 0.0
+                overall[f"avg_loss_{n}d"] = sum(losses) / len(losses) if losses else 0.0
+                # 損益比:總獲利 / 總虧損絕對值;無虧損時為 inf
+                total_loss = sum(losses)
+                overall[f"profit_factor_{n}d"] = (
+                    sum(gains) / abs(total_loss) if total_loss < 0 else float('inf')
+                )
+                # 期望值 = 勝率*平均獲利 - 敗率*|平均虧損|
+                wr = wins / len(valid)
+                avg_g = sum(gains) / len(gains) if gains else 0.0
+                avg_l = sum(losses) / len(losses) if losses else 0.0
+                overall[f"expectancy_{n}d"] = wr * avg_g + (1 - wr) * avg_l
 
     # ── 分數區間統計 ──
     by_score = {}
@@ -131,9 +145,17 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
             valid = [s[f"return_{n}d"] for s in score_samples if s[f"return_{n}d"] is not None]
             if valid:
                 wins = sum(1 for v in valid if v > 0)
+                gains = [v for v in valid if v > 0]
+                losses = [v for v in valid if v <= 0]
                 stat[f"n_{n}d"] = len(valid)
                 stat[f"win_rate_{n}d"] = wins / len(valid)
                 stat[f"avg_return_{n}d"] = sum(valid) / len(valid)
+                stat[f"avg_gain_{n}d"] = sum(gains) / len(gains) if gains else 0.0
+                stat[f"avg_loss_{n}d"] = sum(losses) / len(losses) if losses else 0.0
+                total_loss = sum(losses)
+                stat[f"profit_factor_{n}d"] = (
+                    sum(gains) / abs(total_loss) if total_loss < 0 else float('inf')
+                )
         by_score[score] = stat
 
     return {"samples": samples, "overall": overall, "by_score": by_score}
@@ -259,9 +281,13 @@ def format_performance_summary(perf: dict) -> str:
     o = perf.get("overall", {})
     if not o or "win_rate_5d" not in o:
         return ""
+    pf = o.get("profit_factor_5d")
+    pf_str = "∞" if pf == float("inf") else (f"{pf:.2f}" if pf is not None else "—")
+    exp = o.get("expectancy_5d", 0.0)
     return (
         f"📊 近 30 日策略績效(5 日後):"
         f"勝率 {o['win_rate_5d']*100:.0f}% / "
-        f"平均報酬 {o['avg_return_5d']:+.2f}% / "
+        f"期望值 {exp:+.2f}% / "
+        f"損益比 {pf_str} / "
         f"樣本 {o['n_5d']} 筆"
     )
