@@ -996,11 +996,16 @@ with _tab_perf:
                 "| 敗局平均虧損 | 只看賠的平均賠多少 | **核心:輸時輸多少** |\n"
                 "| 損益比 | 總賺 ÷ 總賠 | 賺賠幅度的差距 |\n"
                 "| 淨期望值 | 平均報酬 − 0.5% 成本 | **最終極:每筆實際落袋** |\n"
+                "| 日均報酬 | 淨期望值 ÷ 持有天數 | **比效率:抱不同天數公平比** |\n"
+                "| 最大回檔 | 資金曲線最大跌幅 | 風險:最壞情況會虧多少,越近 0 越穩 |\n"
+                "| 夏普值 | 風險調整後報酬(年化) | 賺得穩不穩,>1 不錯 >2 很好 |\n"
             )
             st.markdown(
                 "**🎯 淨期望值門檻**　< 0% ❌虧 ｜ 0~1% 🟡勉強 ｜ 1~2.5% ✅好 ｜ > 4% 🔥漂亮但多半是多頭蜜月期,別外推\n\n"
                 "**📊 損益比門檻**　< 1 ❌虧 ｜ 1.5 ✅有效 ｜ 2~3 👍不錯 ｜ > 3 ⚠️罕見 ｜ > 5 🚩可能有泡沫\n\n"
-                "**🔢 樣本可信度**　< 30 看方向就好 ｜ 30~100 有參考價值但偏樂觀 ｜ > 100 且經歷過回檔才算真本事"
+                "**📉 夏普值門檻**　< 1 普通 ｜ 1~2 不錯 ｜ 2~3 很好 ｜ > 3 極佳(但短樣本/多頭易虛高,同樣打折看)\n\n"
+                "**🔢 樣本可信度**　< 30 看方向就好 ｜ 30~100 有參考價值但偏樂觀 ｜ > 100 且經歷過回檔才算真本事\n\n"
+                "**📅 持有天數**　淨期望值看「單筆賺最多」,日均報酬看「效率最高」;兩者不同時優先看日均(同期間短打可多做幾趟)。抱越久樣本越少、越不穩。"
             )
             st.caption(
                 "⚠️ 三大陷阱:①勝率高就放心(錯,要配損益比) "
@@ -1016,13 +1021,29 @@ with _tab_perf:
         else:
             # ── 📅 持有天數比較(找最佳出場時機) ──
             # 同一批 picks 在不同持有期的表現並排,看「抱幾天最划算」。
-            _periods = [n for n in (3, 5, 10, 20) if f"n_{n}d" in overall]
-            if len(_periods) >= 2:
+            # 全部持有期都顯示;尚無資料(pick 還沒活夠天數)者標「累積中」。
+            _all_periods = (3, 5, 10, 20)
+            if True:
                 st.markdown("**📅 不同持有天數比較(同一批選股,抱幾天最划算?)**")
                 _cmp_rows = []
                 _best_n, _best_exp = None, None       # 淨期望值最高
                 _best_dn, _best_daily = None, None     # 日均報酬最高(效率)
-                for n in _periods:
+                _has_pending = False
+                for n in _all_periods:
+                    # 該持有期還沒有任何 pick 活夠天數 → 累積中
+                    if f"n_{n}d" not in overall:
+                        _has_pending = True
+                        _need = max(1, n - _hist_days)   # 約還需幾天(以歷史天數粗估)
+                        _cmp_rows.append({
+                            "持有天數": f"{n} 日",
+                            "樣本數":  0,
+                            "勝率":    "⏳ 累積中",
+                            "平均報酬": f"約還需 {_need} 天",
+                            "淨期望值": "—",
+                            "日均報酬": "—",
+                            "損益比":  "—",
+                        })
+                        continue
                     _exp = overall.get(f"net_expectancy_{n}d")
                     _pf  = overall.get(f"profit_factor_{n}d")
                     _pf_str = "∞" if _pf == float("inf") else (f"{_pf:.2f}" if _pf is not None else "—")
@@ -1042,22 +1063,24 @@ with _tab_perf:
                         "損益比":  _pf_str,
                     })
                 st.dataframe(pd.DataFrame(_cmp_rows), use_container_width=True, hide_index=True)
+                if _has_pending:
+                    st.caption("⏳ 標「累積中」的持有期,是因為最早入選的 pick 還沒滿該天數;歷史累積足夠後會自動補上。")
                 if _best_n is not None:
                     _eff_note = ""
                     if _best_dn is not None and _best_dn != _best_n:
                         _eff_note = (
-                            f" 但若看**日均報酬**(效率),**持有 {_best_dn} 日最高(+{_best_daily:.2f}%/日)**——"
+                            f" 但若看**日均報酬**(效率),**持有 {_best_dn} 日最高({_best_daily:+.2f}%/日)**——"
                             f"同一段時間內短打可以做更多趟,整體可能更賺。"
                         )
                     st.caption(
-                        f"💡 以**淨期望值**(扣成本後每筆落袋)來看,**持有 {_best_n} 日最高(+{_best_exp:.2f}%)**。"
+                        f"💡 以**淨期望值**(扣成本後每筆落袋)來看,**持有 {_best_n} 日最高({_best_exp:+.2f}%)**。"
                         f"{_eff_note}"
                         f" 提醒:抱越久樣本越少(最近的 pick 還沒滿天數),數字穩定度較低。"
                     )
                 st.divider()
 
-            # 三檔指標卡片
-            for n_days in (5, 10, 20):
+            # 各持有期指標卡片
+            for n_days in (3, 5, 10, 20):
                 key_n   = f"n_{n_days}d"
                 key_win = f"win_rate_{n_days}d"
                 key_avg = f"avg_return_{n_days}d"
@@ -1091,6 +1114,24 @@ with _tab_perf:
                     m2[3].metric("淨期望值", f"{exp:+.2f}%",
                                  delta_color="normal" if exp >= 0 else "inverse",
                                  help="平均報酬扣掉來回交易成本(約 0.5%)後,每筆實際落袋。需 >0 才真正划算")
+
+                # 第三排:風險面(最大回檔、夏普值、波動)
+                if f"sharpe_{n_days}d" in overall:
+                    m3 = st.columns(4)
+                    mdd    = overall.get(f"mdd_{n_days}d", 0)
+                    sharpe = overall.get(f"sharpe_{n_days}d", 0)
+                    std    = overall.get(f"std_{n_days}d", 0)
+                    m3[0].metric("最大回檔", f"{mdd:.2f}%", delta_color="off",
+                                 help="複利資金曲線從高點到低點的最大跌幅。越接近 0 越穩,評估最壞情況")
+                    m3[1].metric("夏普值", f"{sharpe:.2f}", delta_color="off",
+                                 help="風險調整後報酬(年化)。>1 不錯,>2 很好,>3 極佳")
+                    m3[2].metric("報酬波動(標準差)", f"{std:.2f}%", delta_color="off",
+                                 help="報酬的起伏程度,越大代表越不穩定")
+                    # 第 4 格留白對齊,或放最差單筆
+                    min_ret = overall.get(f"min_return_{n_days}d")
+                    if min_ret is not None:
+                        m3[3].metric("最差單筆", f"{min_ret:+.2f}%", delta_color="off",
+                                     help="這個持有期裡,賠最多的那一筆")
 
             # ── 📊 累積績效曲線 vs 大盤 ─────────────────────────
             # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。

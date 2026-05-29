@@ -69,6 +69,50 @@ def _forward_return(close_matrix, sid: str, entry_date, n_days: int):
     return (target_close - entry_close) / entry_close * 100
 
 
+def _risk_metrics(returns_in_date_order: list, hold_days: int) -> dict:
+    """從「依日期排序的報酬序列」算風險指標,口徑對齊 backtest.py 的 summarize()。
+
+    - mdd:    最大回檔(%),假設等權、序列交易、複利累積的資金曲線最大跌幅(負數)
+    - sharpe: 年化夏普值 = 平均/標準差 × √(252/hold_days)
+    - std:    報酬標準差(母體,ddof=0,與 backtest 的 np.std 一致)
+
+    序列 < 2 筆時 std/sharpe 回 0;空序列全回 0。
+    """
+    rets = returns_in_date_order
+    if not rets:
+        return {"mdd": 0.0, "sharpe": 0.0, "std": 0.0}
+
+    # 最大回檔:複利資金曲線從高點到低點的最大跌幅
+    # 口徑對齊 backtest.py:高點從「第一筆交易後的資金」起算(等同 np.maximum.accumulate)
+    equity_curve = []
+    e = 1.0
+    for r in rets:
+        e *= (1 + r / 100.0)
+        equity_curve.append(e)
+    peak, mdd = equity_curve[0], 0.0
+    for e in equity_curve:
+        if e > peak:
+            peak = e
+        dd = (e - peak) / peak
+        if dd < mdd:
+            mdd = dd
+    mdd_pct = mdd * 100.0
+
+    # 標準差(母體)+ 年化 Sharpe
+    mean = sum(rets) / len(rets)
+    if len(rets) > 1:
+        var = sum((x - mean) ** 2 for x in rets) / len(rets)
+        std = var ** 0.5
+    else:
+        std = 0.0
+    if std > 0 and hold_days > 0:
+        sharpe = (mean / std) * (252.0 / hold_days) ** 0.5
+    else:
+        sharpe = 0.0
+
+    return {"mdd": mdd_pct, "sharpe": sharpe, "std": std}
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 主要計算函式
 # ══════════════════════════════════════════════════════════════════════
@@ -135,6 +179,15 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
                 )
                 # 淨期望值 = 平均報酬 - 來回交易成本(扣成本後實際落袋)
                 overall[f"net_expectancy_{n}d"] = sum(valid) / len(valid) - TRADE_COST_PCT
+                # 風險指標(最大回檔、夏普值):需用「依日期排序」的報酬序列
+                ordered = [
+                    s[f"return_{n}d"] for s in sorted(samples, key=lambda x: x["date"])
+                    if s[f"return_{n}d"] is not None
+                ]
+                _risk = _risk_metrics(ordered, n)
+                overall[f"mdd_{n}d"] = _risk["mdd"]
+                overall[f"sharpe_{n}d"] = _risk["sharpe"]
+                overall[f"std_{n}d"] = _risk["std"]
 
     # ── 分數區間統計 ──
     by_score = {}
