@@ -1727,7 +1727,7 @@ with _tab_bt:
     )
 
     sig_options = list(SIGNAL_LABELS.keys())
-    _sig_col, _faq_col = st.columns([2, 1])
+    _sig_col, _faq_col = st.columns(2)
     with _sig_col:
         sig_choice_multi = st.multiselect(
             "選擇訊號(可複選)", sig_options,
@@ -2878,12 +2878,19 @@ with col_list:
     elif len(df) == 0: st.error("❌ 沒有標的達標")
     else:
         st.subheader(f"📋 結果({len(df)} 檔)")
-        fc1, fc2 = st.columns(2)
-        with fc1:
-            score_min, score_max = int(df['總分'].min()), int(df['總分'].max())
-            score_threshold = st.slider("總分 ≥", score_min, score_max, score_min) if score_min != score_max else score_min
-        with fc2:
-            industries = sorted([i for i in df['產業'].dropna().unique() if i])
+        score_min, score_max = int(df['總分'].min()), int(df['總分'].max())
+        industries = sorted([i for i in df['產業'].dropna().unique() if i])
+        if score_min != score_max:
+            # 分數有高低 → 左滑桿 + 右產業篩選 並排
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                score_threshold = st.slider("總分 ≥", score_min, score_max, score_min)
+            with fc2:
+                selected_industries = st.multiselect("產業篩選", industries, default=industries)
+        else:
+            # 達標股全部同分 → 不需分數滑桿,產業篩選用整列寬(避免左側空一塊)
+            score_threshold = score_min
+            st.caption(f"📊 達標股皆為 **{score_min} 分**(同分,免用分數篩選)")
             selected_industries = st.multiselect("產業篩選", industries, default=industries)
 
         filtered = df[(df['總分'] >= score_threshold) & (df['產業'].isin(selected_industries))]
