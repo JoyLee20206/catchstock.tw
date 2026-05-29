@@ -42,7 +42,7 @@ from picks_history import load_history, compute_hot_picks
 from data_health import check_data_health
 from industry_rotation import compute_industry_rotation
 from performance import compute_performance
-from backtest import run_backtest, SIGNAL_LABELS
+from backtest import run_backtest, SIGNAL_LABELS, build_signal_matrices
 from market_sentiment import (
     compute_sentiment,
     load_sentiment_history,
@@ -1190,8 +1190,20 @@ with _tab_perf:
         st.info(f"目前累積 {_hist_days} 天歷史,需 ≥5 天才能算績效。每天執行 Telegram 推播自動累積。")
 
 
-# ── 訊號回測:對 daily/法人 parquet 掃描三大技術訊號歷史報酬 ─────────────
-@st.cache_data(ttl=900, show_spinner="跑回測中(掃描 180 天歷史訊號)…")
+# ── 訊號回測:對 daily/法人 parquet 掃描 11 種技術訊號歷史報酬 ─────────────
+# 設計:把「最重的 11 個訊號矩陣建構」拆出來獨立 cache,讓改變 hold_days /
+# date_filter / combine_mode / stock_filter 等「輕」參數不必重算 5-7 秒。
+@st.cache_data(ttl=1800, show_spinner="第一次建構訊號矩陣 (11 訊號掃描 180 天,~5 秒)…")
+def _build_signal_matrices_cached(cache_date_str: str):
+    """11 訊號矩陣 cache。
+
+    cache key 用最新資料日期(每日 daily parquet 更新會自然觸發重算)。
+    TTL 30 分鐘為保險,實務上 key 變動就會 invalidate。
+    """
+    return build_signal_matrices(CACHE_DIR)
+
+
+@st.cache_data(ttl=900, show_spinner="計算交易報酬中…")
 def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
                          combine_mode: str, dedup: bool, stock_filter: str = ""):
     """signals_tuple: 用 tuple 才能被 cache_data hash。stock_filter='' 視同全市場。"""
@@ -1202,10 +1214,14 @@ def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
         end = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
         start = end - pd.Timedelta(days=ndays)
         date_range = (start, end)
+    # 取得已 cache 的訊號矩陣(第一次需 5-7s,之後秒切)
+    _cache_key = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "no_data"
+    _precomputed = _build_signal_matrices_cached(_cache_key)
     return run_backtest(CACHE_DIR, signal=list(signals_tuple), hold_days=hold_days,
                         date_range=date_range, combine_mode=combine_mode,
                         dedup_within_hold=dedup,
-                        stock_filter=stock_filter or None)
+                        stock_filter=stock_filter or None,
+                        precomputed=_precomputed)
 
 
 with _tab_bt:

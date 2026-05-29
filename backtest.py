@@ -696,10 +696,61 @@ def summarize(trades: pd.DataFrame, hold_days: int = 10) -> dict:
 # ══════════════════════════════════════════════════════════════════════
 # 對外主介面
 # ══════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
+# 重資料建構(可被 UI 層 cache,避免重複跑)
+# ══════════════════════════════════════════════════════════════════════
+def build_signal_matrices(cache_dir):
+    """建構 11 個訊號矩陣 + close matrix(回測的「重資料」)。
+
+    這部分耗時 5~7 秒(讀 5 個 parquet + 算 11 個訊號 detection)。
+    呼叫端應該 cache 起來,讓改變 hold_days / date_range / combine_mode /
+    stock_filter 等輕量參數時不必重算 5 秒。
+
+    Returns:
+        {
+            "close":        DataFrame index=date, columns=stock_id,
+            "sig_matrices": {sig_name: bool DataFrame, ...},
+        }
+        失敗回 None
+    """
+    matrices = _load_daily_matrix(cache_dir)
+    if matrices is None:
+        return None
+    fi_matrix     = _load_foreign_net_matrix(cache_dir)
+    it_matrix     = _load_it_net_matrix(cache_dir)
+    dealer_matrix = _load_dealer_net_matrix(cache_dir)
+    retail_matrix = _load_retail_pct_matrix(cache_dir)
+    margin_mats   = _load_margin_matrices(cache_dir)
+    double_red_matrix = _load_double_red_revenue_matrix(
+        cache_dir, matrices['close'].index, matrices['close'].columns
+    )
+
+    _breakout = detect_breakout_signals(matrices)
+    sig_matrices = {
+        # Tier S
+        "resonance":        detect_resonance_signals(matrices, retail_matrix),
+        "foreign":          detect_foreign_signals(matrices, fi_matrix),
+        "revenue_breakout": detect_revenue_breakout_signals(matrices, _breakout, double_red_matrix),
+        # Tier A
+        "margin_squeeze":   detect_margin_short_squeeze_signals(matrices, margin_mats),
+        "triple_buy":       detect_triple_buy_signals(matrices, fi_matrix, it_matrix, dealer_matrix),
+        "investment_trust": detect_investment_trust_signals(matrices, it_matrix),
+        "breakout":         _breakout,
+        # Tier B
+        "momentum_top":     detect_momentum_top_signals(matrices),
+        "quality_breakout": detect_quality_breakout_signals(matrices, _breakout),
+        "ma_golden_cross":  detect_ma_golden_cross_signals(matrices),
+        # Tier C
+        "kd_cross":         detect_kd_cross_signals(matrices),
+    }
+    return {"close": matrices['close'], "sig_matrices": sig_matrices}
+
+
 def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
                  date_range: tuple = None, combine_mode: str = "and",
                  dedup_within_hold: bool = True,
-                 stock_filter: str = None) -> dict:
+                 stock_filter: str = None,
+                 precomputed: dict = None) -> dict:
     """跑一次回測。
 
     Args:
@@ -722,48 +773,23 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
             "error": str (僅失敗時),
         }
     """
-    matrices = _load_daily_matrix(cache_dir)
-    if matrices is None:
+    # 用呼叫端提供的 precomputed 矩陣,避免重新跑 5-7 秒重計算
+    # (UI 端會用 @st.cache_data 把 build_signal_matrices 結果 cache 起來)
+    if precomputed is None:
+        precomputed = build_signal_matrices(cache_dir)
+    if precomputed is None:
         return {"error": "無法讀取 daily 快取", "trades": pd.DataFrame(), "stats": {"n": 0}}
 
-    fi_matrix     = _load_foreign_net_matrix(cache_dir)
-    it_matrix     = _load_it_net_matrix(cache_dir)
-    dealer_matrix = _load_dealer_net_matrix(cache_dir)
-    retail_matrix = _load_retail_pct_matrix(cache_dir)
-    margin_mats   = _load_margin_matrices(cache_dir)
-    # 雙紅營收需要 daily matrix 的 index/columns 對齊
-    double_red_matrix = _load_double_red_revenue_matrix(
-        cache_dir, matrices['close'].index, matrices['close'].columns
-    )
-
-    # 先算 breakout 給 revenue_breakout / quality_breakout 共用
-    _breakout = detect_breakout_signals(matrices)
-
-    # 計算 11 個訊號矩陣(順序對齊 SIGNAL_LABELS:Tier S → A → B → C)
-    # rs_market 與 ma20_pullback 已移除;對應 detect 函式仍保留為 orphan
-    sig_matrices = {
-        # Tier S
-        "resonance":        detect_resonance_signals(matrices, retail_matrix),
-        "foreign":          detect_foreign_signals(matrices, fi_matrix),
-        "revenue_breakout": detect_revenue_breakout_signals(matrices, _breakout, double_red_matrix),
-        # Tier A
-        "margin_squeeze":   detect_margin_short_squeeze_signals(matrices, margin_mats),
-        "triple_buy":       detect_triple_buy_signals(matrices, fi_matrix, it_matrix, dealer_matrix),
-        "investment_trust": detect_investment_trust_signals(matrices, it_matrix),
-        "breakout":         _breakout,
-        # Tier B
-        "momentum_top":     detect_momentum_top_signals(matrices),
-        "quality_breakout": detect_quality_breakout_signals(matrices, _breakout),
-        "ma_golden_cross":  detect_ma_golden_cross_signals(matrices),
-        # Tier C
-        "kd_cross":         detect_kd_cross_signals(matrices),
-    }
+    close_matrix = precomputed["close"]
+    matrices = {"close": close_matrix}   # 後續只用 close,其他欄位由 sig_matrices 承接
+    # copy 一份避免 stock_filter 修改影響 cache 內物件
+    sig_matrices = {k: v for k, v in precomputed["sig_matrices"].items()}
 
     # ── 個股回測過濾:若指定 stock_filter,只保留該股票欄位 ──
     # 若該股不在 matrix 內,結果為空(由上層判斷顯示提示)
     if stock_filter:
         _sid = str(stock_filter).strip()
-        if _sid in matrices['close'].columns:
+        if _sid in close_matrix.columns:
             for k in list(sig_matrices.keys()):
                 # 保留該股一欄,其他欄位全設 False(等同過濾)
                 _mat = sig_matrices[k]
