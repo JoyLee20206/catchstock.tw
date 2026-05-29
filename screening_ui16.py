@@ -344,9 +344,10 @@ with _status_cols[0]:
             _is_fallback = "FALLBACK" in _fetch_raw
             _fetch_ts = _fetch_raw.replace("FALLBACK", "").strip()
             try:
-                _hh_mm = _fetch_ts.split(" ")[1][:5]
-                _h, _m = int(_hh_mm.split(":")[0]), int(_hh_mm.split(":")[1])
-                _suffix = "🌙 盤後" if (_h, _m) >= (13, 30) else "⏰ 盤中"
+                # 盤中 = 平日 09:00~13:30(台股交易時段);其餘時間(含凌晨/盤前/週末)一律盤後
+                _ft = datetime.strptime(_fetch_ts, "%Y-%m-%d %H:%M:%S")
+                _is_intraday = _ft.weekday() < 5 and (9, 0) <= (_ft.hour, _ft.minute) <= (13, 30)
+                _suffix = "⏰ 盤中" if _is_intraday else "🌙 盤後"
             except Exception:
                 _suffix = ""
             if _is_fallback:
@@ -472,7 +473,7 @@ if _freshness["level"] != "missing":
                     _caption_parts.append(f"📅 檔名 **{_fetch_day}** / 最新交易日 **{_data_max}**")
 
             # ── 抓取時戳:讀 last_fetch_daily.txt 的「內容」,不靠 mtime(git pull 會重置) ──
-            # 含時間才能判斷盤中 (< 13:30) 或盤後 (≥ 13:30);若帶 FALLBACK 標記 = 本次抓失敗用舊檔
+            # 含時間才能判斷盤中(平日 09:00~13:30)或盤後;若帶 FALLBACK 標記 = 本次抓失敗用舊檔
             _ts_file = CACHE_DIR / "last_fetch_daily.txt"
             if _ts_file.exists():
                 _fetch_raw = _ts_file.read_text(encoding="utf-8").strip()
@@ -480,9 +481,10 @@ if _freshness["level"] != "missing":
                 _fetch_ts = _fetch_raw.replace("FALLBACK", "").strip()
                 _suffix = ""
                 try:
-                    _hh_mm = _fetch_ts.split(" ")[1][:5]   # 'HH:MM'
-                    _h, _m = int(_hh_mm.split(":")[0]), int(_hh_mm.split(":")[1])
-                    _suffix = " 🌙 盤後" if (_h, _m) >= (13, 30) else " ⏰ 盤中"
+                    # 盤中 = 平日 09:00~13:30;其餘(含凌晨/盤前/週末)一律盤後
+                    _ft = datetime.strptime(_fetch_ts, "%Y-%m-%d %H:%M:%S")
+                    _is_intraday = _ft.weekday() < 5 and (9, 0) <= (_ft.hour, _ft.minute) <= (13, 30)
+                    _suffix = " ⏰ 盤中" if _is_intraday else " 🌙 盤後"
                 except Exception:
                     pass
                 if _is_fallback:
