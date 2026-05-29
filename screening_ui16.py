@@ -398,6 +398,10 @@ with _status_cols[2]:
     else:
         st.markdown("**🌡️ 市場溫度** N/A<br>_(情緒指標暫時無法取得)_", unsafe_allow_html=True)
 
+# 「資料更新」expander 的位置佔位:讓它顯示在「狀態列正下方」
+# (實際內容仍由下方 if 區塊填入,用 _update_bar_slot.expander 渲染到這裡,避免大段搬移)
+_update_bar_slot = st.container()
+
 st.divider()
 
 # ── 🔍 快速搜尋(永遠顯示,不依賴 cache 狀態) ─────────────────────────────
@@ -454,7 +458,7 @@ if _freshness["level"] != "missing":
     # 改成 expander 是為了把「平常不會用到的兩顆按鈕」收起來,讓頂部更乾淨。
     # 預設只在 freshness 為 warn / error 時自動展開(代表使用者該抓資料)。
     _update_default_expanded = _freshness["level"] in ("warn", "error")
-    with st.expander("🔄 資料更新 / 上次抓取時戳", expanded=_update_default_expanded):
+    with _update_bar_slot.expander("🔄 資料更新 / 上次抓取時戳", expanded=_update_default_expanded):
         _caption_parts = ["雲端環境專用:點擊後從網路抓取最新台股資料。"]
         try:
             daily_files = sorted(CACHE_DIR.glob('daily_*.parquet'))
@@ -926,35 +930,6 @@ if meta is not None and df is not None:
 
     st.divider()
 
-# 情緒細項摘要(一行):建成字串存入 _sent_detail_caption,稍後只 render 到
-# 「非大盤情緒」的 3 個分頁頂部 —— 大盤情緒分頁本身已有完整指標,不重複顯示。
-# (Streamlit 無法在伺服器端判斷當前分頁,故改成「只加進其他分頁」而非「在某頁隱藏」)
-_sent_detail_caption = None
-try:
-    _sent = _get_sentiment_and_persist()
-    if _sent and _sent.get("temperature") is not None:
-        _ind = _sent["indicators"]
-        _parts = []
-        _v = _ind.get("vix", {})
-        if _v.get("value") is not None:
-            _parts.append(f"VIX {_v['value']} {_v['label']}")
-        _v = _ind.get("taiex_vix", {})
-        if _v.get("pct_rank") is not None:
-            # 與下方卡片一致:同時顯示數值 + 百分位(例:台指波動 28.1(56%位 中高))
-            _tv = f"{_v['value']}" if _v.get("value") is not None else ""
-            _parts.append(f"台指波動 {_tv}({int(_v['pct_rank'])}%位 {_v['label']})")
-        _v = _ind.get("margin_level", {})
-        if _v.get("pct_rank") is not None:
-            _parts.append(f"融資水位 {int(_v['pct_rank'])}%位 {_v['label']}")
-        _v = _ind.get("fi_futures", {})
-        if _v.get("value") is not None:
-            _sign = "+" if _v["value"] >= 0 else ""
-            _parts.append(f"外資期貨 {_sign}{_v['value']:,}口 {_v['label']}")
-        if _parts:
-            _sent_detail_caption = "🌡️ **情緒細項**　" + "　｜　".join(_parts)
-except Exception:
-    pass
-
 # ── 產業輪動追蹤(對比最近 7 日 vs 前 7 日各產業上榜次數) ──────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_industry_rotation_cached():
@@ -973,8 +948,6 @@ _tab_trend, _tab_perf, _tab_bt, _tab_sent = st.tabs([
 ])
 
 with _tab_trend:
-    if _sent_detail_caption:
-        st.caption(_sent_detail_caption)
     # ── 🔥 入選熱度榜(個股層級) ──
     st.markdown("#### 🔥 入選熱度榜")
     if _hot:
@@ -1022,8 +995,6 @@ with _tab_trend:
 # (_load_performance_cached 已在首頁速覽卡片前定義,此處直接使用)
 
 with _tab_perf:
-    if _sent_detail_caption:
-        st.caption(_sent_detail_caption)
     if _hist_days >= 5:  # 至少有 5 天歷史才有意義
         st.caption("回答「我這套系統真的有用嗎?」— 對每筆歷史選股,從 daily 快取算出後續 N 日報酬。")
 
@@ -1728,8 +1699,6 @@ def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
 
 
 with _tab_bt:
-    if _sent_detail_caption:
-        st.caption(_sent_detail_caption)
     st.caption(
         "對 daily 快取掃描 11 種訊號的歷史觸發點,算「進場後 N 日報酬」── "
         "回答「哪個訊號真的有 alpha?該在計分系統加重?」可複選做組合測試。"
