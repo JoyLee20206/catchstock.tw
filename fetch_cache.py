@@ -1055,6 +1055,60 @@ batch_daily_public("margin", fetch_twse_margin, fetch_tpex_margin, d20, today, "
 # [4] 價量
 fetch_yfinance_daily(info, d180)
 
+
+# ==========================================
+# [4b] ^TWII 大盤指數(2 年歷史,給 UI K 線圖 RS 線、狀態總覽、大盤情緒用)
+# ==========================================
+# 為什麼要落地:
+#   UI _load_twii_cached 只有 5 分鐘記憶體 cache,Streamlit 重啟/新 session
+#   都會冷打 yfinance(~10-15 秒)。把它寫成 parquet 後,UI 改成 parquet 先讀,
+#   冷啟動從 10 秒降到 < 100ms。
+def fetch_twii_daily():
+    if not need_fetch("twii"):
+        print("[twii] ^TWII 已有今日快取,略過"); return
+    print("[twii] 抓取 ^TWII 2 年歷史 K 線...")
+    try:
+        data = yf.download("^TWII", period="2y", auto_adjust=True,
+                           progress=False, threads=False)
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+        if data.empty:
+            print("   !!! ^TWII 抓取無資料,沿用舊檔(若有)")
+            # 失敗時拿舊檔墊
+            prev_files = sorted(CACHE_DIR.glob("twii_*.parquet"))
+            if prev_files and not path_for("twii").exists():
+                pd.read_parquet(prev_files[-1]).to_parquet(path_for("twii"))
+                cleanup_old_cache("twii")
+            return
+        if data.index.tz is not None:
+            data.index = data.index.tz_localize(None)
+        # 整理欄位:把 index (date) 拉出來變欄位,方便 UI 重讀
+        df_twii = data.reset_index()
+        # 標準化日期欄名(yfinance 不同版本可能是 Date / Datetime / index)
+        for col in ("Date", "Datetime", "index", "level_0"):
+            if col in df_twii.columns:
+                df_twii = df_twii.rename(columns={col: "date"})
+                break
+        df_twii.to_parquet(path_for("twii"))
+        print(f"   -> ^TWII 2 年 K 線快取完成 ({len(df_twii)} 筆,"
+              f"{df_twii['date'].min().date()} ~ {df_twii['date'].max().date()})")
+        cleanup_old_cache("twii")
+    except Exception as e:
+        print(f"   !!! ^TWII 抓取失敗: {e}")
+        # 失敗時拿舊檔墊
+        prev_files = sorted(CACHE_DIR.glob("twii_*.parquet"))
+        if prev_files and not path_for("twii").exists():
+            try:
+                pd.read_parquet(prev_files[-1]).to_parquet(path_for("twii"))
+                cleanup_old_cache("twii")
+                print("   -> 已用昨日 ^TWII 墊檔")
+            except Exception as e2:
+                print(f"   !!! 連墊檔都失敗: {e2}")
+
+
+fetch_twii_daily()
+
+
 # [5] 大戶
 fetch_tdcc_holders_latest()
 

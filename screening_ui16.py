@@ -180,6 +180,26 @@ def get_stock_institutional(stock_id: str) -> pd.DataFrame:
 # 1 hr → 5 min:yfinance 偶爾失敗會被快取空結果擋住,縮 TTL 讓恢復更快
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_twii_cached() -> pd.DataFrame:
+    """讀取 ^TWII 2 年歷史 K 線,優先用本地 parquet (~ 50ms),沒有才打 yfinance (~ 10s)。
+
+    fetch_cache.py 排程會把 ^TWII 寫進 cache/twii_*.parquet,
+    冷啟動時這條就會走 parquet 路徑,從 10 秒降到 < 100ms。
+    """
+    # ── 路徑 A:本地 parquet (最快) ──
+    try:
+        twii_files = sorted(CACHE_DIR.glob("twii_*.parquet"))
+        if twii_files:
+            df_local = pd.read_parquet(twii_files[-1])
+            if not df_local.empty and "date" in df_local.columns:
+                df_local["date"] = pd.to_datetime(df_local["date"])
+                df_local = df_local.set_index("date").sort_index()
+                if df_local.index.tz is not None:
+                    df_local.index = df_local.index.tz_localize(None)
+                return df_local
+    except Exception as e:
+        print(f"⚠ 讀本地 twii parquet 失敗,改打 yfinance: {e}")
+
+    # ── 路徑 B:fallback 到 yfinance (慢) ──
     try:
         data = yf.download("^TWII", period="2y", auto_adjust=True, progress=False, threads=False)
         if isinstance(data.columns, pd.MultiIndex):
