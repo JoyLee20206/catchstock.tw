@@ -1821,6 +1821,86 @@ with _tab_sent:
             _fig_bar.add_hline(y=50, line_dash="dot", line_color="gray", opacity=0.5)
             st.plotly_chart(_fig_bar, use_container_width=True)
 
+        # ── 📈 大盤情緒趨勢圖(讀 sentiment_history.json,看溫度怎麼演進) ──
+        # 利用每次 _get_sentiment_and_persist 累積的歷史檔,畫出近 30/90 日溫度走勢。
+        # 比單看當下溫度更有用:可以分辨「溫度下行還在繼續」vs「已從谷底回升」。
+        _trend_hist = load_sentiment_history(CACHE_DIR)
+        if _trend_hist and len(_trend_hist) >= 2:
+            st.divider()
+            _trend_col1, _trend_col2 = st.columns([3, 1])
+            with _trend_col1:
+                st.markdown("#### 📈 市場溫度走勢")
+            with _trend_col2:
+                _trend_range = st.radio(
+                    "範圍", ["近 30 日", "近 90 日", "全部"],
+                    horizontal=True, label_visibility="collapsed",
+                    key="_sent_trend_range",
+                )
+
+            _n_keep = (30 if _trend_range == "近 30 日"
+                       else 90 if _trend_range == "近 90 日"
+                       else len(_trend_hist))
+            _hist_slice = _trend_hist[-_n_keep:] if len(_trend_hist) > _n_keep else _trend_hist
+
+            _dates = [pd.to_datetime(h["date"]) for h in _hist_slice]
+            _temps = [h.get("temp") for h in _hist_slice]
+
+            # 線色:依當前(最後一筆)溫度的區間給色,跟主數字一致
+            _last_t = _temps[-1] if _temps else 50
+            _line_color = (
+                "#16a34a" if _last_t >= 70 else
+                "#65a30d" if _last_t >= 55 else
+                "#ca8a04" if _last_t >= 45 else
+                "#ea580c" if _last_t >= 30 else
+                "#dc2626"
+            )
+
+            _fig_trend = go.Figure()
+            _fig_trend.add_trace(go.Scatter(
+                x=_dates, y=_temps,
+                mode="lines+markers",
+                line=dict(color=_line_color, width=2.5),
+                marker=dict(size=6),
+                name="溫度",
+                hovertemplate="<b>%{x|%Y-%m-%d}</b><br>溫度 %{y}/100<extra></extra>",
+            ))
+            # 4 條參考線標示區間
+            for _y, _lbl, _col, _dash in [
+                (70, "70 偏熱", "#16a34a", "dash"),
+                (55, "55 略偏多", "#65a30d", "dot"),
+                (45, "45 中性", "gray",    "dot"),
+                (30, "30 偏冷", "#dc2626", "dash"),
+            ]:
+                _fig_trend.add_hline(
+                    y=_y, line_dash=_dash, line_color=_col, opacity=0.4,
+                    annotation_text=_lbl, annotation_position="right",
+                    annotation_font=dict(size=10, color=_col),
+                )
+
+            _fig_trend.update_layout(
+                height=260, margin=dict(l=10, r=60, t=10, b=20),
+                yaxis=dict(range=[0, 100], title="溫度"),
+                xaxis=dict(title=""),
+                plot_bgcolor="rgba(0,0,0,0.03)",
+                showlegend=False,
+            )
+            st.plotly_chart(_fig_trend, use_container_width=True)
+
+            # 統計摘要
+            _avg = sum(_temps) / len(_temps)
+            _high = max(_temps)
+            _low  = min(_temps)
+            _delta = _temps[-1] - _temps[0]
+            _arrow = "↗" if _delta > 2 else ("↘" if _delta < -2 else "→")
+            _stat_cols = st.columns(4)
+            _stat_cols[0].metric("區間平均", f"{_avg:.0f}")
+            _stat_cols[1].metric("區間最高", f"{_high}")
+            _stat_cols[2].metric("區間最低", f"{_low}")
+            _stat_cols[3].metric(f"變化 {_arrow}", f"{_delta:+d}",
+                                 help=f"從 {_hist_slice[0]['date']} 到 {_hist_slice[-1]['date']}")
+        elif _trend_hist:
+            st.info(f"📈 市場溫度走勢:已累積 {len(_trend_hist)} 日,**明天起會自動畫成趨勢圖**。")
+
         st.caption(
             "⚠️ 情緒指標為輔助參考，不構成買賣建議。"
             "外資期貨 / 散戶估算資料來源為 TAIFEX 公開揭露，每交易日盤後更新一次。"
