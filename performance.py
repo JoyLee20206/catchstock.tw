@@ -139,6 +139,120 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
     return {"samples": samples, "overall": overall, "by_score": by_score}
 
 
+def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
+    """算「系統 picks vs ^TWII 大盤」的累積績效曲線(複利)。
+
+    對每個入選日:
+      - 系統:當日所有 picks 的平均 N 日報酬
+      - 大盤:同期間 ^TWII 的 N 日報酬
+    然後依時序對每日 % 報酬做複利累加。
+
+    起始資金假設 100,終值 - 100 = 累積報酬率(%)。
+
+    Args:
+        history: load_history() 結果
+        cache_dir: pathlib.Path 指向 CACHE_DIR
+        hold_days: 持有交易日數(預設 5)
+
+    Returns:
+        {
+          "dates":       [entry_date_str, ...],
+          "pick_curve":  [eq1, eq2, ...]   # 系統累積資金(起始 100)
+          "twii_curve":  [...]              # 大盤累積資金(起始 100)
+          "n_days":      樣本日數,
+          "final_pick":  最後系統值,
+          "final_twii":  最後大盤值,
+          "alpha":       系統 - 大盤(百分點),
+        }
+        資料不足回 None
+    """
+    from pathlib import Path
+
+    close_matrix = _load_close_matrix(cache_dir)
+    if close_matrix is None:
+        return None
+
+    # 讀 ^TWII close(優先用 fetch_cache 落地的 parquet)
+    twii_close = None
+    try:
+        twii_files = sorted(Path(cache_dir).glob("twii_*.parquet"))
+        if twii_files:
+            df_twii = pd.read_parquet(twii_files[-1])
+            if "date" in df_twii.columns:
+                df_twii["date"] = pd.to_datetime(df_twii["date"])
+                df_twii = df_twii.set_index("date").sort_index()
+            if "Close" in df_twii.columns:
+                twii_close = df_twii["Close"].dropna()
+    except Exception as e:
+        print(f"⚠ 讀取 twii parquet 失敗(equity curve 無大盤對照): {e}")
+
+    rows = []
+    for entry in history:
+        if entry.get("date") == "legacy":
+            continue
+        try:
+            entry_date = pd.Timestamp(entry["date"])
+        except Exception:
+            continue
+        picks = get_picks(entry)
+
+        # 系統:平均 picks 報酬
+        valid_returns = []
+        for pick in picks:
+            sid = str(pick.get("sid", ""))
+            if sid:
+                ret = _forward_return(close_matrix, sid, entry_date, hold_days)
+                if ret is not None:
+                    valid_returns.append(ret)
+        if not valid_returns:
+            continue
+        avg_ret = sum(valid_returns) / len(valid_returns)
+
+        # 大盤:^TWII 同期間報酬
+        twii_ret = 0.0
+        if twii_close is not None:
+            idx_arr = twii_close.index.searchsorted(entry_date)
+            if idx_arr < len(twii_close):
+                entry_idx = idx_arr
+                target_idx = entry_idx + hold_days
+                if target_idx < len(twii_close):
+                    entry_p = twii_close.iloc[entry_idx]
+                    target_p = twii_close.iloc[target_idx]
+                    if entry_p > 0 and pd.notna(entry_p) and pd.notna(target_p):
+                        twii_ret = (target_p - entry_p) / entry_p * 100
+
+        rows.append({
+            "date":          entry["date"],
+            "pick_avg_ret":  avg_ret,
+            "twii_ret":      twii_ret,
+            "n_picks":       len(valid_returns),
+        })
+
+    if not rows:
+        return None
+
+    # 複利累加(起始資金 100)
+    pick_eq = 100.0
+    twii_eq = 100.0
+    pick_curve = []
+    twii_curve = []
+    for r in rows:
+        pick_eq *= (1 + r["pick_avg_ret"] / 100)
+        twii_eq *= (1 + r["twii_ret"] / 100)
+        pick_curve.append(round(pick_eq, 2))
+        twii_curve.append(round(twii_eq, 2))
+
+    return {
+        "dates":       [r["date"] for r in rows],
+        "pick_curve":  pick_curve,
+        "twii_curve":  twii_curve,
+        "n_days":      len(rows),
+        "final_pick":  round(pick_eq, 2),
+        "final_twii":  round(twii_eq, 2),
+        "alpha":       round(pick_eq - twii_eq, 2),
+    }
+
+
 def format_performance_summary(perf: dict) -> str:
     """產生一行 TG 用的績效摘要。"""
     o = perf.get("overall", {})
