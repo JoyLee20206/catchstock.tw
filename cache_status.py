@@ -15,7 +15,8 @@ def cache_freshness(cache_date) -> dict:
     Returns:
         dict with keys:
         - level: "missing" | "ok" | "info" | "warn" | "error"
-        - msg:   給人看的中文訊息(一句話)
+        - msg:   給人看的中文訊息(一句話,詳細版 — 供 TG / 說明用)
+        - short: 精簡版(供 UI 頂部狀態欄,維持單行不擠)
         - days:  距今天差幾天(int);若 cache_date 不合法則為 None
 
     Level 對照:
@@ -26,7 +27,8 @@ def cache_freshness(cache_date) -> dict:
         error   — ≥ 6 天,需要立即處理
     """
     if cache_date is None or pd.isna(cache_date):
-        return {"level": "missing", "msg": "找不到 daily 快取,請先執行 fetch_cache.py", "days": None}
+        return {"level": "missing", "msg": "找不到 daily 快取,請先執行 fetch_cache.py",
+                "short": "找不到 daily 快取", "days": None}
 
     now_tpe = pd.Timestamp.now(tz="Asia/Taipei").replace(tzinfo=None)
     today_naive = now_tpe.normalize()
@@ -42,25 +44,18 @@ def cache_freshness(cache_date) -> dict:
     now_hour = now_tpe.hour
 
     # 當天資料
-    # 排程說明(daily_push.yml):
-    #   16:05 TPE — 盤後第一輪(K 線 / 三大法人 / TWSE 資券,不發 TG)
-    #   21:05 TPE — 完整資料(含 TPEx 資券於 18:00 後公告)+ TG 正式推播
     if age == 0:
-        if now_hour < 16:
+        if now_hour < 15:
             return {
                 "level": "info",
-                "msg": f"目前資料為 {date_str}。今日盤後第一輪預計 16:05、完整資料 21:05 自動更新。",
-                "days": 0,
-            }
-        if now_hour < 21:
-            return {
-                "level": "info",
-                "msg": f"目前資料為 {date_str}(盤後第一輪)。完整資料(含 TPEx 資券)預計 21:05 更新。",
+                "msg": f"目前資料為 {date_str}。今日盤後數據預計 15:30 自動更新。",
+                "short": f"資料 {date_str}・待盤後更新",
                 "days": 0,
             }
         return {
             "level": "ok",
-            "msg": f"cache 最新日期: {date_str}(今日完整數據)",
+            "msg": f"cache 最新日期: {date_str}(今日最新數據)",
+            "short": f"資料 {date_str}・今日最新",
             "days": 0,
         }
 
@@ -69,6 +64,7 @@ def cache_freshness(cache_date) -> dict:
         return {
             "level": "ok",
             "msg": f"cache 最新日期: {date_str}(週末未開盤,此已為最新交易日)",
+            "short": f"資料 {date_str}・最新交易日",
             "days": age,
         }
 
@@ -77,6 +73,7 @@ def cache_freshness(cache_date) -> dict:
         return {
             "level": "info",
             "msg": f"cache 最新日期: {date_str}({age} 天前,若遇國定假日未開盤即為最新資料)",
+            "short": f"資料 {date_str}・{age} 天前",
             "days": age,
         }
 
@@ -85,6 +82,7 @@ def cache_freshness(cache_date) -> dict:
         return {
             "level": "warn",
             "msg": f"cache 最新日期: {date_str}({age} 天前,可能 fetch_cache 排程失敗)",
+            "short": f"資料 {date_str}・{age} 天前,留意排程",
             "days": age,
         }
 
@@ -92,5 +90,6 @@ def cache_freshness(cache_date) -> dict:
     return {
         "level": "error",
         "msg": f"cache 最新日期: {date_str}({age} 天前)⚠ 過舊,請立即更新",
+        "short": f"資料 {date_str}・{age} 天前⚠ 過舊",
         "days": age,
     }

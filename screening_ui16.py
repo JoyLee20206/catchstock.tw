@@ -334,7 +334,8 @@ _status_cols = st.columns(3)
 # 第 1 欄:資料新鮮度
 with _status_cols[0]:
     _emoji = _LEVEL_EMOJI.get(_freshness["level"], "ℹ️")
-    _data_lines = [f"**{_emoji} {_freshness['msg']}**"]
+    # 用精簡版 short(維持單行不擠);詳細說明留在「資料更新」expander
+    _data_lines = [f"**{_emoji} {_freshness.get('short', _freshness['msg'])}**"]
     # 嘗試讀抓取時戳
     try:
         _ts_file = CACHE_DIR / "last_fetch_daily.txt"
@@ -945,12 +946,9 @@ try:
         if _v.get("value") is not None:
             _sign = "+" if _v["value"] >= 0 else ""
             _parts.append(f"外資期貨 {_sign}{_v['value']:,}口 {_v['label']}")
-        _sent_banner = (
-            f"📊 **大盤情緒** 溫度 **{_sent['temperature']}/100** "
-            f"{_sent['icon']} {_sent['label']}"
-            + (f"　|　{' | '.join(_parts)}" if _parts else "")
-        )
-        st.info(_sent_banner)
+        # 溫度與標籤已在頂部「🌡️ 市場溫度」欄顯示,這裡只補 4 個關鍵細項(避免重複 + 改用輕量 caption)
+        if _parts:
+            st.caption("🌡️ **情緒細項**　" + "　｜　".join(_parts))
 except Exception:
     pass
 
@@ -1728,9 +1726,20 @@ with _tab_bt:
         "回答「哪個訊號真的有 alpha?該在計分系統加重?」可複選做組合測試。"
     )
 
-    # ── 📖 使用說明 / FAQ(摺疊,預設關)──
-    with st.expander("📖 使用說明 / FAQ", expanded=False):
-        st.markdown("""
+    sig_options = list(SIGNAL_LABELS.keys())
+    _sig_col, _faq_col = st.columns([3, 1])
+    with _sig_col:
+        sig_choice_multi = st.multiselect(
+            "選擇訊號(可複選)", sig_options,
+            default=["breakout"],
+            format_func=lambda k: SIGNAL_LABELS[k],
+            key="bt_signals",
+            help="多選時依「合併模式」交集 / 聯集 — 例:選『外資+投信』模式 AND = 兩家同日都買超才算",
+        )
+    # ── 📖 使用說明 / FAQ(摺疊,放右欄與「選擇訊號」同列)──
+    with _faq_col:
+        with st.expander("📖 使用說明 / FAQ", expanded=False):
+            st.markdown("""
 ### 🎯 這頁在做什麼?
 對歷史資料**掃描每個交易日**,標出符合訊號的點當作「進場」,算進場後 N 個交易日的報酬。
 最終回答:**「我選的這些訊號條件,真的能賺錢嗎?」**
@@ -1879,16 +1888,7 @@ with _tab_bt:
 
 ### ⏱ 持有天數敏感度怎麼用
 打開下面那個摺疊區,**同一組訊號**會跑 5/10/20/40 日對比 → 直接看到「**這策略最佳持有期是幾天?**」
-        """)
-
-    sig_options = list(SIGNAL_LABELS.keys())
-    sig_choice_multi = st.multiselect(
-        "選擇訊號(可複選)", sig_options,
-        default=["breakout"],
-        format_func=lambda k: SIGNAL_LABELS[k],
-        key="bt_signals",
-        help="多選時依「合併模式」交集 / 聯集 — 例:選『外資+投信』模式 AND = 兩家同日都買超才算"
-    )
+            """)
 
     bc1, bc2, bc3 = st.columns(3)
     combine_mode_choice = bc1.radio(
