@@ -8,6 +8,9 @@
 import pandas as pd
 from picks_history import get_picks
 
+# 台股來回交易成本估計(%):手續費買賣各 ~0.1425% + 賣出交易稅 0.3%,約 0.5%
+TRADE_COST_PCT = 0.5
+
 
 # ══════════════════════════════════════════════════════════════════════
 # 載入 close 矩陣(優化:一次讀檔,所有 pick 共用)
@@ -130,11 +133,8 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
                 overall[f"profit_factor_{n}d"] = (
                     sum(gains) / abs(total_loss) if total_loss < 0 else float('inf')
                 )
-                # 期望值 = 勝率*平均獲利 - 敗率*|平均虧損|
-                wr = wins / len(valid)
-                avg_g = sum(gains) / len(gains) if gains else 0.0
-                avg_l = sum(losses) / len(losses) if losses else 0.0
-                overall[f"expectancy_{n}d"] = wr * avg_g + (1 - wr) * avg_l
+                # 淨期望值 = 平均報酬 - 來回交易成本(扣成本後實際落袋)
+                overall[f"net_expectancy_{n}d"] = sum(valid) / len(valid) - TRADE_COST_PCT
 
     # ── 分數區間統計 ──
     by_score = {}
@@ -283,11 +283,11 @@ def format_performance_summary(perf: dict) -> str:
         return ""
     pf = o.get("profit_factor_5d")
     pf_str = "∞" if pf == float("inf") else (f"{pf:.2f}" if pf is not None else "—")
-    exp = o.get("expectancy_5d", 0.0)
+    exp = o.get("net_expectancy_5d", 0.0)
     return (
         f"📊 近 30 日策略績效(5 日後):"
         f"勝率 {o['win_rate_5d']*100:.0f}% / "
-        f"期望值 {exp:+.2f}% / "
+        f"淨期望值 {exp:+.2f}% / "
         f"損益比 {pf_str} / "
         f"樣本 {o['n_5d']} 筆"
     )

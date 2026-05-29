@@ -1006,7 +1006,7 @@ with _tab_perf:
 
                 # 第二排:損益面統計(回答「輸的時候輸多少、整體期望值正不正」)
                 key_pf  = f"profit_factor_{n_days}d"
-                key_exp = f"expectancy_{n_days}d"
+                key_exp = f"net_expectancy_{n_days}d"
                 if key_pf in overall:
                     m2 = st.columns(4)
                     avg_gain = overall.get(f"avg_gain_{n_days}d", 0)
@@ -1019,9 +1019,9 @@ with _tab_perf:
                     # 損益比 > 1.5 算有效;以 help 提示判讀門檻
                     m2[2].metric("損益比", pf_str,
                                  help="總獲利 ÷ 總虧損。>1.5 算有效,>2 不錯")
-                    m2[3].metric("每筆期望值", f"{exp:+.2f}%",
+                    m2[3].metric("淨期望值", f"{exp:+.2f}%",
                                  delta_color="normal" if exp >= 0 else "inverse",
-                                 help="勝率×平均獲利 − 敗率×|平均虧損|。需 >0 且大於手續費(~0.5%)")
+                                 help="平均報酬扣掉來回交易成本(約 0.5%)後,每筆實際落袋。需 >0 才真正划算")
 
             # ── 📊 累積績效曲線 vs 大盤 ─────────────────────────
             # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。
