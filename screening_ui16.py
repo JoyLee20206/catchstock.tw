@@ -1013,6 +1013,11 @@ with _tab_perf:
                 "③中位數遠低於平均(獲利集中少數幾筆,別過度自信)。"
                 "💡 把多頭期漂亮數字當「天花板」不是常態,資金規劃用保守值。"
             )
+            st.caption(
+                "📐 **回檔/夏普/波動的計算基礎**:用「每入選日平均報酬」序列(每天收斂成一點),"
+                "不是逐筆——逐筆會把同日多檔當連續交易、重疊窗口重複複利,把波動灌水。"
+                "因此這幾項的「天數」會少於上方明細的「筆數」,口徑與「vs 大盤」圖一致。"
+            )
 
         perf = _load_performance_cached()
         overall = perf.get("overall", {})
@@ -1118,20 +1123,27 @@ with _tab_perf:
                                      help="平均報酬扣掉來回交易成本(約 0.5%)後,每筆實際落袋。需 >0 才真正划算")
 
                     # 第三排:風險面(最大回檔、夏普值、波動、最差單筆)
+                    # 風險指標以「每入選日平均報酬」序列計算(非逐筆),避免重疊窗口灌水。
                     if f"sharpe_{n_days}d" in overall:
                         m3 = st.columns(4)
                         mdd = overall.get(f"mdd_{n_days}d", 0)
                         std = overall.get(f"std_{n_days}d", 0)
+                        risk_n = overall.get(f"risk_n_{n_days}d", 0)
                         m3[0].metric("最大回檔", f"{mdd:.2f}%", delta_color="off",
-                                     help="複利資金曲線從高點到低點的最大跌幅。越接近 0 越穩,評估最壞情況")
+                                     help="以每入選日平均報酬串成的資金曲線,從高點到低點最大跌幅。越接近 0 越穩")
                         m3[1].metric("夏普值", f"{_shp:.2f}", delta_color="off",
                                      help="風險調整後報酬(年化)。>1 不錯,>2 很好,>3 極佳")
                         m3[2].metric("報酬波動(標準差)", f"{std:.2f}%", delta_color="off",
-                                     help="報酬的起伏程度,越大代表越不穩定")
+                                     help="每日平均報酬的起伏程度,越大代表越不穩定")
                         min_ret = overall.get(f"min_return_{n_days}d")
                         if min_ret is not None:
                             m3[3].metric("最差單筆", f"{min_ret:+.2f}%", delta_color="off",
-                                         help="這個持有期裡,賠最多的那一筆")
+                                         help="這個持有期裡,賠最多的那一筆(逐筆,非每日平均)")
+                        st.caption(
+                            f"⚖️ 風險指標(回檔/夏普/波動)以**每入選日平均報酬**計算"
+                            f"(共 {risk_n} 個交易日),已避開「逐筆+重疊窗口」的灌水,"
+                            f"口徑與上方「vs 大盤」走勢圖一致。"
+                        )
 
             # ── 📊 累積績效曲線 vs 大盤 ─────────────────────────
             # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。
