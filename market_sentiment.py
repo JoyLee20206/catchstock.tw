@@ -54,8 +54,36 @@ def _yf_download_with_retry(ticker: str, period: str = "60d", max_retries: int =
     return None
 
 
-def get_vix() -> dict:
+def _load_index_parquet(cache_dir, prefix: str, min_rows: int = 10):
+    """從 cache/{prefix}_*.parquet 讀指數歷史(^TWII / ^VIX),統一為 DataFrame。
+
+    fetch_cache.py 排程會把 ^TWII 與 ^VIX 寫進 parquet,UI/sentiment 模組
+    可以走這條快速路徑,避免冷啟動每次都打 yfinance(~3 秒/次)。
+
+    Returns:
+        DataFrame,index 為 datetime,有 Close 欄(以及其他 OHLCV)
+        失敗或筆數不足回 None
+    """
+    if cache_dir is None:
+        return None
+    try:
+        files = sorted(Path(cache_dir).glob(f"{prefix}_*.parquet"))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        if df.empty or len(df) < min_rows:
+            return None
+        if "date" in df.columns:
+            df = df.set_index(pd.to_datetime(df["date"])).drop(columns=["date"], errors="ignore")
+        return df
+    except Exception:
+        return None
+
+
+def get_vix(cache_dir=None) -> dict:
     """美股 VIX。
+
+    優先讀 cache/vix_*.parquet(< 50ms),沒有才打 yfinance(~3 秒)。
 
     區間判斷(經驗值):
     - < 15: 樂觀 — bull
@@ -63,7 +91,11 @@ def get_vix() -> dict:
     - 20~30: 警戒
     - > 30: 恐慌
     """
-    df = _yf_download_with_retry("^VIX", period="5d")
+    # 路徑 A:本地 parquet(最快)
+    df = _load_index_parquet(cache_dir, "vix", min_rows=1)
+    # 路徑 B:fallback 打 yfinance
+    if df is None:
+        df = _yf_download_with_retry("^VIX", period="5d")
     if df is None or df.empty:
         return {"value": None, "label": "N/A", "score": None, "icon": "⚪"}
 
@@ -81,8 +113,10 @@ def get_vix() -> dict:
     return {"value": round(val, 1), "label": label, "score": score, "icon": icon}
 
 
-def get_taiex_vix() -> dict:
+def get_taiex_vix(cache_dir=None) -> dict:
     """台指實現波動率(從 ^TWII 算)。
+
+    優先讀 cache/twii_*.parquet(< 50ms),沒有才打 yfinance(~3 秒)。
 
     原本用 00677U 富邦 VIX ETF 當代理,但該 ETF 已下市(2024),
     改為直接從加權指數計算 20 日年化實現波動率:
@@ -91,7 +125,11 @@ def get_taiex_vix() -> dict:
     用「歷史百分位」判讀:看當前值在過去 90 日的位置。
     高百分位 = 波動高(恐慌升溫);低百分位 = 平靜樂觀。
     """
-    df = _yf_download_with_retry("^TWII", period="180d")
+    # 路徑 A:本地 parquet
+    df = _load_index_parquet(cache_dir, "twii", min_rows=40)
+    # 路徑 B:fallback yfinance
+    if df is None:
+        df = _yf_download_with_retry("^TWII", period="180d")
     if df is None or df.empty or len(df) < 40:
         return {"value": None, "pct_rank": None, "label": "N/A", "score": None, "icon": "⚪"}
 
@@ -123,9 +161,14 @@ def get_taiex_vix() -> dict:
             "label": label, "score": score, "icon": icon}
 
 
-def get_taiex_position() -> dict:
-    """大盤位階 — 加權指數相對 MA60 乖離率。"""
-    df = _yf_download_with_retry("^TWII", period="120d")
+def get_taiex_position(cache_dir=None) -> dict:
+    """大盤位階 — 加權指數相對 MA60 乖離率。
+
+    優先讀 cache/twii_*.parquet(< 50ms),沒有才打 yfinance(~3 秒)。
+    """
+    df = _load_index_parquet(cache_dir, "twii", min_rows=60)
+    if df is None:
+        df = _yf_download_with_retry("^TWII", period="120d")
     if df is None or df.empty or len(df) < 60:
         return {"value": None, "label": "N/A", "score": None, "icon": "⚪"}
 
@@ -617,9 +660,9 @@ def compute_sentiment(cache_dir) -> dict:
         }
     """
     indicators = {
-        "vix":            get_vix(),
-        "taiex_vix":      get_taiex_vix(),
-        "taiex_pos":      get_taiex_position(),
+        "vix":            get_vix(cache_dir),
+        "taiex_vix":      get_taiex_vix(cache_dir),
+        "taiex_pos":      get_taiex_position(cache_dir),
         "margin_level":   get_margin_balance_level(cache_dir),
         "fi_futures":     get_fi_futures_net(cache_dir),
         "retail_futures": get_retail_futures_ratio(cache_dir),
