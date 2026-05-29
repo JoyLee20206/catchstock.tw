@@ -41,7 +41,7 @@ from cache_status import cache_freshness
 from picks_history import load_history, compute_hot_picks
 from data_health import check_data_health
 from industry_rotation import compute_industry_rotation
-from performance import compute_performance, compute_equity_curve
+from performance import compute_performance, compute_equity_curve, backtest_market_filter
 from backtest import run_backtest, SIGNAL_LABELS, build_signal_matrices
 from market_sentiment import (
     compute_sentiment,
@@ -835,6 +835,12 @@ def _load_performance_cached():
     hist = load_history()
     return compute_performance(hist, CACHE_DIR, n_days_list=(3, 5, 10, 20))
 
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_market_filter_cached(hold_days=5):
+    """大盤濾網實證(只在多頭/空頭進場的績效對照),快取 10 分鐘。"""
+    return backtest_market_filter(load_history(), CACHE_DIR, hold_days=hold_days)
+
 # ── 🎯 首頁速覽卡片(3 秒看完今日重點) ──
 # 4 張 metric:今日達標 / 大盤狀態 / 最強產業 / 系統 5 日勝率
 if meta is not None and df is not None:
@@ -1261,6 +1267,65 @@ with _tab_perf:
                     st.info(
                         f"系統表現與大盤接近(Alpha {_alpha:+.2f}%),勝日 {_win_days}/{_eq['n_days']}。"
                         f"沒有明顯超額,可能就跟大盤連動。"
+                    )
+
+            # ── 🧪 大盤濾網實證(只在多頭/空頭進場,淨期望值會更好嗎?) ──
+            st.divider()
+            st.markdown("**🧪 大盤濾網實證(只在特定大盤狀態進場,績效會更好嗎?)**")
+            _mf = _load_market_filter_cached(hold_days=5)
+            if _mf.get("error"):
+                st.info(f"📊 {_mf['error']}")
+            else:
+                _mf_rows = []
+                for _sc in _mf["scenarios"]:
+                    _st = _sc["stat"]
+                    if _st:
+                        _mf_rows.append({
+                            "進場條件": _sc["name"],
+                            "樣本": _st["n"],
+                            "勝率": f"{_st['win_rate']*100:.0f}%",
+                            "平均報酬": f"{_st['avg']:+.2f}%",
+                            "淨期望值": f"{_st['net_exp']:+.2f}%",
+                        })
+                    else:
+                        _mf_rows.append({"進場條件": _sc["name"], "樣本": 0,
+                                         "勝率": "—", "平均報酬": "—", "淨期望值": "—"})
+                st.dataframe(pd.DataFrame(_mf_rows), use_container_width=True, hide_index=True)
+
+                # 自動解讀:多頭濾網 vs 基準的淨期望值差
+                _base = _mf["scenarios"][0]["stat"]
+                _bull = _mf["scenarios"][1]["stat"]
+                if _base and _bull and _bull["n"] >= 5:
+                    _gain = _bull["net_exp"] - _base["net_exp"]
+                    if _gain > 0.3:
+                        st.caption(
+                            f"💡 **只在多頭進場淨期望值高出基準 {_gain:+.2f}%**"
+                            f"(多頭 {_bull['net_exp']:+.2f}% vs 全部 {_base['net_exp']:+.2f}%)——"
+                            f"大盤濾網看起來有幫助,空頭時可考慮減碼或暫停。"
+                        )
+                    elif _gain < -0.3:
+                        st.caption(
+                            f"💡 多頭濾網反而較差({_gain:+.2f}%),代表這套選股在空頭也能打——"
+                            f"不必特別用大盤狀態過濾。"
+                        )
+                    else:
+                        st.caption(
+                            f"💡 多頭/全部進場差異不大({_gain:+.2f}%),大盤濾網目前看不出明顯效果。"
+                        )
+
+                # 溫度濾網(若情緒歷史足夠)
+                _tb = _mf.get("temp_block")
+                if _tb and _tb.get("warm") and _tb.get("cool"):
+                    st.caption(
+                        f"🌡️ 溫度濾網(限有溫度紀錄的 {_tb['n_temp']} 筆):"
+                        f"溫度≥50 淨期望 {_tb['warm']['net_exp']:+.2f}%(n={_tb['warm']['n']}) "
+                        f"vs 溫度<50 {_tb['cool']['net_exp']:+.2f}%(n={_tb['cool']['n']})。"
+                    )
+
+                if (_mf.get("n_total") or 0) < 50:
+                    st.warning(
+                        f"⚠️ 總樣本僅 {_mf.get('n_total', 0)} 筆,且多頭/空頭分組後更少,"
+                        f"結論極不穩。需累積跨多空的資料後才可信。"
                     )
 
             # 分數區間表

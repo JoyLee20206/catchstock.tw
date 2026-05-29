@@ -179,15 +179,22 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
                 )
                 # 淨期望值 = 平均報酬 - 來回交易成本(扣成本後實際落袋)
                 overall[f"net_expectancy_{n}d"] = sum(valid) / len(valid) - TRADE_COST_PCT
-                # 風險指標(最大回檔、夏普值):需用「依日期排序」的報酬序列
-                ordered = [
-                    s[f"return_{n}d"] for s in sorted(samples, key=lambda x: x["date"])
-                    if s[f"return_{n}d"] is not None
-                ]
-                _risk = _risk_metrics(ordered, n)
+                # 風險指標(最大回檔、夏普值):
+                # 用「每個入選日的平均報酬」序列,而非逐筆 pick。
+                # 原因:逐筆把同日多檔當成連續交易、且重疊的 N 日窗口會被重複複利,
+                #       會把資金曲線波動嚴重灌水(同 compute_equity_curve 的註解)。
+                #       收斂成每日一點後,口徑與「vs 大盤」走勢圖一致、數字才真實。
+                _by_date = {}
+                for s in samples:
+                    r = s[f"return_{n}d"]
+                    if r is not None:
+                        _by_date.setdefault(s["date"], []).append(r)
+                daily_avg = [sum(v) / len(v) for _, v in sorted(_by_date.items())]
+                _risk = _risk_metrics(daily_avg, n)
                 overall[f"mdd_{n}d"] = _risk["mdd"]
                 overall[f"sharpe_{n}d"] = _risk["sharpe"]
                 overall[f"std_{n}d"] = _risk["std"]
+                overall[f"risk_n_{n}d"] = len(daily_avg)   # 風險指標的有效「天數」樣本
 
     # ── 分數區間統計 ──
     by_score = {}
@@ -212,6 +219,126 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
         by_score[score] = stat
 
     return {"samples": samples, "overall": overall, "by_score": by_score}
+
+
+def _load_twii_regime(cache_dir, ma_days: int = 60):
+    """讀 ^TWII,回傳 (close 序列, MA 序列)。判斷各日是否站上季線用。失敗回 None。"""
+    from pathlib import Path
+    try:
+        files = sorted(Path(cache_dir).glob("twii_*.parquet"))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        if "date" not in df.columns or "Close" not in df.columns:
+            return None
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date").sort_index()
+        close = df["Close"].dropna()
+        if len(close) < ma_days:
+            return None
+        ma = close.rolling(ma_days).mean()
+        return close, ma
+    except Exception as e:
+        print(f"⚠ 讀取 twii regime 失敗: {e}")
+        return None
+
+
+def backtest_market_filter(history: list, cache_dir, hold_days: int = 5, ma_days: int = 60) -> dict:
+    """回測「大盤濾網」:只在特定大盤狀態進場,淨期望值會不會更好?
+
+    對每筆已滿持有期的 pick,判斷其入選日的大盤狀態(站上/跌破季線),
+    比較「全部進場(基準)」vs「只在多頭」vs「只在空頭」的勝率/淨期望值。
+    若情緒歷史足夠,額外比較「只在溫度 ≥ 50」vs「< 50」。
+
+    Returns:
+        {
+          "hold_days","ma_days","n_total",
+          "scenarios": [{"name","stat":{n,win_rate,avg,net_exp}|None}, ...],
+          "temp_block": {"base","warm","cool","n_temp"}|None,
+        }
+        資料不足回 {"error": "..."}。
+    """
+    close_matrix = _load_close_matrix(cache_dir)
+    if close_matrix is None:
+        return {"error": "無法讀取 daily 快取"}
+    twii = _load_twii_regime(cache_dir, ma_days)
+    if twii is None:
+        return {"error": f"找不到 ^TWII 或資料不足 {ma_days} 日,無法判斷大盤狀態"}
+    close_t, ma_t = twii
+
+    # 情緒歷史(選用):date -> temp
+    temp_by_date = {}
+    try:
+        from market_sentiment import load_sentiment_history
+        for h in load_sentiment_history(cache_dir):
+            if h.get("temp") is not None and h.get("date"):
+                temp_by_date[h["date"]] = h["temp"]
+    except Exception:
+        pass
+
+    def _regime_at(entry_ts):
+        """該入選日是否站上季線。資料不足回 None。"""
+        idx = close_t.index.searchsorted(entry_ts, side="right") - 1
+        if idx < 0 or idx >= len(close_t):
+            return None
+        mav = ma_t.iloc[idx]
+        if pd.isna(mav):
+            return None
+        return bool(close_t.iloc[idx] > mav)
+
+    recs = []
+    for entry in history:
+        if entry.get("date") == "legacy":
+            continue
+        try:
+            entry_ts = pd.Timestamp(entry["date"])
+        except Exception:
+            continue
+        bullish = _regime_at(entry_ts)
+        temp = temp_by_date.get(entry["date"])
+        for pick in get_picks(entry):
+            sid = str(pick.get("sid", ""))
+            if not sid:
+                continue
+            ret = _forward_return(close_matrix, sid, entry_ts, hold_days)
+            if ret is None:
+                continue
+            recs.append({"ret": ret, "bullish": bullish, "temp": temp})
+
+    if not recs:
+        return {"error": "尚無足夠已滿持有期的樣本"}
+
+    def _stat(subset):
+        vals = [r["ret"] for r in subset]
+        if not vals:
+            return None
+        wins = sum(1 for v in vals if v > 0)
+        avg = sum(vals) / len(vals)
+        return {"n": len(vals), "win_rate": wins / len(vals),
+                "avg": avg, "net_exp": avg - TRADE_COST_PCT}
+
+    bull = [r for r in recs if r["bullish"] is True]
+    bear = [r for r in recs if r["bullish"] is False]
+    scenarios = [
+        {"name": "全部進場(基準)",          "stat": _stat(recs)},
+        {"name": f"只在多頭(站上 MA{ma_days})", "stat": _stat(bull)},
+        {"name": f"只在空頭(跌破 MA{ma_days})", "stat": _stat(bear)},
+    ]
+
+    temp_recs = [r for r in recs if r["temp"] is not None]
+    temp_block = None
+    if len(temp_recs) >= 5:
+        temp_block = {
+            "base": _stat(temp_recs),
+            "warm": _stat([r for r in temp_recs if r["temp"] >= 50]),
+            "cool": _stat([r for r in temp_recs if r["temp"] < 50]),
+            "n_temp": len(temp_recs),
+        }
+
+    return {
+        "hold_days": hold_days, "ma_days": ma_days, "n_total": len(recs),
+        "scenarios": scenarios, "temp_block": temp_block,
+    }
 
 
 def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
