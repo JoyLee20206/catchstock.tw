@@ -368,7 +368,7 @@ with _status_cols[1]:
         st.markdown(
             f"**{_bull_icon} {_bull_txt}** "
             f"<span style='color:{_pct_color};font-weight:600'>{_mkt['pct']:+.2f}%</span><br>"
-            f"TWII {_mkt['close']:,.0f} / 乖離 {_mkt['bias']:+.1f}%",
+            f"加權指數 {_mkt['close']:,.0f} / 乖離 {_mkt['bias']:+.1f}%",
             unsafe_allow_html=True,
         )
 
@@ -760,7 +760,7 @@ def show_market_banner(meta: dict) -> None:
         thr_txt = f"過關門檻 {base}"
     else:
         thr_txt = f"過關門檻 {base} → **{eff}**"
-    msg = f"{state_txt}  |  {thr_txt}  |  TWII {twii_now_s} / MA60 {twii_ma_s} | 近 20 日 {change:+.2f}%"
+    msg = f"{state_txt}  |  {thr_txt}  |  加權指數 {twii_now_s} / MA60 {twii_ma_s} | 近 20 日 {change:+.2f}%"
     if bullish:
         st.success(msg)
     else:
@@ -1223,7 +1223,7 @@ with _tab_perf:
                     mode="lines+markers",
                     line=dict(color="#6b7280", width=1.8, dash="dot"),
                     marker=dict(size=5),
-                    name=f"大盤 ^TWII(平均 {_avg_twii:+.2f}%)",
+                    name=f"大盤 加權指數(平均 {_avg_twii:+.2f}%)",
                     hovertemplate=f"<b>%{{x}}</b><br>大盤 {_hd} 日報酬:%{{y:+.2f}}%<extra></extra>",
                 ))
                 # 0% 基準線

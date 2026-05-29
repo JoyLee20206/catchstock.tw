@@ -78,12 +78,14 @@ def path_for(name):   return CACHE_DIR / f"{name}_{today}.parquet"
 def need_fetch(name):
     """判斷是否需要重抓。
     - FORCE: 全部資源強制重抓
-    - FORCE_DAILY: 只有 'daily' 強制重抓,其他資源若已有當日檔仍略過
+    - FORCE_DAILY: 'daily' + 大盤指數 'twii' / 'vix' 一併強制重抓,其餘資源若已有當日檔仍略過
+      (理由:收盤後按「強制重抓日 K」時,大盤指數也該從盤中值更新成收盤值,
+       否則 twii/vix 會卡在盤中那筆,UI 顯示的加權指數與官方收盤對不上)
     - 預設: 沒當日檔就抓
     """
     if FORCE:
         return True
-    if FORCE_DAILY and name == "daily":
+    if FORCE_DAILY and name in ("daily", "twii", "vix"):
         return True
     return not path_for(name).exists()
 
