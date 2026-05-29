@@ -1292,10 +1292,23 @@ with _tab_perf:
                                          "勝率": "—", "平均報酬": "—", "淨期望值": "—"})
                 st.dataframe(pd.DataFrame(_mf_rows), use_container_width=True, hide_index=True)
 
-                # 自動解讀:多頭濾網 vs 基準的淨期望值差
+                # 自動解讀:先處理「單一 regime、無對照」的退化情況,再比較淨期望值差
                 _base = _mf["scenarios"][0]["stat"]
                 _bull = _mf["scenarios"][1]["stat"]
-                if _base and _bull and _bull["n"] >= 5:
+                _bear = _mf["scenarios"][2]["stat"]
+                _bull_n = _bull["n"] if _bull else 0
+                _bear_n = _bear["n"] if _bear else 0
+                if _base and (_bear_n == 0 or _bull_n == 0):
+                    # 整段期間只有單一大盤狀態 → 沒有對照組,無法評估濾網
+                    _which = "多頭(站上季線)" if _bear_n == 0 else "空頭(跌破季線)"
+                    _other = "空頭" if _bear_n == 0 else "多頭"
+                    st.caption(
+                        f"💡 這段期間大盤**幾乎全程處於{_which}**,{_other}樣本為 0——"
+                        f"所以「只在多頭」那列才會跟「全部進場」一模一樣(同一批股票)。"
+                        f"**目前沒有對照組,無法評估大盤濾網是否有效**;"
+                        f"要等大盤經歷一次狀態切換(跌破/站回季線)、雙邊都有樣本後才看得出來。"
+                    )
+                elif _base and _bull and _bull_n >= 5:
                     _gain = _bull["net_exp"] - _base["net_exp"]
                     if _gain > 0.3:
                         st.caption(
