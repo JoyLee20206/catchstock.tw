@@ -754,24 +754,53 @@ def show_market_banner(meta: dict) -> None:
 # 自動重跑旗標:強制更新日 K / 標準抓取完成後設置,讓選股不需手動再按一次
 _auto_rerun = st.session_state.pop("_auto_rerun_screening", False)
 
+# ── 選股結果 cache(同參數 + 同資料日期 → 秒切) ────────────────────────
+# 為什麼這樣設計:
+#   - run_screening 跑一次要 ~ 15 秒(讀 5 parquet + 1800 檔逐檔計分)
+#   - 使用者常按完選股後又改其他參數重按、或頁面 rerun 重觸發
+#   - 用 (params_tuple, cache_date) 當 cache key,同參數+同日資料完全省下
+#   - 改任何參數或資料日期變動 → cache miss,自動重算
+@st.cache_data(ttl=3600, show_spinner="選股中(讀 parquet + 1800 檔逐檔計分,約 15 秒)…")
+def _run_screening_cached(params_tuple: tuple, cache_date_str: str):
+    """params_tuple = (pass_score, lookback_days, it_min, fi_min, kd_lookback,
+                        kd_low_from, kd_high_cap_now, min_avg_vol_lots, atr_max_pct)
+    cache_date_str: 用最新資料日期當 cache key,daily parquet 更新會自然觸發重算。
+
+    回傳 (df, files_bytes, meta):
+        - files_bytes:{ftype: (filename, bytes)},因為 tmpdir 會在函式結束時刪除,
+          必須把檔案內容讀進 bytes 再回傳,不能傳 path。
+    """
+    (_p, _lb, _it, _fi, _kdlb, _kdlo, _kdhi, _vol, _atr) = params_tuple
+    with tempfile.TemporaryDirectory() as tmpdir:
+        df, file_paths, meta = run_screening(
+            pass_score=_p, lookback_days=_lb,
+            it_min_buy_days=_it, fi_min_buy_days=_fi,
+            kd_lookback=_kdlb, kd_low_from=_kdlo, kd_high_cap_now=_kdhi,
+            min_avg_vol_lots=_vol, atr_max_pct=_atr,
+            output_dir=Path(tmpdir),
+        )
+        files_bytes: dict = {}
+        for ftype, fpath in file_paths.items():
+            if Path(fpath).exists():
+                with open(fpath, 'rb') as fh:
+                    files_bytes[ftype] = (Path(fpath).name, fh.read())
+    return df, files_bytes, meta
+
+
 if run_clicked or _auto_rerun:
     _spinner_msg = ("資料已更新,自動重跑選股中..." if _auto_rerun else "選股中...")
-    with st.spinner(_spinner_msg):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            df, file_paths, meta = run_screening(
-                pass_score=st.session_state.pass_score, lookback_days=st.session_state.lookback_days,
-                it_min_buy_days=st.session_state.it_min_buy_days, fi_min_buy_days=st.session_state.fi_min_buy_days,
-                kd_lookback=st.session_state.kd_lookback, kd_low_from=st.session_state.kd_low_from,
-                kd_high_cap_now=st.session_state.kd_high_cap_now, min_avg_vol_lots=st.session_state.min_avg_vol_lots,
-                atr_max_pct=st.session_state.atr_max_pct, output_dir=Path(tmpdir),
-            )
-            files_bytes: dict = {}
-            for ftype, fpath in file_paths.items():
-                if Path(fpath).exists():
-                    with open(fpath, 'rb') as fh: files_bytes[ftype] = (Path(fpath).name, fh.read())
-        st.session_state.result_df = df
-        st.session_state.result_files = files_bytes
-        st.session_state.result_meta = meta
+    _params_tuple = (
+        st.session_state.pass_score, st.session_state.lookback_days,
+        st.session_state.it_min_buy_days, st.session_state.fi_min_buy_days,
+        st.session_state.kd_lookback, st.session_state.kd_low_from,
+        st.session_state.kd_high_cap_now, st.session_state.min_avg_vol_lots,
+        st.session_state.atr_max_pct,
+    )
+    _cache_key_str = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "no_data"
+    df, files_bytes, meta = _run_screening_cached(_params_tuple, _cache_key_str)
+    st.session_state.result_df = df
+    st.session_state.result_files = files_bytes
+    st.session_state.result_meta = meta
     if _auto_rerun:
         st.success("✅ 資料已更新,選股結果自動重跑完成")
     else:
