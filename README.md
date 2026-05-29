@@ -1,367 +1,251 @@
-# 📊 台股全自動選股系統
+# 📊 台股全自動選股助理
 
-> 整合 **法人籌碼 / 大戶持股 / 月營收 / 技術面 / 大盤情緒** 的 10 分制台股選股引擎,
-> 搭配 Streamlit Web UI、Telegram 每日推播、GitHub Actions 排程,構成一套**完全免費 + 100% 開源** 的個人投資決策系統。
+一個**自己用、24 小時運作**的台股選股工具,每天盤後自動幫你掃過全市場 ~ 1800 檔股票,
+挑出符合「**法人在買 + 大戶在吃貨 + 技術面剛起漲 + 營收有成長**」的潛力股,
+透過網頁看分析、透過 Telegram 每天收推播。
 
-```
-GitHub Actions(每日排程)
-    ↓ 抓取 TWSE/TPEx/TAIFEX/TDCC/yfinance 資料
-cache/*.parquet
-    ↓ git commit + push
-GitHub repo
-    ↓ 同步
-┌─────────────────────────┬──────────────────────────┐
-│  Streamlit Cloud UI     │  Telegram Bot Daily Push │
-│  (互動式選股 + 個股分析)  │  (盤後自動推播達標股)     │
-└─────────────────────────┴──────────────────────────┘
-```
+**最棒的是:全套免費**。雲端主機 / 資料源 / AI 點評都不用付一毛錢。
 
 ---
 
-## 🚀 快速開始
+## 🎯 這套工具能幫你什麼
 
-### 本機跑
+### 早上開盤前
+打開網頁就能看到:
+- 📋 **昨晚自動跑出來的達標股清單**(通常 5~20 檔)
+- 🌡️ **市場溫度計**(0~100 分)告訴你今天該積極還是觀望
+- 📈 **大盤多空狀態**、外資/散戶誰在做多
+- 🤖 **AI 操作建議**(150 字短評)
+
+### 平常想研究某檔股票
+搜尋框打代號 → 立刻跳出:
+- K 線圖(含買賣訊號標記)
+- 三大法人/大戶/融資融券走勢
+- AI 對這檔的看法
+- 倉位計算機(你能虧多少 → 反推該買幾張)
+
+### 每天 17:00 左右
+打開 Telegram → **自動推送今日選股**,訊息含:
+- 達標個股 Top 15
+- 主流產業(看資金往哪流)
+- 昨天有今天沒了的股(可能該停損)
+- 自選股警示(MA 跌破/KD 死叉/外資連賣)
+
+---
+
+## 🚀 怎麼把它跑起來
+
+### 情境一:想在自己電腦試試看
 
 ```bash
-# 1. clone repo
-git clone https://github.com/<你的帳號>/<你的 repo>.git
-cd <你的 repo>
-
-# 2. 裝依賴
+git clone <你的 repo>
+cd <資料夾>
 pip install -r requirements.txt
-
-# 3. 抓資料(第一次 ~ 5 分鐘)
-python fetch_cache.py
-
-# 4. 開 UI
-streamlit run screening_ui16.py
+python fetch_cache.py            # 第一次抓資料,~ 5 分鐘
+streamlit run screening_ui16.py  # 打開網頁
 ```
 
-打開 http://localhost:8501 就能用。
+瀏覽器自動開 http://localhost:8501,玩看看。
 
-### 雲端部署
+### 情境二:想架到雲端 24 小時跑
 
-| 元件 | 平台 | 用途 |
-|---|---|---|
-| **Streamlit UI** | [Streamlit Community Cloud](https://streamlit.io/cloud)(免費) | 互動式網頁版選股工具 |
-| **資料抓取排程** | GitHub Actions(免費) | 每日盤後自動抓資料 + commit 回 repo |
-| **每日 Telegram 推播** | GitHub Actions(免費) | 盤後送訊息含 AI 點評 |
-| **AI 點評** | [OpenRouter](https://openrouter.ai/) 免費模型 | DeepSeek / Llama / GPT-OSS 輪替 |
+需要三個免費帳號:
 
-**整套系統成本:$0**(每月 OpenRouter 免費額度 50 次足夠日推播)
+1. **GitHub** — 程式碼 + 資料儲存
+2. **Streamlit Community Cloud** — 網頁版主機
+3. **OpenRouter** — AI 點評(可選,沒有也能用)
+
+部署流程:
+1. 把 repo push 到 GitHub
+2. Streamlit Cloud 連 repo → 自動部署網頁
+3. GitHub Actions 設定排程(每天盤後跑 `fetch_cache.py` + `telegram_notify.py`)
+4. 把 Telegram bot token / OpenRouter key 設成 GitHub Secrets
+
+**整套零成本,連續跑半年也不用付錢。**
 
 ---
 
-## 🎯 核心功能
+## 🌡️ 大盤情緒指標(這套工具的特色之一)
 
-### 🏆 1. 10 分制計分選股([screening0515.py](screening0515.py))
+把 **6 個訊號** 揉成一個 0~100 的「市場溫度」:
 
-| 計分項目 | 滿分 | 訊號 |
-|---|---|---|
-| 法人籌碼 | 3 | 外資/投信/自營商買賣超 |
-| 大戶 vs 散戶 | 3 | TDCC 大戶持股增加 + 散戶減少(籌碼共振) |
-| 技術面 | 2 | KD 低檔金叉 + 量價齊揚突破 60 日新高 |
-| 基本面 | 1 | 月營收 YoY > 10% 且 MoM > 0 |
-| 大盤相對強度 | 1 | 該股近 20 日報酬優於大盤 |
-
-**動態 PASS_SCORE**:
-- 大盤跌破季線 → 門檻 +1(空頭從嚴)
-- 大盤資料失效 → 門檻 -1(RS 訊號失效補償)
-
-### 🌡️ 2. 大盤情緒指標(6 訊號溫度計 0~100)
-
-| 指標 | 權重 | 資料源 | 評分方式 |
-|---|---|---|---|
-| 🇺🇸 美股 VIX | 22% | yfinance ^VIX | 絕對門檻(< 15 樂觀 / > 30 恐慌) |
-| 🇹🇼 台指波動率 | 11% | ^TWII 20 日年化實現波動率 | 90 日歷史百分位 |
-| 📐 大盤位階 | 22% | ^TWII vs MA60 乖離率 | 絕對門檻(±3% / ±8%) |
-| 💰 融資水位 | 11% | margin parquet | 90 日歷史百分位 |
-| 🏦 外資期貨 | 22% | TAIFEX 大台未平倉 | 90 日歷史百分位(累積 20 日後啟用) |
-| 👥 散戶估算 | 11% | TAIFEX 微台反推 | 90 日歷史百分位(累積 20 日後啟用) |
-
-**輸出**:
-- 總溫度 0~100(綜合加權)
-- 標籤:☀️ 偏熱 / 🌤️ 略偏多 / 🌥️ 中性 / 🌦️ 略偏空 / ❄️ 偏冷
-- **歷史趨勢圖**(近 30/90 日溫度走勢)
-- **AI 操作建議**(可選,按鈕觸發)
-
-### 🔬 3. 訊號回測引擎([backtest.py](backtest.py))
-
-掃描 11 個訊號的歷史觸發點,算進場後 N 日報酬:
-
-| Tier | 訊號 | 觸發條件 |
-|---|---|---|
-| 🌟 S | 籌碼共振(散戶↓) | 大戶持股增加 + 散戶減少 |
-| 🌟 S | 外資連 5 日買超 | 近 5 日外資總淨額 > 0 |
-| 🌟 S | 月營收雙紅突破 | YoY > 10% + MoM > 0 + 突破 60 日新高 |
-| ✅ A | 資減券增 | 融資↓3% + 融券↑5% |
-| ✅ A | 三大法人同步買超 | 同日 外資+投信+自營 全買 |
-| ✅ A | 投信連 5 日買超 | 近 5 日投信總淨額 > 0 |
-| ✅ A | 量價齊揚突破 | close ≥ 60 日新高 + 量 ≥ MA20 × 1.5 |
-| 🟡 B | 20 日動能 Top 10% | 近 20 日報酬全市場前 10% |
-| 🟡 B | 品質突破 | 突破前 10 日量縮 ≥ 6 日 |
-| 🟡 B | MA 黃金交叉 | MA20 上穿 MA60 |
-| ❌ C | KD 低檔金叉 | K 上穿 D + K < 30 |
-
-支援 **AND/OR 組合測試**、**個股回測**、**11 訊號對照圖**。
-
-### 🎨 4. UI 體驗
-
-| 功能 | 描述 |
+| 指標 | 在說什麼 |
 |---|---|
-| **首頁速覽** | 4 卡 metric(達標數/市場溫度/主流產業/5 日勝率) |
-| **狀態總覽** | 3 欄(資料新鮮度 / 大盤多空 / 市場溫度) |
-| **快速搜尋** | 輸入代號或名稱關鍵字直跳個股分析 |
-| **5 主 tab** | 入選熱度榜 / 產業輪動 / 策略績效 / 訊號回測 / 大盤情緒 |
-| **個股 5 sub-tab** | 技術分析 K 線 / 籌碼基本面 / AI 虛擬點評 / 交易筆記 / 資金管理 |
-| **自選股警示** | UI 加入 → Telegram 自動監控(MA 跌破/KD 死叉/外資連賣) |
-| **下載匯出** | xlsx / 嘉實 dsl / 精誠 xls |
+| 🇺🇸 **美股 VIX** | 國際投資人有沒有在害怕 |
+| 🇹🇼 **台指波動率** | 台股本地震不震 |
+| 📐 **大盤位階** | 加權指數現在算貴還是便宜 |
+| 💰 **融資水位** | 散戶有沒有在借錢 all-in |
+| 🏦 **外資期貨** | 法人偷偷在做多還是做空 |
+| 👥 **散戶估算** | 散戶手上多單多還是空單多 |
 
-### 📲 5. Telegram 每日推播([telegram_notify.py](telegram_notify.py))
+**怎麼用這個分數**:
 
-盤後自動推送:
-- 大盤戰情摘要(指數/乖離/盤勢)
-- AI 冠軍個股點評(模型輪替)
-- 大盤情緒溫度
-- 達標個股 Top 15(含新進/連續上榜/突破標籤 + 漲跌幅)
-- 主流產業群聚警告
-- 退場通知(昨天有今天沒)
-- 自選股警示(MA 跌破/KD 死叉/外資連賣)
-- 近 30 日策略績效摘要
+| 溫度 | 標籤 | 操作建議 |
+|---|---|---|
+| ≥ 70 | ☀️ 偏熱(樂觀) | 訊號多但留意過熱回檔 |
+| 55~69 | 🌤️ 略偏多 | 正常按訊號進場 |
+| 45~54 | 🌥️ 中性 | 觀望盤、訊號模糊 |
+| 30~44 | 🌦️ 略偏空 | 警戒、減碼、嚴格停損 |
+| < 30 | ❄️ 偏冷(恐慌) | **反向常是長線買點**、分批承接 |
+
+⚠️ **這個溫度不是預測明天漲跌**,而是衡量「市場結構健康度」。
+**31 分** 不是說明天會跌,而是說**現在新進場、加碼,風險報酬比不划算**。
 
 ---
 
-## 📁 核心檔案說明
+## 🏆 選股是怎麼算分的(滿分 10)
+
+| 拿幾分 | 怎麼拿 |
+|---|---|
+| **3 分** | 三大法人(外資/投信/自營)買賣超 |
+| **3 分** | 大戶持股增加 + 散戶減少(籌碼共振) |
+| **2 分** | 技術面:KD 低檔金叉 + 量價齊揚突破 60 日新高 |
+| **1 分** | 月營收 YoY > 10% 且月增 > 0 |
+| **1 分** | 該股近 20 日報酬贏大盤(相對強度) |
+
+**過關門檻 7 分**,但會動態調整:
+- 大盤跌破季線 → 門檻 +1(空頭時從嚴)
+- 大盤資料抓不到 → 門檻 -1(分數天花板被砍時補償)
+
+---
+
+## 📦 完整檔案介紹
 
 ```
 0518選股程式/
-├── README.md              ← 你正在看的
-├── requirements.txt       ← 依賴清單
+├── README.md                  ← 你正在看的這份
+├── requirements.txt           ← 依賴套件清單
 │
-├── fetch_cache.py         ← 資料抓取主腳本(GitHub Actions 排程)
-├── screening0515.py       ← 選股計分核心引擎
-├── screening_ui16.py      ← Streamlit Web UI 主入口
-├── telegram_notify.py     ← Telegram 每日推播
+├── fetch_cache.py             ← 抓資料的腳本(GitHub Actions 每天跑)
+├── screening0515.py           ← 選股計分的大腦
+├── screening_ui16.py          ← 網頁(Streamlit)
+├── telegram_notify.py         ← Telegram 推播
 │
-├── market_sentiment.py    ← 大盤情緒 6 指標
-├── backtest.py            ← 訊號回測引擎
-├── ai_helper.py           ← OpenRouter AI 共用呼叫
+├── market_sentiment.py        ← 大盤情緒 6 指標
+├── backtest.py                ← 訊號歷史回測
+├── ai_helper.py               ← AI 點評共用
 │
-├── cache_status.py        ← 快取新鮮度檢查
-├── data_health.py         ← 資料健康度檢查
-├── picks_history.py       ← 歷史選股紀錄(v2 schema)
-├── performance.py         ← 策略績效追蹤
-├── industry_rotation.py   ← 產業輪動分析
-├── watchlist_alerts.py    ← 自選股警示
+├── picks_history.py           ← 記每天選了哪些股
+├── performance.py             ← 績效追蹤(這些股後來漲跌如何)
+├── industry_rotation.py       ← 產業輪動(資金往哪跑)
+├── watchlist_alerts.py        ← 自選股警示
+├── cache_status.py            ← 資料新鮮度檢查
+├── data_health.py             ← 資料健康度檢查
 │
-├── cache/                 ← 資料快取(由 fetch_cache.py 寫入,git tracked)
-│   ├── daily_*.parquet              ← 全市場 180 天 K 線
-│   ├── info_*.parquet               ← 股票清單 + 產業別
-│   ├── institutional_*.parquet      ← 三大法人買賣超(近 15 日)
-│   ├── margin_*.parquet             ← 融資融券(近 15 日)
-│   ├── holders_*.parquet            ← TDCC 大戶持股(近 12 週)
-│   ├── revenue_*.parquet            ← 月營收(累積)
-│   ├── twii_*.parquet               ← ^TWII 2 年指數 K 線
-│   ├── vix_*.parquet                ← ^VIX 60 日恐慌指數
-│   ├── retail_futures_history.json  ← 散戶期貨歷史(算百分位用)
-│   ├── fi_futures_history.json      ← 外資期貨歷史(算百分位用)
-│   ├── sentiment_history.json       ← 大盤溫度歷史(畫趨勢圖用)
-│   ├── previous_picks.json          ← 每日達標股(算入選熱度/績效用)
-│   ├── watchlist.json               ← 自選股清單(UI/TG 共用)
-│   ├── notes.json                   ← 交易筆記
-│   ├── last_fetch_daily.txt         ← daily 抓取時戳
-│   └── ...
-│
-└── .github/workflows/     ← GitHub Actions(本地不一定 sync,雲端 repo 上)
-    ├── fetch.yml          ← 排程抓資料 + commit
-    └── notify.yml         ← 盤後 Telegram 推播
+└── cache/                     ← 抓回來的資料(由 fetch_cache.py 寫入)
+    ├── daily_*.parquet              ← 全市場 180 天 K 線
+    ├── info_*.parquet               ← 股票清單 + 產業分類
+    ├── institutional_*.parquet      ← 三大法人買賣超
+    ├── margin_*.parquet             ← 融資融券
+    ├── holders_*.parquet            ← 大戶持股
+    ├── revenue_*.parquet            ← 月營收
+    ├── twii_*.parquet               ← 加權指數(2 年)
+    ├── vix_*.parquet                ← 美股 VIX
+    └── ... (其他歷史檔)
 ```
 
 ---
 
-## 🗄 資料抓取 / Cache 系統
+## 🗄 資料怎麼抓、多久更新一次
 
-### 各資源更新頻率
-
-| 資源 | 更新頻率 | Gate 邏輯 | 來源 |
-|---|---|---|---|
-| `info` | 每日全量 | 每日重抓(反映新上市/下市) | TWSE OpenAPI(主)+ ISIN HTML(備) |
-| `institutional` | 每日增量 | 補近 15 個工作日缺漏 | TWSE/TPEx HTML |
-| `margin` | 每日增量 | 同上 | TWSE/TPEx HTML |
-| `daily` | 每日重抓 | --force-daily 強制重抓 | yfinance |
-| `holders` | **週六~一**才有新 | Weekly gate(cache 有上週五就略過) | TDCC OpenData |
-| `revenue` | **每月 10 日**前後 | Day-13 gate(13 日後若有上月就略過) | TWSE/TPEx OpenAPI |
-| `twii` | 每日重抓 | 同 daily | yfinance |
-| `vix` | 每日重抓 | 同 daily | yfinance |
-
-### 三層降級策略(以股票清單為例)
-
-```
-[1] TWSE OpenAPI (JSON)     ← 主來源,< 10 秒
-    ↓ 失敗
-[2] ISIN HTML               ← 備援,30~60 秒
-    ↓ 失敗
-[3] 昨日 parquet           ← 最後一道保險,瞬時
-```
-
-### Cache 路徑統一
-
-所有 cache 檔案路徑都以 `CACHE_DIR = Path("cache")` 為基準,不要 hardcode `"cache/xxx.json"`。
-
----
-
-## ⚙️ 環境變數
-
-| 變數 | 必填 | 說明 |
+| 資料 | 多久抓一次 | 為什麼 |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | TG 推播需要 | BotFather 拿到的 token |
-| `TELEGRAM_CHAT_ID` | TG 推播需要 | 你的 chat ID |
-| `OPENROUTER_API_KEY` | AI 功能需要 | https://openrouter.ai 免費註冊 |
-| `PREFERRED_AI_MODEL` | 可選 | 關鍵字,例 `"deepseek"` 優先用 DeepSeek |
+| 股票清單 | 每天 | 反映新上市/下市 |
+| 三大法人買賣超 | 每天 | 補近 15 個工作日 |
+| 融資融券 | 每天 | 同上 |
+| 日 K 線 | 每天 | 取得當日收盤價 |
+| 大戶持股 | **只在週六/日抓** | TDCC 每週五結算、週末才更新 |
+| 月營收 | **每月 1~12 日抓** | 公司每月 10 日前公告上月營收 |
+| 加權指數 / VIX | 每天 | 給情緒指標用 |
 
-**Streamlit Cloud 設法**:Manage app → Secrets → 貼上 TOML 格式
-**GitHub Actions 設法**:Settings → Secrets and variables → Actions → New secret
-
----
-
-## 🧠 設計決策紀錄(本 session 主要踩雷與教訓)
-
-### 1. yfinance 永遠不要相信會穩定運作
-
-**踩雷**:
-- 富邦 VIX ETF (00677U) 2024 下市
-- yfinance 0.2.50+ 把 daily 抓取的 Date 欄改成 Datetime → KeyError
-- Yahoo 對 GitHub Actions 雲端 IP 嚴格 anti-bot,偶爾整批 fail
-- `_load_twii_cached` TTL 1 小時 → yfinance 失敗一次卡 60 分鐘
-
-**對策**:
-- 所有 yfinance 呼叫都先讀本地 parquet,失敗才打 yfinance
-- `fetch_cache.py` 把 `^TWII` / `^VIX` 落地到 parquet
-- 多日期欄名相容(Date / Datetime / index / level_0)
-- TTL 縮短 + session-level 自動重試
-
-### 2. Streamlit `@st.cache_data` 會擋住副作用
-
-**踩雷**:
-```python
-@st.cache_data
-def compute_sentiment(cache_dir):
-    temp = 算溫度()
-    write_history_file(cache_dir, temp)  # ← 副作用!
-    return temp
-```
-第二次呼叫 → 直接回 cache → **write_history_file 永遠不跑** → 檔案永遠空。
-
-**對策**:讀寫分離。把寫檔的 side effect 抽到 cache 外:
-```python
-@st.cache_data
-def _load_sentiment_cached():
-    return compute_sentiment(CACHE_DIR)   # 純函式
-
-def _get_sentiment_and_persist():
-    s = _load_sentiment_cached()          # 拿快取結果
-    persist_history(CACHE_DIR, s)         # caller 端做寫檔(每次都跑)
-    return s
-```
-
-### 3. 情緒指標的「絕對門檻」會過時、要持續校準
-
-**踩雷**:外資期貨淨口數門檻 2018 時 ±15k 是極值,2026 時 ±50k 才算極值。半年要校準一次。
-
-**對策**:**百分位制**。把當前值放進「過去 90 日的分布」算百分位,**永遠不需手動調**。等於把校準工作自動化。
-
-### 4. yfinance threads=True 會出現 SQLite database locked
-
-**現象**:多執行緒下載時,yfinance 內部 SQLite cache 偶爾 race condition,1~3 個 ticker 失敗。
-
-**對策**:接受(失敗率 < 0.1%,下次跑會補)。或改 threads=False(慢 3~5 倍,不值得)。
-
-### 5. TWSE OpenAPI 的「產業別」是數字代碼,ISIN 是中文名
-
-**踩雷**:升級到 OpenAPI 主來源後,UI 上篩選器出現「05」「22」「24」這種數字 chip。
-
-**對策**:加 `TWSE_INDUSTRY_CODE_MAP` + `_normalize_industry()` 統一轉中文。
+**省 API 的設計**:不該抓的時候就不抓。
+例如月營收已經抓到本月新資料、又是月中 13 號之後 → 自動跳過,不再浪費請求。
 
 ---
 
-## 🛠 維運常見問題
+## 🔑 環境變數(雲端部署才需要)
 
-### Q1: 大盤資料抓取失敗,本次無 RS 計分
-
-**原因**:Yahoo 對 GA 雲端 IP 限速,yfinance 抓 ^TWII 失敗。
-**修法**:已改成讀 `cache/twii_*.parquet` 優先,fallback 才打 yfinance。確認 GA 排程有 push twii parquet 回 repo。
-
-### Q2: GitHub Actions 跑 daily 出現「Failed to get ticker XXXX.TW」
-
-**原因**:Yahoo IP 限速 / yfinance 內部 SQLite race。
-**對策**:
-- 1~3 個 ticker 失敗 → 正常,不用管
-- 全部 400 ticker 失敗 → 等下次 GA 跑(間隔幾小時),或本機跑 `fetch_cache.py --force-daily` 後手動 commit cache
-
-### Q3: 訊號回測點下去要等很久
-
-**原因**:第一次跑要建 11 個訊號矩陣(掃描 180 天)~ 5-7 秒。
-**現況**:已加 `_build_signal_matrices_cached`,**改參數後秒切**。隔天 cache_date 變才會重建。
-
-### Q4: 月營收顯示「已有今日快取,略過」但其實昨天才更新
-
-**原因**:Day-13 gate 邏輯:每月 13 日起若 cache 已包含上月資料就略過,避免浪費 API。
-**強制重抓**:`python fetch_cache.py --force`(`--force-daily` 不會碰 revenue)。
-
-### Q5: Streamlit Cloud 體感很慢
-
-**檢查**:
-1. 是否第一次部署 / 容器剛重啟 → 冷啟動本來就慢(parquet 沒 sync 完)
-2. GA 排程有沒有把 cache push 回 repo → 看 GA log 最後一行 `將快取存回 GitHub`
-3. Streamlit Cloud Reboot 試試 → Manage app → Reboot
-
-### Q6: ImportError after deploy
-
-**原因**:Streamlit Cloud module cache 沒同步。
-**對策**:Manage app → Reboot,強制 Python process 重啟。
-
----
-
-## 🚦 系統健康度自我檢查
-
-打開 UI 後,觀察以下幾個指標,**全綠表示系統正常**:
-
-| 指標 | 健康 | 異常 |
+| 變數 | 必填嗎 | 怎麼拿 |
 |---|---|---|
-| **狀態總覽:資料日期** | 今日 / 上交易日 ✓ | 早於 2 個交易日 ⚠️ |
-| **狀態總覽:大盤** | 📈 多頭 / 📉 空頭(有數字) | N/A ⚠️ |
-| **狀態總覽:市場溫度** | 0~100 數字 | N/A ⚠️ |
-| **資料健康度警示** | 不出現 | 紅色 banner 警告 |
-| **首頁 4 卡 metric** | 都有值 | "—" 表示資料缺 |
+| `TELEGRAM_BOT_TOKEN` | 要用 TG 推播才需要 | 去找 [@BotFather](https://t.me/BotFather) 申請 |
+| `TELEGRAM_CHAT_ID` | 同上 | 用 BotFather 教學步驟 |
+| `OPENROUTER_API_KEY` | 要用 AI 點評才需要 | https://openrouter.ai 免費註冊 |
 
-UI 上有「💡 策略邏輯導覽 (FAQ)」expander,點開有完整 FAQ。
-
----
-
-## 🤝 貢獻
-
-這是個人專案,但歡迎開 issue 討論。送 PR 前請:
-1. 確認 syntax check 通過(`python -c "import ast; [ast.parse(open(f).read()) for f in ('screening_ui16.py', 'market_sentiment.py', ...)]"`)
-2. 跑過 fetch_cache.py 一次確認沒踩雷
-3. 重大改動同步更新 README 對應段落
+**設定位置**:
+- **Streamlit Cloud**:Manage app → Secrets
+- **GitHub Actions**:Settings → Secrets and variables → Actions
 
 ---
 
-## 📜 授權
+## 🤔 常見問題
 
-MIT License — 拿去用、改、商用都可以,**僅限個人投資決策參考**,不構成投資建議。
+### Q1: 為什麼選股結果跟昨天一樣?
+**很可能是正常的**。如果你用嚴格訊號(法人連 5 日買 + 籌碼共振),同一檔股票連續 2~3 天上榜很合理 — 法人不會今天買、明天就停。
+
+如果**連續 5 天完全一樣**才該懷疑。常見原因:
+- 沒按「開始選股」(只更新資料不會自動重跑)
+- 資料其實沒更新成功(看頂部「資料更新」expander 的時戳)
+
+### Q2: 「大盤資料抓取失敗」是什麼意思?
+yfinance 偶爾抓不到 ^TWII(尤其雲端 IP 被 Yahoo 限速時)。
+**現在已加保險**:會先讀本地 parquet,失敗才打 yfinance。一般不會再看到這訊息。
+
+### Q3: 推送的 Telegram 訊息怎麼變空白了?
+可能 AI 模型今天都用完了(OpenRouter 每天 50 次免費)。推播會略過 AI 點評但其他內容正常。
+
+### Q4: 第一次部署到 Streamlit Cloud 開頁面要等很久?
+冷啟動本來就慢(雲端容器在 boot)。
+**正常情況**:首頁 ~ 3 秒、點 K 線圖 ~ 2 秒。
+**異常**:超過 30 秒沒反應 → Manage app → Reboot 強制重啟。
+
+### Q5: GitHub Actions 跑完沒看到 cache 更新?
+看 GA log 最後一行有沒有「**將快取存回 GitHub**」這段:
+- ✅ 有 → 等 Streamlit Cloud 同步(~ 1 分鐘)
+- ❌ 沒有 → workflow 沒設好,要加 `git commit + push` 步驟
+
+### Q6: 「市場溫度走勢」一直顯示「明天起會自動畫成趨勢圖」?
+這個圖需要**累積 ≥ 2 天**才會畫。網頁每天有人打開一次就會自動累積一筆。
+過 1 週左右就會有完整的趨勢線。
 
 ---
 
-## 🙏 致謝
+## ⚠️ 重要提醒
 
-- [Streamlit](https://streamlit.io) — 整套 UI 免費 hosting
-- [yfinance](https://github.com/ranaroussi/yfinance) — yahoo finance python wrapper
-- [TWSE OpenAPI](https://openapi.twse.com.tw/) / [TPEx OpenAPI](https://www.tpex.org.tw/openapi/) — 台股官方資料
-- [TDCC OpenData](https://opendata.tdcc.com.tw/) — 大戶持股
-- [TAIFEX](https://www.taifex.com.tw/) — 三大法人期貨
-- [OpenRouter](https://openrouter.ai/) — 免費 AI 模型輪替
+1. **這不是投資建議**。所有分數、訊號、AI 點評都只是**資料整理**和**機率參考**。
+2. **沒有任何方法可以保證賺錢**。歷史勝率 60% 不代表下一檔會賺。
+3. **資料可能延遲或錯誤**。Yahoo Finance 不是即時資料、TWSE 也偶有延遲。
+4. **AI 是輔助、不是神諭**。AI 點評偶爾會幻覺、會自相矛盾,當作另一個意見即可。
+5. **務必親自驗證每一筆交易**。系統只是減少你找股票的時間,不能取代你的判斷。
 
 ---
 
-**Made with ❤️ for individual investors who want institutional-grade data without paying institutional prices.**
+## 🛠 出問題時的自救清單
+
+| 症狀 | 自救步驟 |
+|---|---|
+| 網頁打不開 | Streamlit Cloud → Manage app → Reboot |
+| 選股結果是 0 檔 | 檢查門檻是否設太高、或大盤資料異常 |
+| K 線圖一直轉圈 | 重新整理頁面(Ctrl+F5),Streamlit Cloud cache 太久 |
+| Telegram 沒推播 | 看 GitHub Actions log 看有沒有錯誤 |
+| 想重抓今日資料 | UI 點「📥 抓取今日最新資料」或「🔄 強制更新日 K」 |
+| 想清除錯誤的 cache | 右上角 ⋮ → Clear cache → 重整 |
+
+---
+
+## 🙏 用了哪些別人的東西
+
+- **Streamlit** — 網頁版免費 hosting
+- **yfinance** — 抓 Yahoo Finance 資料
+- **TWSE / TPEx / TAIFEX / TDCC OpenAPI** — 台股官方資料(法人/融資/期貨/大戶)
+- **OpenRouter** — 免費 AI 模型輪替
+- **GitHub Actions** — 排程跑資料
+
+---
+
+## 📜 License
+
+MIT — 拿去用、改、轉送都可以,**僅限個人投資決策參考,不構成投資建議**。
+
+---
+
+**個人專案,自己用爽就好 🙂**
