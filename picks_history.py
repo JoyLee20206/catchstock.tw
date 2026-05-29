@@ -17,7 +17,9 @@ import json
 
 
 HISTORY_FILE = "cache/previous_picks.json"
-HISTORY_DAYS = 30  # 績效追蹤需要 N 天歷史,擴大到 30 天(原 7 天)
+HISTORY_DAYS = 365  # 保留一年:讓績效/歸因/大盤濾網/出場回測能「跨多空」累積。
+                    # (原 30 天上限會讓所有回測永遠長不大、跨不過一次大盤回檔)
+                    # 熱度榜/輪動只看近期,改由 compute_hot_picks 的 window 參數控制,不受此影響。
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -137,18 +139,24 @@ def compute_streak(sid: str, history: list) -> int:
     return streak
 
 
-def compute_hot_picks(history: list, top_n: int = 10) -> list:
+def compute_hot_picks(history: list, top_n: int = 10, window: int | None = None) -> list:
     """過去 N 天的入選熱度榜。
+
+    Args:
+        window: 只看最近 N 個交易日(None=全部)。保留歷史可達一年,
+                但熱度榜應反映「近期」強勢,故 UI 會傳入較短視窗(如 20)。
 
     Returns:
         [{
             "sid", "hits", "max_streak", "active_streak",
             "in_latest": bool,
-            "total_days": int,
+            "total_days": int,   # = 實際納入計算的天數(套用 window 後)
         }, ...]
     """
     if not history:
         return []
+    if window is not None and window > 0:
+        history = history[-window:]
 
     all_sids = set()
     for entry in history:

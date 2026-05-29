@@ -287,10 +287,11 @@ def main():
                     pct_ind = top_cnt / len(df) * 100
                     industry_ctx = f"主流產業:{top_ind}({top_cnt}/{len(df)} 檔,占 {pct_ind:.0f}%)\n"
 
-            # 3. 7 日熱度榜 TOP 3(過去最常上榜的強勢股)
+            # 3. 近 20 日熱度榜 TOP 3(最常上榜的強勢股)
+            # 歷史保留已延長到一年(供績效回測),熱度榜需限定近期視窗,否則會混入舊資料
             hot_ctx = ""
             try:
-                hot_picks = compute_hot_picks(history, top_n=3)
+                hot_picks = compute_hot_picks(history, top_n=3, window=20)
                 if hot_picks:
                     hot_lines = []
                     for h in hot_picks:

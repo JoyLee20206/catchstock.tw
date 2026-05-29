@@ -824,11 +824,16 @@ meta = st.session_state.result_meta
 if meta: show_market_banner(meta)
 
 # ── 7 日入選熱度榜(資料來自 cache/previous_picks.json,由 Telegram 每日推播寫入) ──
+HOT_WINDOW = 20  # 熱度榜只看最近 N 個交易日(歷史保留可達一年,但「熱度」只反映近期)
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_hot_picks_cached(top_n: int = 10):
-    """快取 5 分鐘,避免每次 rerun 都重讀 JSON。"""
+    """快取 5 分鐘,避免每次 rerun 都重讀 JSON。
+
+    熱度榜套用 HOT_WINDOW 近期視窗;_hist_days 仍回傳「總累積天數」(供績效門檻判斷)。
+    """
     hist = load_history()
-    return compute_hot_picks(hist, top_n=top_n), len(hist)
+    return compute_hot_picks(hist, top_n=top_n, window=HOT_WINDOW), len(hist)
 
 _hot, _hist_days = _load_hot_picks_cached(top_n=10)
 
@@ -960,7 +965,7 @@ _rotation = _load_industry_rotation_cached()
 # ── 4 個分析區塊改用 Tabs 並排,省直向空間 ──
 # 「熱度榜 + 產業輪動」同屬「近期趨勢觀察」(個股層級 vs 產業層級),合併同頁。
 _tab_trend, _tab_perf, _tab_bt, _tab_sent = st.tabs([
-    f"🔥 熱度 & 輪動({_hist_days}日)",
+    f"🔥 熱度 & 輪動(近{HOT_WINDOW}日)",
     "📊 策略績效",
     "🔬 訊號回測",
     "🌡️ 大盤情緒",
@@ -970,7 +975,10 @@ with _tab_trend:
     # ── 🔥 入選熱度榜(個股層級) ──
     st.markdown("#### 🔥 入選熱度榜")
     if _hot:
-        st.caption("追蹤近期持續上榜的強勢股 — 連續出現次數越多,代表趨勢延續性越強。")
+        st.caption(
+            f"追蹤**近 {HOT_WINDOW} 個交易日**持續上榜的強勢股 — 連續出現次數越多,趨勢延續性越強。"
+            f"(系統歷史保留一年供績效回測,但熱度榜只看近期)"
+        )
         hot_rows = []
         for r in _hot:
             sid_str = str(r["sid"])
