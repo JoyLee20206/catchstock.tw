@@ -41,7 +41,7 @@ from cache_status import cache_freshness
 from picks_history import load_history, compute_hot_picks
 from data_health import check_data_health
 from industry_rotation import compute_industry_rotation
-from performance import compute_performance
+from performance import compute_performance, compute_equity_curve
 from backtest import run_backtest, SIGNAL_LABELS, build_signal_matrices
 from market_sentiment import (
     compute_sentiment,
@@ -1003,6 +1003,99 @@ with _tab_perf:
                                  delta_color="normal" if avg_ret >= 0 else "inverse")
                 med_ret = overall.get(f"median_return_{n_days}d", 0)
                 m_cols[3].metric("中位數", f"{med_ret:+.2f}%")
+
+            # ── 📊 累積績效曲線 vs 大盤 ─────────────────────────
+            # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。
+            # 假設起始資金 100,每天買進當日 picks 並持有 5 日,複利累加。
+            st.divider()
+            st.markdown("**📊 跟著系統走 vs 直接買大盤(假設起始 100,5 日複利)**")
+            _eq = None
+            _eq_error = None
+            try:
+                _eq = compute_equity_curve(load_history(), CACHE_DIR, hold_days=5)
+            except Exception as _e:
+                _eq_error = str(_e)
+                print(f"⚠ equity curve 計算失敗: {_e}")
+
+            # ── 三種狀態的明確提示 ──
+            if _eq_error:
+                st.error(f"❌ 累積曲線計算錯誤: {_eq_error}")
+            elif _eq is None:
+                st.info(
+                    "📊 累積績效曲線**資料不足**: 需要至少 8 個交易日的歷史,"
+                    "且 daily 快取要能對齊每個 pick 的日期。"
+                    "(每筆 pick 都要算進場後 5 個交易日,所以最近 5 天的 pick 都還沒算完)"
+                )
+            elif _eq["n_days"] < 3:
+                st.info(
+                    f"📊 累積績效曲線**累積中**: 目前只有 **{_eq['n_days']} 個有效資料點**,"
+                    f"需要 ≥ 3 個才畫得出有意義的趨勢線。"
+                    f"持續累積中,**再過 {max(3 - _eq['n_days'], 1)} 個交易日**會自動出現。"
+                )
+            else:
+                # 4 卡統計
+                _final_pick = _eq["final_pick"]
+                _final_twii = _eq["final_twii"]
+                _alpha = _eq["alpha"]
+                _ec_cols = st.columns(4)
+                _ec_cols[0].metric("系統累積", f"{_final_pick:.1f}",
+                                    f"{_final_pick-100:+.1f}%",
+                                    delta_color="inverse")
+                _ec_cols[1].metric("大盤累積", f"{_final_twii:.1f}",
+                                    f"{_final_twii-100:+.1f}%",
+                                    delta_color="inverse")
+                _ec_cols[2].metric("Alpha (超額報酬)", f"{_alpha:+.1f}",
+                                    "點" if abs(_alpha) >= 1 else "幾乎一致",
+                                    delta_color="inverse")
+                _ec_cols[3].metric("樣本日數", f"{_eq['n_days']} 日")
+
+                # plotly 雙線圖
+                _fig_eq = go.Figure()
+                _fig_eq.add_trace(go.Scatter(
+                    x=_eq["dates"], y=_eq["pick_curve"],
+                    mode="lines+markers",
+                    line=dict(color="#dc2626", width=2.5),
+                    marker=dict(size=4),
+                    name=f"系統 picks(終值 {_final_pick:.1f})",
+                    hovertemplate="<b>%{x}</b><br>系統:%{y:.2f}<extra></extra>",
+                ))
+                _fig_eq.add_trace(go.Scatter(
+                    x=_eq["dates"], y=_eq["twii_curve"],
+                    mode="lines+markers",
+                    line=dict(color="#6b7280", width=1.8, dash="dot"),
+                    marker=dict(size=3),
+                    name=f"大盤 ^TWII(終值 {_final_twii:.1f})",
+                    hovertemplate="<b>%{x}</b><br>大盤:%{y:.2f}<extra></extra>",
+                ))
+                # 100 起始基準線
+                _fig_eq.add_hline(y=100, line_dash="dash", line_color="gray", opacity=0.5,
+                                  annotation_text="起始 100", annotation_position="left")
+                _fig_eq.update_layout(
+                    height=320, margin=dict(l=10, r=10, t=20, b=20),
+                    yaxis=dict(title="資金價值"),
+                    xaxis=dict(title=""),
+                    plot_bgcolor="rgba(0,0,0,0.03)",
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="top", y=-0.1),
+                )
+                st.plotly_chart(_fig_eq, use_container_width=True)
+
+                # 文字結論
+                if _alpha > 1:
+                    st.success(
+                        f"✅ **系統贏大盤 {_alpha:+.1f} 個百分點**(系統 {_final_pick:.1f} vs 大盤 {_final_twii:.1f}),"
+                        f"近 {_eq['n_days']} 個入選日資料。"
+                    )
+                elif _alpha < -1:
+                    st.warning(
+                        f"⚠️ **系統輸大盤 {abs(_alpha):.1f} 個百分點**(系統 {_final_pick:.1f} vs 大盤 {_final_twii:.1f}),"
+                        f"考慮檢視訊號設定。"
+                    )
+                else:
+                    st.info(
+                        f"系統與大盤接近(差 {_alpha:+.1f} 點),沒明顯超額。"
+                        f"近 {_eq['n_days']} 個入選日資料。"
+                    )
 
             # 分數區間表
             by_score = perf.get("by_score", {})
