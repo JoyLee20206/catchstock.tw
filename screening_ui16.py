@@ -1079,59 +1079,59 @@ with _tab_perf:
                     )
                 st.divider()
 
-            # 各持有期指標卡片
+            # 各持有期詳細指標(收進 expander,預設收起;標題即帶關鍵數字)
+            st.markdown("**📂 各持有期詳細指標**(點開看賺賠結構與風險面)")
             for n_days in (3, 5, 10, 20):
-                key_n   = f"n_{n_days}d"
-                key_win = f"win_rate_{n_days}d"
-                key_avg = f"avg_return_{n_days}d"
+                key_n = f"n_{n_days}d"
                 if key_n not in overall:
                     continue
-                st.markdown(f"**入選後 {n_days} 個交易日**")
-                m_cols = st.columns(4)
-                m_cols[0].metric("樣本", f"{overall[key_n]} 筆")
-                m_cols[1].metric("勝率", f"{overall[key_win]*100:.0f}%")
-                avg_ret = overall[key_avg]
-                m_cols[2].metric("平均報酬", f"{avg_ret:+.2f}%",
-                                 delta_color="normal" if avg_ret >= 0 else "inverse")
-                med_ret = overall.get(f"median_return_{n_days}d", 0)
-                m_cols[3].metric("中位數", f"{med_ret:+.2f}%")
+                # 標題摘要:收合狀態也能一眼看到重點
+                _wr  = overall.get(f"win_rate_{n_days}d", 0) * 100
+                _exp = overall.get(f"net_expectancy_{n_days}d", 0)
+                _shp = overall.get(f"sharpe_{n_days}d", 0)
+                _label = (f"入選後 {n_days} 日　勝率 {_wr:.0f}% ｜ 淨期望值 {_exp:+.2f}% "
+                          f"｜ 夏普 {_shp:.2f} ｜ 樣本 {overall[key_n]} 筆")
+                with st.expander(_label, expanded=False):
+                    # 第一排:報酬
+                    m_cols = st.columns(4)
+                    m_cols[0].metric("樣本", f"{overall[key_n]} 筆")
+                    m_cols[1].metric("勝率", f"{overall[f'win_rate_{n_days}d']*100:.0f}%")
+                    avg_ret = overall[f"avg_return_{n_days}d"]
+                    m_cols[2].metric("平均報酬", f"{avg_ret:+.2f}%",
+                                     delta_color="normal" if avg_ret >= 0 else "inverse")
+                    med_ret = overall.get(f"median_return_{n_days}d", 0)
+                    m_cols[3].metric("中位數", f"{med_ret:+.2f}%")
 
-                # 第二排:損益面統計(回答「輸的時候輸多少、整體期望值正不正」)
-                key_pf  = f"profit_factor_{n_days}d"
-                key_exp = f"net_expectancy_{n_days}d"
-                if key_pf in overall:
-                    m2 = st.columns(4)
-                    avg_gain = overall.get(f"avg_gain_{n_days}d", 0)
-                    avg_loss = overall.get(f"avg_loss_{n_days}d", 0)
-                    pf       = overall[key_pf]
-                    exp      = overall.get(key_exp, 0)
-                    m2[0].metric("勝局平均獲利", f"{avg_gain:+.2f}%", delta_color="off")
-                    m2[1].metric("敗局平均虧損", f"{avg_loss:+.2f}%", delta_color="off")
-                    pf_str = "∞" if pf == float("inf") else f"{pf:.2f}"
-                    # 損益比 > 1.5 算有效;以 help 提示判讀門檻
-                    m2[2].metric("損益比", pf_str,
-                                 help="總獲利 ÷ 總虧損。>1.5 算有效,>2 不錯")
-                    m2[3].metric("淨期望值", f"{exp:+.2f}%",
-                                 delta_color="normal" if exp >= 0 else "inverse",
-                                 help="平均報酬扣掉來回交易成本(約 0.5%)後,每筆實際落袋。需 >0 才真正划算")
+                    # 第二排:損益面(輸的時候輸多少、期望值正不正)
+                    if f"profit_factor_{n_days}d" in overall:
+                        m2 = st.columns(4)
+                        avg_gain = overall.get(f"avg_gain_{n_days}d", 0)
+                        avg_loss = overall.get(f"avg_loss_{n_days}d", 0)
+                        pf       = overall[f"profit_factor_{n_days}d"]
+                        m2[0].metric("勝局平均獲利", f"{avg_gain:+.2f}%", delta_color="off")
+                        m2[1].metric("敗局平均虧損", f"{avg_loss:+.2f}%", delta_color="off")
+                        pf_str = "∞" if pf == float("inf") else f"{pf:.2f}"
+                        m2[2].metric("損益比", pf_str,
+                                     help="總獲利 ÷ 總虧損。>1.5 算有效,>2 不錯")
+                        m2[3].metric("淨期望值", f"{_exp:+.2f}%",
+                                     delta_color="normal" if _exp >= 0 else "inverse",
+                                     help="平均報酬扣掉來回交易成本(約 0.5%)後,每筆實際落袋。需 >0 才真正划算")
 
-                # 第三排:風險面(最大回檔、夏普值、波動)
-                if f"sharpe_{n_days}d" in overall:
-                    m3 = st.columns(4)
-                    mdd    = overall.get(f"mdd_{n_days}d", 0)
-                    sharpe = overall.get(f"sharpe_{n_days}d", 0)
-                    std    = overall.get(f"std_{n_days}d", 0)
-                    m3[0].metric("最大回檔", f"{mdd:.2f}%", delta_color="off",
-                                 help="複利資金曲線從高點到低點的最大跌幅。越接近 0 越穩,評估最壞情況")
-                    m3[1].metric("夏普值", f"{sharpe:.2f}", delta_color="off",
-                                 help="風險調整後報酬(年化)。>1 不錯,>2 很好,>3 極佳")
-                    m3[2].metric("報酬波動(標準差)", f"{std:.2f}%", delta_color="off",
-                                 help="報酬的起伏程度,越大代表越不穩定")
-                    # 第 4 格留白對齊,或放最差單筆
-                    min_ret = overall.get(f"min_return_{n_days}d")
-                    if min_ret is not None:
-                        m3[3].metric("最差單筆", f"{min_ret:+.2f}%", delta_color="off",
-                                     help="這個持有期裡,賠最多的那一筆")
+                    # 第三排:風險面(最大回檔、夏普值、波動、最差單筆)
+                    if f"sharpe_{n_days}d" in overall:
+                        m3 = st.columns(4)
+                        mdd = overall.get(f"mdd_{n_days}d", 0)
+                        std = overall.get(f"std_{n_days}d", 0)
+                        m3[0].metric("最大回檔", f"{mdd:.2f}%", delta_color="off",
+                                     help="複利資金曲線從高點到低點的最大跌幅。越接近 0 越穩,評估最壞情況")
+                        m3[1].metric("夏普值", f"{_shp:.2f}", delta_color="off",
+                                     help="風險調整後報酬(年化)。>1 不錯,>2 很好,>3 極佳")
+                        m3[2].metric("報酬波動(標準差)", f"{std:.2f}%", delta_color="off",
+                                     help="報酬的起伏程度,越大代表越不穩定")
+                        min_ret = overall.get(f"min_return_{n_days}d")
+                        if min_ret is not None:
+                            m3[3].metric("最差單筆", f"{min_ret:+.2f}%", delta_color="off",
+                                         help="這個持有期裡,賠最多的那一筆")
 
             # ── 📊 累積績效曲線 vs 大盤 ─────────────────────────
             # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。
