@@ -412,9 +412,31 @@ def run_screening(
     twii_ma               = None
     cache_max_date        = daily_df["date"].max() if not daily_df.empty else None  # UI 用:cache 新鮮度
     try:
-        import yfinance as yf
-        twii = yf.download(MARKET_INDEX_TICKER, period="180d", auto_adjust=True,
-                           progress=False, threads=False)
+        # ── 路徑 A:本地 parquet (最快,由 fetch_cache.py 排程寫入) ──
+        # 避免冷啟動每次打 yfinance ~3 秒,且 GA cloud IP 偶會被擋
+        twii = pd.DataFrame()
+        twii_files = sorted(CACHE_DIR.glob("twii_*.parquet"))
+        if twii_files:
+            try:
+                _df_local = pd.read_parquet(twii_files[-1])
+                if not _df_local.empty:
+                    # parquet 是 fetch_cache.py 寫的格式:date 欄位 + Close 等
+                    if "date" in _df_local.columns:
+                        _df_local = _df_local.set_index(
+                            pd.to_datetime(_df_local["date"])
+                        ).drop(columns=["date"], errors="ignore")
+                    twii = _df_local
+                    print(f"   ✓ 大盤資料來源:本地 parquet ({twii_files[-1].name}, {len(twii)} 筆)")
+            except Exception as _le:
+                print(f"   ⚠ 讀本地 twii parquet 失敗,fallback yfinance: {_le}")
+                twii = pd.DataFrame()
+
+        # ── 路徑 B:沒 parquet 才打 yfinance ──
+        if twii.empty:
+            print("   (本地無 twii parquet,改打 yfinance)")
+            import yfinance as yf
+            twii = yf.download(MARKET_INDEX_TICKER, period="180d", auto_adjust=True,
+                               progress=False, threads=False)
         # 防呆:yfinance ≥ 0.2.5x 對單一 ticker 也回傳 MultiIndex 欄位 → 先展平再判斷
         if isinstance(twii.columns, pd.MultiIndex):
             twii.columns = twii.columns.get_level_values(0)
