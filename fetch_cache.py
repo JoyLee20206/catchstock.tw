@@ -891,14 +891,17 @@ def fetch_tdcc_holders_latest():
     if _holders_should_skip(_today_tpe):
         _target = _last_friday_str(_today_tpe)
         print(f"[holders] cache 已含上個週五({_target}) 資料,略過(省 API)")
-        # 把昨日 parquet 重命名為今日,讓 need_fetch 下次判斷一致
+        # 把昨日 parquet 延用為今日(資料完全相同,只改檔名):
+        #   - 讓 need_fetch("holders") 同日再呼叫時直接回 False
+        #   - cleanup 刪掉昨日檔(內容已轉移,非真正刪資料)
         _prev_files = sorted(CACHE_DIR.glob("holders_*.parquet"))
         if _prev_files and not path_for("holders").exists():
             try:
                 pd.read_parquet(_prev_files[-1]).to_parquet(path_for("holders"))
+                print(f"   -> 將昨日 cache 延用為今日({path_for('holders').name}),資料內容不變")
                 cleanup_old_cache("holders")
             except Exception as e:
-                print(f"   ⚠ 複製昨日 holders 失敗(不影響邏輯): {e}")
+                print(f"   ⚠ 延用昨日 holders 失敗(不影響邏輯): {e}")
         return
 
     print("[holders] 抓取 TDCC 最新大戶比例...")
@@ -1136,12 +1139,15 @@ if (not FORCE) and need_fetch("revenue") and _revenue_today_tpe.day >= 13:
                                    _df_check['revenue_month'].astype(int)))
                 if (_last_dt.year, _last_dt.month) in _ym_have:
                     _skip_revenue = True
-                    # 把昨日 parquet 重命名為今日,讓 need_fetch 後續判斷一致
-                    if not path_for("revenue").exists():
-                        _df_check.to_parquet(path_for("revenue"))
-                        cleanup_old_cache("revenue")
                     print(f"[6] 月營收: 今日 {_revenue_today_tpe.day} 日 ≥13 且已有上月"
                           f"({_last_dt.year}-{_last_dt.month:02d}) 資料,略過抓取(省 API 配額)")
+                    # 把昨日 parquet 延用為今日(資料完全相同,只改檔名):
+                    #   - 讓 need_fetch("revenue") 同日再呼叫時直接回 False
+                    #   - cleanup 刪掉昨日檔(內容已轉移,非真正刪資料)
+                    if not path_for("revenue").exists():
+                        _df_check.to_parquet(path_for("revenue"))
+                        print(f"   -> 將昨日 cache 延用為今日({path_for('revenue').name}),資料內容不變")
+                        cleanup_old_cache("revenue")
         except Exception as _e:
             print(f"   ⚠ 月營收日期 gate 檢查失敗,改走正常抓取: {_e}")
 
