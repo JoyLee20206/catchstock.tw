@@ -1727,7 +1727,7 @@ with _tab_bt:
     )
 
     sig_options = list(SIGNAL_LABELS.keys())
-    _sig_col, _faq_col = st.columns([3, 1])
+    _sig_col, _faq_col = st.columns([2, 1])
     with _sig_col:
         sig_choice_multi = st.multiselect(
             "選擇訊號(可複選)", sig_options,
