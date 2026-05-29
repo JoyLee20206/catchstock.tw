@@ -928,19 +928,28 @@ try:
 except Exception:
     pass
 
-# ── 5 個分析區塊改用 Tabs 並排,省直向空間 ──
-_tab_hot, _tab_rot, _tab_perf, _tab_bt, _tab_sent = st.tabs([
-    f"🔥 入選熱度榜({_hist_days}日)",
-    "🔄 產業輪動",
+# ── 產業輪動追蹤(對比最近 7 日 vs 前 7 日各產業上榜次數) ──────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_industry_rotation_cached():
+    hist = load_history()
+    return compute_industry_rotation(hist, recent_days=7, prev_days=7)
+
+_rotation = _load_industry_rotation_cached()
+
+# ── 4 個分析區塊改用 Tabs 並排,省直向空間 ──
+# 「熱度榜 + 產業輪動」同屬「近期趨勢觀察」(個股層級 vs 產業層級),合併同頁。
+_tab_trend, _tab_perf, _tab_bt, _tab_sent = st.tabs([
+    f"🔥 熱度 & 輪動({_hist_days}日)",
     "📊 策略績效",
     "🔬 訊號回測",
     "🌡️ 大盤情緒",
 ])
 
-with _tab_hot:
+with _tab_trend:
+    # ── 🔥 入選熱度榜(個股層級) ──
+    st.markdown("#### 🔥 入選熱度榜")
     if _hot:
         st.caption("追蹤近期持續上榜的強勢股 — 連續出現次數越多,代表趨勢延續性越強。")
-        # 用 dataframe 顯示,讓使用者可以排序與複製
         hot_rows = []
         for r in _hot:
             sid_str = str(r["sid"])
@@ -957,15 +966,9 @@ with _tab_hot:
     else:
         st.info("尚未累積足夠歷史紀錄(需 Telegram 每日推播寫入後累積)。")
 
-
-# ── 產業輪動追蹤(對比最近 7 日 vs 前 7 日各產業上榜次數) ──────────────────
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_industry_rotation_cached():
-    hist = load_history()
-    return compute_industry_rotation(hist, recent_days=7, prev_days=7)
-
-_rotation = _load_industry_rotation_cached()
-with _tab_rot:
+    # ── 🔄 產業輪動(產業層級) ──
+    st.divider()
+    st.markdown("#### 🔄 產業輪動")
     if _rotation:
         st.caption("資金流向觀察 — 上榜次數驟增的產業代表主流轉換,可加重押注;驟減則注意避開。")
         rot_rows = []
@@ -1152,11 +1155,12 @@ with _tab_perf:
                             f"口徑與上方「vs 大盤」走勢圖一致。"
                         )
 
-            # ── 📊 累積績效曲線 vs 大盤 ─────────────────────────
+            # ── 📊 系統 picks vs 大盤 後續報酬對照 ─────────────────────────
             # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。
-            # 假設起始資金 100,每天買進當日 picks 並持有 5 日,複利累加。
+            # 每個點 = 該入選日所有 picks 的「5 日後平均報酬」vs 同期 ^TWII。
+            # 刻意不做複利(重疊的 5 日窗口複利累加會把報酬灌水),純比點報酬。
             st.divider()
-            st.markdown("**📊 跟著系統走 vs 直接買大盤(假設起始 100,5 日複利)**")
+            st.markdown("**📊 跟著系統走 vs 直接買大盤(每點 = 當日入選股的 5 日後平均報酬)**")
             _eq = None
             _eq_error = None
             try:
