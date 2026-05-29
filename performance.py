@@ -140,14 +140,14 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
 
 
 def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
-    """算「系統 picks vs ^TWII 大盤」的累積績效曲線(複利)。
+    """算「系統 picks vs ^TWII 大盤」的逐日 N 日後報酬對照。
 
     對每個入選日:
-      - 系統:當日所有 picks 的平均 N 日報酬
-      - 大盤:同期間 ^TWII 的 N 日報酬
-    然後依時序對每日 % 報酬做複利累加。
+      - 系統:當日所有 picks 的平均 N 日後報酬(%)
+      - 大盤:同期間 ^TWII 的 N 日後報酬(%)
 
-    起始資金假設 100,終值 - 100 = 累積報酬率(%)。
+    重要:不再對重疊的 N 日窗口做複利累加(那會把真實 ~10% 漲幅吹成 +50%)。
+    改成回傳每日的「點報酬」,UI 上畫成兩條走勢線、4 卡顯示平均值。
 
     Args:
         history: load_history() 結果
@@ -156,13 +156,15 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
 
     Returns:
         {
-          "dates":       [entry_date_str, ...],
-          "pick_curve":  [eq1, eq2, ...]   # 系統累積資金(起始 100)
-          "twii_curve":  [...]              # 大盤累積資金(起始 100)
-          "n_days":      樣本日數,
-          "final_pick":  最後系統值,
-          "final_twii":  最後大盤值,
-          "alpha":       系統 - 大盤(百分點),
+          "dates":          [entry_date_str, ...],
+          "pick_returns":   [系統平均 N 日報酬 (%), ...],
+          "twii_returns":   [大盤 N 日報酬 (%), ...],
+          "n_days":         樣本日數,
+          "avg_pick":       系統平均 N 日報酬,
+          "avg_twii":       大盤平均 N 日報酬,
+          "alpha":          系統 - 大盤(百分點,直接相減),
+          "win_days":       系統當日 > 大盤的天數,
+          "hold_days":      N(回傳供 UI 標示),
         }
         資料不足回 None
     """
@@ -209,7 +211,7 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
         avg_ret = sum(valid_returns) / len(valid_returns)
 
         # 大盤:^TWII 同期間報酬
-        twii_ret = 0.0
+        twii_ret = None
         if twii_close is not None:
             idx_arr = twii_close.index.searchsorted(entry_date)
             if idx_arr < len(twii_close):
@@ -220,36 +222,35 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
                     target_p = twii_close.iloc[target_idx]
                     if entry_p > 0 and pd.notna(entry_p) and pd.notna(target_p):
                         twii_ret = (target_p - entry_p) / entry_p * 100
+        if twii_ret is None:
+            twii_ret = 0.0  # 找不到大盤資料時當 0,避免下方統計噴掉
 
         rows.append({
-            "date":          entry["date"],
-            "pick_avg_ret":  avg_ret,
-            "twii_ret":      twii_ret,
-            "n_picks":       len(valid_returns),
+            "date":         entry["date"],
+            "pick_ret":     avg_ret,
+            "twii_ret":     twii_ret,
+            "n_picks":      len(valid_returns),
         })
 
     if not rows:
         return None
 
-    # 複利累加(起始資金 100)
-    pick_eq = 100.0
-    twii_eq = 100.0
-    pick_curve = []
-    twii_curve = []
-    for r in rows:
-        pick_eq *= (1 + r["pick_avg_ret"] / 100)
-        twii_eq *= (1 + r["twii_ret"] / 100)
-        pick_curve.append(round(pick_eq, 2))
-        twii_curve.append(round(twii_eq, 2))
+    pick_returns = [r["pick_ret"] for r in rows]
+    twii_returns = [r["twii_ret"] for r in rows]
+    avg_pick = sum(pick_returns) / len(pick_returns)
+    avg_twii = sum(twii_returns) / len(twii_returns)
+    win_days = sum(1 for r in rows if r["pick_ret"] > r["twii_ret"])
 
     return {
-        "dates":       [r["date"] for r in rows],
-        "pick_curve":  pick_curve,
-        "twii_curve":  twii_curve,
-        "n_days":      len(rows),
-        "final_pick":  round(pick_eq, 2),
-        "final_twii":  round(twii_eq, 2),
-        "alpha":       round(pick_eq - twii_eq, 2),
+        "dates":          [r["date"] for r in rows],
+        "pick_returns":   [round(v, 2) for v in pick_returns],
+        "twii_returns":   [round(v, 2) for v in twii_returns],
+        "n_days":         len(rows),
+        "avg_pick":       round(avg_pick, 2),
+        "avg_twii":       round(avg_twii, 2),
+        "alpha":          round(avg_pick - avg_twii, 2),
+        "win_days":       win_days,
+        "hold_days":      hold_days,
     }
 
 

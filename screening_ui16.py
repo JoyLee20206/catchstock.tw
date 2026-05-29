@@ -1028,73 +1028,87 @@ with _tab_perf:
                 )
             elif _eq["n_days"] < 3:
                 st.info(
-                    f"📊 累積績效曲線**累積中**: 目前只有 **{_eq['n_days']} 個有效資料點**,"
-                    f"需要 ≥ 3 個才畫得出有意義的趨勢線。"
+                    f"📊 績效對照**累積中**: 目前只有 **{_eq['n_days']} 個有效資料點**,"
+                    f"需要 ≥ 3 個才畫得出有意義的對照。"
                     f"持續累積中,**再過 {max(3 - _eq['n_days'], 1)} 個交易日**會自動出現。"
                 )
             else:
                 # 4 卡統計
-                _final_pick = _eq["final_pick"]
-                _final_twii = _eq["final_twii"]
+                _avg_pick = _eq["avg_pick"]
+                _avg_twii = _eq["avg_twii"]
                 _alpha = _eq["alpha"]
+                _win_days = _eq["win_days"]
+                _hd = _eq["hold_days"]
                 _ec_cols = st.columns(4)
-                _ec_cols[0].metric("系統累積", f"{_final_pick:.1f}",
-                                    f"{_final_pick-100:+.1f}%",
-                                    delta_color="inverse")
-                _ec_cols[1].metric("大盤累積", f"{_final_twii:.1f}",
-                                    f"{_final_twii-100:+.1f}%",
-                                    delta_color="inverse")
-                _ec_cols[2].metric("Alpha (超額報酬)", f"{_alpha:+.1f}",
-                                    "點" if abs(_alpha) >= 1 else "幾乎一致",
-                                    delta_color="inverse")
-                _ec_cols[3].metric("樣本日數", f"{_eq['n_days']} 日")
+                _ec_cols[0].metric(f"系統平均 {_hd} 日報酬", f"{_avg_pick:+.2f}%",
+                                    delta_color="off")
+                _ec_cols[1].metric(f"大盤平均 {_hd} 日報酬", f"{_avg_twii:+.2f}%",
+                                    delta_color="off")
+                _ec_cols[2].metric("Alpha (系統-大盤)",
+                                    f"{_alpha:+.2f} %",
+                                    delta_color="off")
+                _ec_cols[3].metric(f"系統贏大盤天數",
+                                    f"{_win_days} / {_eq['n_days']} 日",
+                                    delta_color="off")
 
-                # plotly 雙線圖
+                # plotly 雙線圖(每點代表「該入選日的 N 日後報酬」)
                 _fig_eq = go.Figure()
                 _fig_eq.add_trace(go.Scatter(
-                    x=_eq["dates"], y=_eq["pick_curve"],
+                    x=_eq["dates"], y=_eq["pick_returns"],
                     mode="lines+markers",
                     line=dict(color="#dc2626", width=2.5),
-                    marker=dict(size=4),
-                    name=f"系統 picks(終值 {_final_pick:.1f})",
-                    hovertemplate="<b>%{x}</b><br>系統:%{y:.2f}<extra></extra>",
+                    marker=dict(size=6),
+                    name=f"系統 picks(平均 {_avg_pick:+.2f}%)",
+                    hovertemplate=f"<b>%{{x}}</b><br>系統 {_hd} 日報酬:%{{y:+.2f}}%<extra></extra>",
                 ))
                 _fig_eq.add_trace(go.Scatter(
-                    x=_eq["dates"], y=_eq["twii_curve"],
+                    x=_eq["dates"], y=_eq["twii_returns"],
                     mode="lines+markers",
                     line=dict(color="#6b7280", width=1.8, dash="dot"),
-                    marker=dict(size=3),
-                    name=f"大盤 ^TWII(終值 {_final_twii:.1f})",
-                    hovertemplate="<b>%{x}</b><br>大盤:%{y:.2f}<extra></extra>",
+                    marker=dict(size=5),
+                    name=f"大盤 ^TWII(平均 {_avg_twii:+.2f}%)",
+                    hovertemplate=f"<b>%{{x}}</b><br>大盤 {_hd} 日報酬:%{{y:+.2f}}%<extra></extra>",
                 ))
-                # 100 起始基準線
-                _fig_eq.add_hline(y=100, line_dash="dash", line_color="gray", opacity=0.5,
-                                  annotation_text="起始 100", annotation_position="left")
+                # 0% 基準線
+                _fig_eq.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5,
+                                  annotation_text="0%", annotation_position="left")
                 _fig_eq.update_layout(
                     height=320, margin=dict(l=10, r=10, t=20, b=20),
-                    yaxis=dict(title="資金價值"),
+                    yaxis=dict(title=f"{_hd} 日後報酬 (%)", zeroline=True),
                     xaxis=dict(title=""),
                     plot_bgcolor="rgba(0,0,0,0.03)",
                     hovermode="x unified",
                     legend=dict(orientation="h", yanchor="top", y=-0.1),
                 )
                 st.plotly_chart(_fig_eq, use_container_width=True)
+                st.caption(
+                    f"每個點代表「該日入選的 picks 在 {_hd} 個交易日後的平均報酬」。"
+                    f"線在 0% 上方表示賺、下方虧。"
+                )
 
-                # 文字結論
-                if _alpha > 1:
-                    st.success(
-                        f"✅ **系統贏大盤 {_alpha:+.1f} 個百分點**(系統 {_final_pick:.1f} vs 大盤 {_final_twii:.1f}),"
-                        f"近 {_eq['n_days']} 個入選日資料。"
-                    )
-                elif _alpha < -1:
+                # 文字結論 + 樣本不足警語
+                if _eq["n_days"] < 30:
                     st.warning(
-                        f"⚠️ **系統輸大盤 {abs(_alpha):.1f} 個百分點**(系統 {_final_pick:.1f} vs 大盤 {_final_twii:.1f}),"
-                        f"考慮檢視訊號設定。"
+                        f"⚠️ **樣本只有 {_eq['n_days']} 天,統計不可靠**。"
+                        f"短期(< 30 天)很容易被市場噪音主導,**至少累積到 30 天**再下結論。"
+                        f"目前的 alpha({_alpha:+.2f}%)可能只是運氣。"
+                    )
+                elif _alpha > 0.5:
+                    st.success(
+                        f"✅ **系統平均贏大盤 {_alpha:+.2f}% / {_hd} 日**"
+                        f"(系統 {_avg_pick:+.2f}% vs 大盤 {_avg_twii:+.2f}%),"
+                        f"勝日 {_win_days}/{_eq['n_days']}。樣本 {_eq['n_days']} 天,可信度逐步提升中。"
+                    )
+                elif _alpha < -0.5:
+                    st.warning(
+                        f"⚠️ **系統平均輸大盤 {abs(_alpha):.2f}% / {_hd} 日**"
+                        f"(系統 {_avg_pick:+.2f}% vs 大盤 {_avg_twii:+.2f}%),"
+                        f"勝日 {_win_days}/{_eq['n_days']}。考慮調整訊號組合。"
                     )
                 else:
                     st.info(
-                        f"系統與大盤接近(差 {_alpha:+.1f} 點),沒明顯超額。"
-                        f"近 {_eq['n_days']} 個入選日資料。"
+                        f"系統表現與大盤接近(Alpha {_alpha:+.2f}%),勝日 {_win_days}/{_eq['n_days']}。"
+                        f"沒有明顯超額,可能就跟大盤連動。"
                     )
 
             # 分數區間表
