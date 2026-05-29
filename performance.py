@@ -93,6 +93,10 @@ def _risk_metrics(returns_in_date_order: list, hold_days: int) -> dict:
     for e in equity_curve:
         if e > peak:
             peak = e
+        if peak <= 0:
+            # 資金曲線歸零/轉負(報酬 ≤ -100%,通常是資料異常)→ 視為 -100% 回檔,不再除零
+            mdd = min(mdd, -1.0)
+            continue
         dd = (e - peak) / peak
         if dd < mdd:
             mdd = dd
@@ -339,6 +343,188 @@ def backtest_market_filter(history: list, cache_dir, hold_days: int = 5, ma_days
         "hold_days": hold_days, "ma_days": ma_days, "n_total": len(recs),
         "scenarios": scenarios, "temp_block": temp_block,
     }
+
+
+def _price_path(close_matrix, sid: str, entry_date, max_hold: int):
+    """進場後每日報酬路徑 [r_day1, ..., r_dayMax](%)。
+
+    需要完整 max_hold 個交易日(不足回 None),確保各出場策略評估同一批 pick。
+    """
+    if close_matrix is None or sid not in close_matrix.columns:
+        return None
+    s = close_matrix[sid].dropna()
+    if s.empty:
+        return None
+    dates = s.index
+    idx = dates.searchsorted(pd.Timestamp(entry_date))
+    if idx >= len(dates) or idx + max_hold >= len(dates):
+        return None
+    entry_close = s.iloc[idx]
+    if pd.isna(entry_close) or entry_close <= 0:
+        return None
+    rets = []
+    for k in range(1, max_hold + 1):
+        c = s.iloc[idx + k]
+        if pd.isna(c):
+            return None
+        rets.append((c - entry_close) / entry_close * 100)
+    return rets
+
+
+def backtest_exit_rules(history: list, cache_dir, max_hold: int = 10) -> dict:
+    """出場規則回測:固定持有 vs 停損 / 停利 / 移動停損,哪種最賺?
+
+    對每筆「有完整 max_hold 日路徑」的 pick,模擬各出場策略的實現報酬與持有天數,
+    比較淨期望值、勝率、平均持有天數、最差單筆、日均報酬(效率)。
+
+    Returns:
+        {"max_hold","n","strategies":[{name,win_rate,avg,net_exp,avg_days,worst,daily}, ...]}
+        資料不足回 {"error": ...}。
+    """
+    close_matrix = _load_close_matrix(cache_dir)
+    if close_matrix is None:
+        return {"error": "無法讀取 daily 快取"}
+
+    paths = []
+    for entry in history:
+        if entry.get("date") == "legacy":
+            continue
+        try:
+            entry_ts = pd.Timestamp(entry["date"])
+        except Exception:
+            continue
+        for pick in get_picks(entry):
+            sid = str(pick.get("sid", ""))
+            if not sid:
+                continue
+            p = _price_path(close_matrix, sid, entry_ts, max_hold)
+            if p:
+                paths.append(p)
+
+    if not paths:
+        return {"error": f"尚無滿 {max_hold} 個交易日的樣本(pick 要夠老才算得出完整路徑)。"}
+
+    # ── 各出場策略:回傳 (實現報酬%, 持有天數) ──
+    def _fixed(path, n):
+        n = min(n, len(path))
+        return path[n - 1], n
+
+    def _stop(path, stop_pct):           # 跌破 -stop_pct% 即出場,否則持滿
+        for d, r in enumerate(path, start=1):
+            if r <= -stop_pct:
+                return r, d
+        return path[-1], len(path)
+
+    def _take_profit(path, tp_pct):      # 漲到 +tp_pct% 即出場,否則持滿
+        for d, r in enumerate(path, start=1):
+            if r >= tp_pct:
+                return r, d
+        return path[-1], len(path)
+
+    def _trailing(path, draw_pct):       # 從波段高點(價格)回落 draw_pct% 出場
+        peak_ratio = 1.0
+        for d, r in enumerate(path, start=1):
+            ratio = 1 + r / 100.0
+            if ratio > peak_ratio:
+                peak_ratio = ratio
+            if ratio <= peak_ratio * (1 - draw_pct / 100.0):
+                return r, d
+        return path[-1], len(path)
+
+    _STRATS = [
+        (f"固定持有 {min(5, max_hold)} 日",  lambda p: _fixed(p, 5)),
+        (f"固定持有 {max_hold} 日",          lambda p: _fixed(p, max_hold)),
+        ("停損 -5%(否則持滿)",              lambda p: _stop(p, 5)),
+        ("停損 -8%(否則持滿)",              lambda p: _stop(p, 8)),
+        ("移動停損 8%(高點回落)",           lambda p: _trailing(p, 8)),
+        ("停利 +10%(否則持滿)",             lambda p: _take_profit(p, 10)),
+    ]
+
+    strategies = []
+    for name, fn in _STRATS:
+        rets, days = [], []
+        for path in paths:
+            r, d = fn(path)
+            rets.append(r)
+            days.append(d)
+        n = len(rets)
+        wins = sum(1 for r in rets if r > 0)
+        avg = sum(rets) / n
+        net_exp = avg - TRADE_COST_PCT
+        avg_days = sum(days) / n
+        strategies.append({
+            "name": name, "win_rate": wins / n, "avg": avg,
+            "net_exp": net_exp, "avg_days": avg_days,
+            "worst": min(rets),
+            "daily": net_exp / avg_days if avg_days > 0 else 0.0,
+        })
+
+    return {"max_hold": max_hold, "n": len(paths), "strategies": strategies}
+
+
+# 10 個計分細項的穩定 key(對應 build_picks_from_df 寫入的 "sig")
+_SIG_KEYS = ["投信", "外資", "雙買", "券", "大戶", "散戶", "技術", "KD", "營收", "RS"]
+
+
+def attribute_signals(history: list, cache_dir, hold_days: int = 5) -> dict:
+    """訊號歸因:拆解 10 個計分細項各自對後續報酬的貢獻。
+
+    對每筆「有存細項(sig)且已滿持有期」的 pick,
+    依每個訊號「有觸發(=1) vs 沒觸發(=0)」分組,比較後續 N 日平均報酬/勝率。
+    edge = 觸發組平均 − 未觸發組平均;edge 為正代表該訊號確實加值。
+
+    注意:歷史 pick 在導入 sig 記錄前不含細項,故只用有 sig 的樣本;
+    需累積一段時間才有參考價值。
+
+    Returns:
+        {
+          "hold_days","n_eval","n_with_sig",
+          "per_signal": [{"key","on":{n,win_rate,avg}|None,"off":{...}|None,"edge":float|None}, ...],
+        }
+        無法讀快取回 {"error": ...};尚無 sig 樣本回 {"n_eval":0,...} 供 UI 顯示累積中。
+    """
+    close_matrix = _load_close_matrix(cache_dir)
+    if close_matrix is None:
+        return {"error": "無法讀取 daily 快取"}
+
+    recs = []          # (sig_dict, ret)
+    n_with_sig = 0     # 有 sig 欄位的 pick 數(不論是否滿持有期)
+    for entry in history:
+        if entry.get("date") == "legacy":
+            continue
+        try:
+            entry_ts = pd.Timestamp(entry["date"])
+        except Exception:
+            continue
+        for pick in get_picks(entry):
+            sid = str(pick.get("sid", ""))
+            if not sid:
+                continue
+            sig = pick.get("sig")
+            if not isinstance(sig, dict):
+                continue
+            n_with_sig += 1
+            ret = _forward_return(close_matrix, sid, entry_ts, hold_days)
+            if ret is None:
+                continue
+            recs.append((sig, ret))
+
+    def _agg(vals):
+        if not vals:
+            return None
+        wins = sum(1 for v in vals if v > 0)
+        return {"n": len(vals), "win_rate": wins / len(vals), "avg": sum(vals) / len(vals)}
+
+    per_signal = []
+    for key in _SIG_KEYS:
+        on  = [ret for sig, ret in recs if sig.get(key) == 1]
+        off = [ret for sig, ret in recs if sig.get(key) == 0]
+        s_on, s_off = _agg(on), _agg(off)
+        edge = (s_on["avg"] - s_off["avg"]) if (s_on and s_off) else None
+        per_signal.append({"key": key, "on": s_on, "off": s_off, "edge": edge})
+
+    return {"hold_days": hold_days, "n_eval": len(recs),
+            "n_with_sig": n_with_sig, "per_signal": per_signal}
 
 
 def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:

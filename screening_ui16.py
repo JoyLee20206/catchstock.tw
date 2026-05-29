@@ -41,7 +41,10 @@ from cache_status import cache_freshness
 from picks_history import load_history, compute_hot_picks
 from data_health import check_data_health
 from industry_rotation import compute_industry_rotation
-from performance import compute_performance, compute_equity_curve, backtest_market_filter
+from performance import (
+    compute_performance, compute_equity_curve, backtest_market_filter,
+    attribute_signals, backtest_exit_rules,
+)
 from backtest import run_backtest, SIGNAL_LABELS, build_signal_matrices
 from market_sentiment import (
     compute_sentiment,
@@ -841,6 +844,18 @@ def _load_market_filter_cached(hold_days=5):
     """大盤濾網實證(只在多頭/空頭進場的績效對照),快取 10 分鐘。"""
     return backtest_market_filter(load_history(), CACHE_DIR, hold_days=hold_days)
 
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_signal_attribution_cached(hold_days=5):
+    """訊號歸因(10 個計分細項各自對後續報酬的貢獻),快取 10 分鐘。"""
+    return attribute_signals(load_history(), CACHE_DIR, hold_days=hold_days)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_exit_rules_cached(max_hold=10):
+    """出場規則回測(固定持有 vs 停損/停利/移動停損),快取 10 分鐘。"""
+    return backtest_exit_rules(load_history(), CACHE_DIR, max_hold=max_hold)
+
 # ── 🎯 首頁速覽卡片(3 秒看完今日重點) ──
 # 4 張 metric:今日達標 / 大盤狀態 / 最強產業 / 系統 5 日勝率
 if meta is not None and df is not None:
@@ -1347,13 +1362,12 @@ with _tab_perf:
                 st.divider()
                 st.markdown("**各分數區間 5 日勝率**")
                 st.caption(
-                    "⚠️ 統計類數字(上方整體勝率、各分數區間勝率)使用**完整訊號觸發紀錄**"
-                    "(每次入選獨立評估,同檔可能多次計入);下方樣本明細表已套用「同檔只留最新」去重,"
-                    "因此明細的「檔數」會少於這裡的「筆數」。\n\n"
-                    "💡 **分級對照**:🔥 **8 分 = 頂級(系統實務最高分)** / ✅ 7 分 = 合格 / "
-                    "⚠️ 6 分 = 邊緣(大盤資料缺失自動降標)。"
-                    "本系統雖以 10 分為滿分,但 9~10 分要求「法人雙買+大戶散戶共振+RS 強+月營收 YoY」"
-                    "同時成立,實務極罕見,故 **8 分視同冠軍級訊號**。"
+                    "⚠️ **為什麼這裡的「筆數」比下方明細的「檔數」多?**\n\n"
+                    "這裡每一次入選都算一筆——同一檔股票在不同天入選會分開計算;"
+                    "下方明細表則是「同一檔只留最新一次」。所以筆數比檔數多是正常的。\n\n"
+                    "💡 **分數怎麼看**:🔥 8 分 = 頂級 ｜ ✅ 7 分 = 合格 ｜ ⚠️ 6 分 = 邊緣(只在大盤資料抓不到時才出現)。\n\n"
+                    "系統滿分雖是 10 分,但 9~10 分要「法人雙買 + 大戶散戶同步 + RS 強 + 月營收成長」"
+                    "**全部同時成立**,幾乎不可能,所以**實務上 8 分就是最高等級**。"
                 )
                 # 分數 → 標籤對映
                 def _score_label(score: int) -> str:
@@ -1385,6 +1399,84 @@ with _tab_perf:
                         "損益比": _pf_str,
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            # ── 🔬 訊號歸因分析(10 個計分細項各自帶來多少報酬?) ──
+            st.divider()
+            st.markdown("**🔬 訊號歸因分析(哪個計分條件真的有效?)**")
+            _SIG_DISPLAY = {
+                "投信": "投信買超", "外資": "外資買超", "雙買": "投信+外資雙買",
+                "券": "券相關(資減券增/軋空)", "大戶": "400張大戶上升", "散戶": "散戶下降",
+                "技術": "技術面三合一", "KD": "KD低檔金叉", "營收": "月營收達標",
+                "RS": "RS優於大盤",
+            }
+            _attr = _load_signal_attribution_cached(hold_days=5)
+            if _attr.get("error"):
+                st.info(f"📊 {_attr['error']}")
+            elif _attr.get("n_eval", 0) == 0:
+                st.info(
+                    f"⏳ **訊號歸因累積中**:目前 **0 筆**含訊號細項的樣本。\n\n"
+                    f"訊號細項(`sig`)是近期才開始記錄的——舊歷史沒存,無法回溯。"
+                    f"從現在起每日推播會逐筆記錄 10 個計分條件,"
+                    f"**累積到約 30+ 筆(滿 5 交易日)後這裡會自動跑出分析**:"
+                    f"屆時可看出法人/大戶/RS/營收等條件,哪個真的帶來報酬、哪個其實沒差。"
+                )
+            else:
+                st.caption(
+                    "每個計分條件「有觸發 vs 沒觸發」時,後續 5 日報酬的差異(edge)。"
+                    "edge 為正 = 該訊號確實加值;接近 0 或負 = 可能沒幫助甚至拖累,值得檢討權重。"
+                )
+                _ar_rows = []
+                for _s in sorted(_attr["per_signal"],
+                                 key=lambda x: (x["edge"] is not None, x["edge"] or 0),
+                                 reverse=True):
+                    _on, _off, _edge = _s["on"], _s["off"], _s["edge"]
+                    _ar_rows.append({
+                        "計分條件": _SIG_DISPLAY.get(_s["key"], _s["key"]),
+                        "觸發樣本": _on["n"] if _on else 0,
+                        "觸發平均報酬": f"{_on['avg']:+.2f}%" if _on else "—",
+                        "未觸發平均報酬": f"{_off['avg']:+.2f}%" if _off else "—",
+                        "edge(差)": f"{_edge:+.2f}%" if _edge is not None else "—",
+                    })
+                st.dataframe(pd.DataFrame(_ar_rows), use_container_width=True, hide_index=True)
+                if _attr["n_eval"] < 30:
+                    st.warning(
+                        f"⚠️ 僅 {_attr['n_eval']} 筆含細項樣本,且訊號彼此相關(多數 pick 同時觸發多個),"
+                        f"edge 此時極不穩、別據此改權重。建議累積 ≥ 30 筆、最好上百筆再下結論。"
+                    )
+
+            # ── 🚪 出場規則回測(何時賣最賺?) ──
+            st.divider()
+            st.markdown("**🚪 出場規則回測(固定持有 vs 停損/停利/移動停損,哪種最賺?)**")
+            _ex = _load_exit_rules_cached(max_hold=10)
+            if _ex.get("error"):
+                st.info(f"📊 {_ex['error']}")
+            else:
+                st.caption(
+                    f"對每筆已滿 {_ex['max_hold']} 個交易日的 pick,模擬不同出場方式的實現報酬。"
+                    f"「日均報酬」= 淨期望值 ÷ 平均持有天數,比效率用(早出場可多做幾趟)。"
+                )
+                _best_net = max((s["net_exp"] for s in _ex["strategies"]), default=None)
+                _best_daily = max((s["daily"] for s in _ex["strategies"]), default=None)
+                _ex_rows = []
+                for _s in _ex["strategies"]:
+                    _flag_net   = " 🏆" if _s["net_exp"] == _best_net else ""
+                    _flag_daily = " ⚡" if _s["daily"] == _best_daily else ""
+                    _ex_rows.append({
+                        "出場策略": _s["name"],
+                        "勝率": f"{_s['win_rate']*100:.0f}%",
+                        "平均報酬": f"{_s['avg']:+.2f}%",
+                        "淨期望值": f"{_s['net_exp']:+.2f}%{_flag_net}",
+                        "平均持有": f"{_s['avg_days']:.1f} 日",
+                        "最差單筆": f"{_s['worst']:+.2f}%",
+                        "日均報酬": f"{_s['daily']:+.3f}%{_flag_daily}",
+                    })
+                st.dataframe(pd.DataFrame(_ex_rows), use_container_width=True, hide_index=True)
+                st.caption("🏆 = 淨期望值最高(單筆賺最多)　⚡ = 日均報酬最高(效率最高)")
+                if _ex["n"] < 30:
+                    st.warning(
+                        f"⚠️ 僅 {_ex['n']} 筆滿 {_ex['max_hold']} 日的樣本,結論不穩;"
+                        f"且全在多頭期間,停損的價值在空頭才會凸顯。累積更多、跨多空後再採用。"
+                    )
 
             # ── 進行中觀察樣本(剛入選還沒滿 5 個交易日,目前浮動報酬) ──
             samples = perf.get("samples", [])
