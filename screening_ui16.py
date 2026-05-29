@@ -1004,6 +1004,25 @@ with _tab_perf:
                 med_ret = overall.get(f"median_return_{n_days}d", 0)
                 m_cols[3].metric("中位數", f"{med_ret:+.2f}%")
 
+                # 第二排:損益面統計(回答「輸的時候輸多少、整體期望值正不正」)
+                key_pf  = f"profit_factor_{n_days}d"
+                key_exp = f"expectancy_{n_days}d"
+                if key_pf in overall:
+                    m2 = st.columns(4)
+                    avg_gain = overall.get(f"avg_gain_{n_days}d", 0)
+                    avg_loss = overall.get(f"avg_loss_{n_days}d", 0)
+                    pf       = overall[key_pf]
+                    exp      = overall.get(key_exp, 0)
+                    m2[0].metric("勝局平均獲利", f"{avg_gain:+.2f}%", delta_color="off")
+                    m2[1].metric("敗局平均虧損", f"{avg_loss:+.2f}%", delta_color="off")
+                    pf_str = "∞" if pf == float("inf") else f"{pf:.2f}"
+                    # 損益比 > 1.5 算有效;以 help 提示判讀門檻
+                    m2[2].metric("損益比", pf_str,
+                                 help="總獲利 ÷ 總虧損。>1.5 算有效,>2 不錯")
+                    m2[3].metric("每筆期望值", f"{exp:+.2f}%",
+                                 delta_color="normal" if exp >= 0 else "inverse",
+                                 help="勝率×平均獲利 − 敗率×|平均虧損|。需 >0 且大於手續費(~0.5%)")
+
             # ── 📊 累積績效曲線 vs 大盤 ─────────────────────────
             # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。
             # 假設起始資金 100,每天買進當日 picks 並持有 5 日,複利累加。
@@ -1139,11 +1158,20 @@ with _tab_perf:
                 rows = []
                 for score in sorted(by_score.keys(), reverse=True):
                     s = by_score[score]
+                    _pf = s.get("profit_factor_5d")
+                    if _pf is None:
+                        _pf_str = "—"
+                    elif _pf == float("inf"):
+                        _pf_str = "∞"
+                    else:
+                        _pf_str = f"{_pf:.2f}"
                     rows.append({
                         "分級": _score_label(score),
                         "樣本數": s.get("n_5d", 0),
                         "勝率":   f"{s.get('win_rate_5d', 0)*100:.0f}%" if "win_rate_5d" in s else "—",
                         "平均報酬": f"{s.get('avg_return_5d', 0):+.2f}%" if "avg_return_5d" in s else "—",
+                        "敗局均虧": f"{s.get('avg_loss_5d', 0):+.2f}%" if "avg_loss_5d" in s else "—",
+                        "損益比": _pf_str,
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
