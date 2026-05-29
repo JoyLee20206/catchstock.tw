@@ -826,7 +826,7 @@ _hot, _hist_days = _load_hot_picks_cached(top_n=10)
 @st.cache_data(ttl=600, show_spinner="計算策略績效中…")
 def _load_performance_cached():
     hist = load_history()
-    return compute_performance(hist, CACHE_DIR, n_days_list=(5, 10, 20))
+    return compute_performance(hist, CACHE_DIR, n_days_list=(3, 5, 10, 20))
 
 # ── 🎯 首頁速覽卡片(3 秒看完今日重點) ──
 # 4 張 metric:今日達標 / 大盤狀態 / 最強產業 / 系統 5 日勝率
@@ -1014,6 +1014,48 @@ with _tab_perf:
         if not overall:
             st.info("資料尚不足以計算績效,建議累積更多天數的選股紀錄後再來看。")
         else:
+            # ── 📅 持有天數比較(找最佳出場時機) ──
+            # 同一批 picks 在不同持有期的表現並排,看「抱幾天最划算」。
+            _periods = [n for n in (3, 5, 10, 20) if f"n_{n}d" in overall]
+            if len(_periods) >= 2:
+                st.markdown("**📅 不同持有天數比較(同一批選股,抱幾天最划算?)**")
+                _cmp_rows = []
+                _best_n, _best_exp = None, None       # 淨期望值最高
+                _best_dn, _best_daily = None, None     # 日均報酬最高(效率)
+                for n in _periods:
+                    _exp = overall.get(f"net_expectancy_{n}d")
+                    _pf  = overall.get(f"profit_factor_{n}d")
+                    _pf_str = "∞" if _pf == float("inf") else (f"{_pf:.2f}" if _pf is not None else "—")
+                    if _exp is not None and (_best_exp is None or _exp > _best_exp):
+                        _best_exp, _best_n = _exp, n
+                    # 日均報酬 = 淨期望值 ÷ 持有天數(讓不同持有期能公平比較效率)
+                    _daily = _exp / n if _exp is not None else None
+                    if _daily is not None and (_best_daily is None or _daily > _best_daily):
+                        _best_daily, _best_dn = _daily, n
+                    _cmp_rows.append({
+                        "持有天數": f"{n} 日",
+                        "樣本數":  overall.get(f"n_{n}d", 0),
+                        "勝率":    f"{overall.get(f'win_rate_{n}d', 0)*100:.0f}%",
+                        "平均報酬": f"{overall.get(f'avg_return_{n}d', 0):+.2f}%",
+                        "淨期望值": f"{_exp:+.2f}%" if _exp is not None else "—",
+                        "日均報酬": f"{_daily:+.2f}%" if _daily is not None else "—",
+                        "損益比":  _pf_str,
+                    })
+                st.dataframe(pd.DataFrame(_cmp_rows), use_container_width=True, hide_index=True)
+                if _best_n is not None:
+                    _eff_note = ""
+                    if _best_dn is not None and _best_dn != _best_n:
+                        _eff_note = (
+                            f" 但若看**日均報酬**(效率),**持有 {_best_dn} 日最高(+{_best_daily:.2f}%/日)**——"
+                            f"同一段時間內短打可以做更多趟,整體可能更賺。"
+                        )
+                    st.caption(
+                        f"💡 以**淨期望值**(扣成本後每筆落袋)來看,**持有 {_best_n} 日最高(+{_best_exp:.2f}%)**。"
+                        f"{_eff_note}"
+                        f" 提醒:抱越久樣本越少(最近的 pick 還沒滿天數),數字穩定度較低。"
+                    )
+                st.divider()
+
             # 三檔指標卡片
             for n_days in (5, 10, 20):
                 key_n   = f"n_{n_days}d"
