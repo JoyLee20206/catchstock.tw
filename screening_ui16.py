@@ -926,8 +926,10 @@ if meta is not None and df is not None:
 
     st.divider()
 
-# 緊接在速覽卡片下方:一行摘要橫幅
-# (_load_sentiment_cached / _get_sentiment_and_persist 已於檔案頂部定義,此處直接用)
+# 情緒細項摘要(一行):建成字串存入 _sent_detail_caption,稍後只 render 到
+# 「非大盤情緒」的 3 個分頁頂部 —— 大盤情緒分頁本身已有完整指標,不重複顯示。
+# (Streamlit 無法在伺服器端判斷當前分頁,故改成「只加進其他分頁」而非「在某頁隱藏」)
+_sent_detail_caption = None
 try:
     _sent = _get_sentiment_and_persist()
     if _sent and _sent.get("temperature") is not None:
@@ -938,7 +940,9 @@ try:
             _parts.append(f"VIX {_v['value']} {_v['label']}")
         _v = _ind.get("taiex_vix", {})
         if _v.get("pct_rank") is not None:
-            _parts.append(f"台指波動 {int(_v['pct_rank'])}%位 {_v['label']}")
+            # 與下方卡片一致:同時顯示數值 + 百分位(例:台指波動 28.1(56%位 中高))
+            _tv = f"{_v['value']}" if _v.get("value") is not None else ""
+            _parts.append(f"台指波動 {_tv}({int(_v['pct_rank'])}%位 {_v['label']})")
         _v = _ind.get("margin_level", {})
         if _v.get("pct_rank") is not None:
             _parts.append(f"融資水位 {int(_v['pct_rank'])}%位 {_v['label']}")
@@ -946,9 +950,8 @@ try:
         if _v.get("value") is not None:
             _sign = "+" if _v["value"] >= 0 else ""
             _parts.append(f"外資期貨 {_sign}{_v['value']:,}口 {_v['label']}")
-        # 溫度與標籤已在頂部「🌡️ 市場溫度」欄顯示,這裡只補 4 個關鍵細項(避免重複 + 改用輕量 caption)
         if _parts:
-            st.caption("🌡️ **情緒細項**　" + "　｜　".join(_parts))
+            _sent_detail_caption = "🌡️ **情緒細項**　" + "　｜　".join(_parts)
 except Exception:
     pass
 
@@ -970,6 +973,8 @@ _tab_trend, _tab_perf, _tab_bt, _tab_sent = st.tabs([
 ])
 
 with _tab_trend:
+    if _sent_detail_caption:
+        st.caption(_sent_detail_caption)
     # ── 🔥 入選熱度榜(個股層級) ──
     st.markdown("#### 🔥 入選熱度榜")
     if _hot:
@@ -1017,6 +1022,8 @@ with _tab_trend:
 # (_load_performance_cached 已在首頁速覽卡片前定義,此處直接使用)
 
 with _tab_perf:
+    if _sent_detail_caption:
+        st.caption(_sent_detail_caption)
     if _hist_days >= 5:  # 至少有 5 天歷史才有意義
         st.caption("回答「我這套系統真的有用嗎?」— 對每筆歷史選股,從 daily 快取算出後續 N 日報酬。")
 
@@ -1721,6 +1728,8 @@ def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
 
 
 with _tab_bt:
+    if _sent_detail_caption:
+        st.caption(_sent_detail_caption)
     st.caption(
         "對 daily 快取掃描 11 種訊號的歷史觸發點,算「進場後 N 日報酬」── "
         "回答「哪個訊號真的有 alpha?該在計分系統加重?」可複選做組合測試。"
