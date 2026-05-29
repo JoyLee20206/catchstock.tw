@@ -54,36 +54,8 @@ def _yf_download_with_retry(ticker: str, period: str = "60d", max_retries: int =
     return None
 
 
-def _load_index_parquet(cache_dir, prefix: str, min_rows: int = 10):
-    """從 cache/{prefix}_*.parquet 讀指數歷史(^TWII / ^VIX),統一為 DataFrame。
-
-    fetch_cache.py 排程會把 ^TWII 與 ^VIX 寫進 parquet,UI/sentiment 模組
-    可以走這條快速路徑,避免冷啟動每次都打 yfinance(~3 秒/次)。
-
-    Returns:
-        DataFrame,index 為 datetime,有 Close 欄(以及其他 OHLCV)
-        失敗或筆數不足回 None
-    """
-    if cache_dir is None:
-        return None
-    try:
-        files = sorted(Path(cache_dir).glob(f"{prefix}_*.parquet"))
-        if not files:
-            return None
-        df = pd.read_parquet(files[-1])
-        if df.empty or len(df) < min_rows:
-            return None
-        if "date" in df.columns:
-            df = df.set_index(pd.to_datetime(df["date"])).drop(columns=["date"], errors="ignore")
-        return df
-    except Exception:
-        return None
-
-
-def get_vix(cache_dir=None) -> dict:
+def get_vix() -> dict:
     """美股 VIX。
-
-    優先讀 cache/vix_*.parquet(< 50ms),沒有才打 yfinance(~3 秒)。
 
     區間判斷(經驗值):
     - < 15: 樂觀 — bull
@@ -91,11 +63,7 @@ def get_vix(cache_dir=None) -> dict:
     - 20~30: 警戒
     - > 30: 恐慌
     """
-    # 路徑 A:本地 parquet(最快)
-    df = _load_index_parquet(cache_dir, "vix", min_rows=1)
-    # 路徑 B:fallback 打 yfinance
-    if df is None:
-        df = _yf_download_with_retry("^VIX", period="5d")
+    df = _yf_download_with_retry("^VIX", period="5d")
     if df is None or df.empty:
         return {"value": None, "label": "N/A", "score": None, "icon": "⚪"}
 
@@ -113,10 +81,8 @@ def get_vix(cache_dir=None) -> dict:
     return {"value": round(val, 1), "label": label, "score": score, "icon": icon}
 
 
-def get_taiex_vix(cache_dir=None) -> dict:
+def get_taiex_vix() -> dict:
     """台指實現波動率(從 ^TWII 算)。
-
-    優先讀 cache/twii_*.parquet(< 50ms),沒有才打 yfinance(~3 秒)。
 
     原本用 00677U 富邦 VIX ETF 當代理,但該 ETF 已下市(2024),
     改為直接從加權指數計算 20 日年化實現波動率:
@@ -125,11 +91,7 @@ def get_taiex_vix(cache_dir=None) -> dict:
     用「歷史百分位」判讀:看當前值在過去 90 日的位置。
     高百分位 = 波動高(恐慌升溫);低百分位 = 平靜樂觀。
     """
-    # 路徑 A:本地 parquet
-    df = _load_index_parquet(cache_dir, "twii", min_rows=40)
-    # 路徑 B:fallback yfinance
-    if df is None:
-        df = _yf_download_with_retry("^TWII", period="180d")
+    df = _yf_download_with_retry("^TWII", period="180d")
     if df is None or df.empty or len(df) < 40:
         return {"value": None, "pct_rank": None, "label": "N/A", "score": None, "icon": "⚪"}
 
@@ -161,14 +123,9 @@ def get_taiex_vix(cache_dir=None) -> dict:
             "label": label, "score": score, "icon": icon}
 
 
-def get_taiex_position(cache_dir=None) -> dict:
-    """大盤位階 — 加權指數相對 MA60 乖離率。
-
-    優先讀 cache/twii_*.parquet(< 50ms),沒有才打 yfinance(~3 秒)。
-    """
-    df = _load_index_parquet(cache_dir, "twii", min_rows=60)
-    if df is None:
-        df = _yf_download_with_retry("^TWII", period="120d")
+def get_taiex_position() -> dict:
+    """大盤位階 — 加權指數相對 MA60 乖離率。"""
+    df = _yf_download_with_retry("^TWII", period="120d")
     if df is None or df.empty or len(df) < 60:
         return {"value": None, "label": "N/A", "score": None, "icon": "⚪"}
 
@@ -660,9 +617,9 @@ def compute_sentiment(cache_dir) -> dict:
         }
     """
     indicators = {
-        "vix":            get_vix(cache_dir),
-        "taiex_vix":      get_taiex_vix(cache_dir),
-        "taiex_pos":      get_taiex_position(cache_dir),
+        "vix":            get_vix(),
+        "taiex_vix":      get_taiex_vix(),
+        "taiex_pos":      get_taiex_position(),
         "margin_level":   get_margin_balance_level(cache_dir),
         "fi_futures":     get_fi_futures_net(cache_dir),
         "retail_futures": get_retail_futures_ratio(cache_dir),
@@ -738,6 +695,127 @@ def load_sentiment_history(cache_dir):
         return json.loads(f.read_text(encoding="utf-8"))
     except Exception:
         return []
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 溫度計有效性回測(溫度 vs ^TWII 後續 N 日報酬)
+# ══════════════════════════════════════════════════════════════════════
+# 溫度區間(lo 含、hi 不含),由熱到冷;與 compute_sentiment 的 label 門檻一致
+_SENT_BANDS = [
+    ("偏熱 ≥70",    70, 1000),
+    ("略偏多 55–69", 55, 70),
+    ("中性 45–54",   45, 55),
+    ("略偏空 30–44", 30, 45),
+    ("偏冷 <30",    -1, 30),
+]
+
+
+def _load_twii_close(cache_dir):
+    """讀 ^TWII 收盤序列(index=date, 由舊到新)。失敗回 None。"""
+    try:
+        files = sorted(Path(cache_dir).glob("twii_*.parquet"))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        if "date" not in df.columns or "Close" not in df.columns:
+            return None
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date").sort_index()
+        return df["Close"].dropna()
+    except Exception as e:
+        print(f"   ⚠ 讀取 twii close 失敗: {e}")
+        return None
+
+
+def _twii_forward_return(twii_close, entry_date, n_days: int):
+    """^TWII 從 entry_date 起算 n_days 個交易日的報酬率(%)。不足回 None。"""
+    idx = twii_close.index.searchsorted(pd.Timestamp(entry_date))
+    if idx >= len(twii_close):
+        return None
+    target = idx + n_days
+    if target >= len(twii_close):
+        return None
+    e = twii_close.iloc[idx]
+    t = twii_close.iloc[target]
+    if e > 0 and pd.notna(e) and pd.notna(t):
+        return (t - e) / e * 100
+    return None
+
+
+def backtest_sentiment(cache_dir, n_days_list=(5, 10)) -> dict:
+    """回測「市場溫度」對 ^TWII 後續報酬的預測力。
+
+    對 sentiment_history 內每個歷史溫度,取 ^TWII 後續 N 日報酬,
+    依溫度高低分組統計(各組勝率/平均報酬),並算溫度與後續報酬的相關係數。
+
+    Returns:
+        {
+          "n_days_list": [5, 10],
+          "bands": [ {"band","n_total","5d":{"n","win_rate","avg"},"10d":{...}}, ... ],
+          "corr":  {5: r, 10: r},      # 溫度 vs 後續報酬 的 Pearson 相關(None=樣本不足)
+          "n_eval": {5: 可用樣本數, 10: ...},
+        }
+        資料不足回 {"error": "..."}。
+    """
+    hist = load_sentiment_history(cache_dir)
+    if not hist or len(hist) < 5:
+        return {"error": "情緒歷史不足(至少需 5 日),持續累積後再看。"}
+
+    twii = _load_twii_close(cache_dir)
+    if twii is None or twii.empty:
+        return {"error": "找不到 ^TWII 收盤資料(twii_*.parquet),無法回測。"}
+
+    # 每筆歷史 → (temp, {n: fwd_return})
+    rows = []
+    for h in hist:
+        temp = h.get("temp")
+        date = h.get("date")
+        if temp is None or not date:
+            continue
+        fwd = {n: _twii_forward_return(twii, date, n) for n in n_days_list}
+        rows.append({"temp": temp, "fwd": fwd})
+
+    # 分組統計
+    bands_out = []
+    for name, lo, hi in _SENT_BANDS:
+        members = [r for r in rows if lo <= r["temp"] < hi]
+        entry = {"band": name, "n_total": len(members)}
+        for n in n_days_list:
+            vals = [r["fwd"][n] for r in members if r["fwd"][n] is not None]
+            if vals:
+                wins = sum(1 for v in vals if v > 0)
+                entry[f"{n}d"] = {
+                    "n": len(vals),
+                    "win_rate": wins / len(vals),
+                    "avg": sum(vals) / len(vals),
+                }
+            else:
+                entry[f"{n}d"] = None
+        bands_out.append(entry)
+
+    # 相關係數(溫度 vs 後續報酬)
+    corr, n_eval = {}, {}
+    for n in n_days_list:
+        pairs = [(r["temp"], r["fwd"][n]) for r in rows if r["fwd"][n] is not None]
+        n_eval[n] = len(pairs)
+        if len(pairs) >= 3:
+            xs = [p[0] for p in pairs]
+            ys = [p[1] for p in pairs]
+            # 任一序列零變異時 corrcoef 會回 nan → 視為 None
+            if len(set(xs)) > 1 and len(set(ys)) > 1:
+                r = float(np.corrcoef(xs, ys)[0, 1])
+                corr[n] = r if not np.isnan(r) else None
+            else:
+                corr[n] = None
+        else:
+            corr[n] = None
+
+    return {
+        "n_days_list": list(n_days_list),
+        "bands": bands_out,
+        "corr": corr,
+        "n_eval": n_eval,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════

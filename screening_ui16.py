@@ -46,6 +46,7 @@ from backtest import run_backtest, SIGNAL_LABELS, build_signal_matrices
 from market_sentiment import (
     compute_sentiment,
     load_sentiment_history,
+    backtest_sentiment,
     persist_sentiment_history,
     persist_fi_history,
     persist_retail_history,
@@ -238,6 +239,12 @@ def _load_sentiment_cached():
     ⚠ 純函式:不含副作用。寫歷史檔由 _get_sentiment_and_persist 在快取外負責。
     """
     return compute_sentiment(CACHE_DIR)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_sentiment_backtest_cached():
+    """溫度計有效性回測(溫度 vs ^TWII 後續報酬),快取 10 分鐘。"""
+    return backtest_sentiment(CACHE_DIR, n_days_list=(5, 10))
 
 
 def _get_sentiment_and_persist():
@@ -1966,7 +1973,7 @@ with _tab_bt:
 
 with _tab_sent:
     st.caption(
-        "整合 7 個市場訊號的綜合溫度計 — 分數高(偏熱/樂觀)代表多頭情緒強,"
+        "整合 6 個市場訊號的綜合溫度計 — 分數高(偏熱/樂觀)代表多頭情緒強,"
         "分數低(偏冷/恐慌)代表市場恐慌或空頭佔優。"
         "任一指標抓取失敗自動降級計算,不影響其他指標。"
     )
@@ -2172,6 +2179,55 @@ with _tab_sent:
                                  help=f"從 {_hist_slice[0]['date']} 到 {_hist_slice[-1]['date']}")
         elif _trend_hist:
             st.info(f"📈 市場溫度走勢:已累積 {len(_trend_hist)} 日,**明天起會自動畫成趨勢圖**。")
+
+        # ── 🎯 溫度計有效性回測(溫度 vs 大盤後續報酬) ──
+        # 回答「這溫度計準不準?」:把歷史溫度按高低分組,看各組大盤後續 5/10 日實際走勢。
+        st.divider()
+        st.markdown("#### 🎯 溫度計準不準?(溫度 vs 大盤後續報酬)")
+        _sbt = _load_sentiment_backtest_cached()
+        if _sbt.get("error"):
+            st.info(f"📊 {_sbt['error']}")
+        else:
+            _bands = _sbt["bands"]
+            _corr  = _sbt.get("corr", {})
+            # 分組表
+            _bt_rows = []
+            for _b in _bands:
+                if _b["n_total"] == 0:
+                    continue
+                _row = {"溫度區間": _b["band"], "樣本": _b["n_total"]}
+                for _n in _sbt["n_days_list"]:
+                    _cell = _b.get(f"{_n}d")
+                    if _cell:
+                        _row[f"{_n}日勝率"]  = f"{_cell['win_rate']*100:.0f}%"
+                        _row[f"{_n}日平均"]  = f"{_cell['avg']:+.2f}%"
+                    else:
+                        _row[f"{_n}日勝率"]  = "—"
+                        _row[f"{_n}日平均"]  = "—"
+                _bt_rows.append(_row)
+            if _bt_rows:
+                st.dataframe(pd.DataFrame(_bt_rows), use_container_width=True, hide_index=True)
+
+            # 相關係數解讀(以 5 日為主)
+            _r5 = _corr.get(5)
+            _n5 = _sbt.get("n_eval", {}).get(5, 0)
+            if _r5 is not None:
+                if _r5 > 0.2:
+                    _interp = (f"**正相關 (r={_r5:+.2f})**:溫度越高、大盤後續越偏漲 → "
+                               f"溫度計偏「**順勢/趨勢確認**」,高溫可順勢、低溫保守。")
+                elif _r5 < -0.2:
+                    _interp = (f"**負相關 (r={_r5:+.2f})**:溫度越高、大盤後續反而越偏跌 → "
+                               f"溫度計偏「**反指標**」,高溫該減碼、低溫(恐慌)反而是機會。")
+                else:
+                    _interp = (f"**幾乎不相關 (r={_r5:+.2f})**:目前溫度對大盤後續 5 日報酬"
+                               f"沒有明顯預測力,當參考就好,別當訊號。")
+                st.caption(f"📐 溫度 vs 後續 5 日報酬相關係數:{_interp}(樣本 {_n5} 筆)")
+
+            if (_sbt.get("n_eval", {}).get(5, 0) or 0) < 30:
+                st.warning(
+                    f"⚠️ 樣本僅 {_sbt.get('n_eval', {}).get(5, 0)} 筆,統計極不穩定。"
+                    f"溫度歷史要累積夠久(≥ 30 筆、跨多空)結論才可信,目前看趨勢就好。"
+                )
 
         st.caption(
             "⚠️ 情緒指標為輔助參考，不構成買賣建議。"
