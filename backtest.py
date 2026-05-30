@@ -14,6 +14,8 @@
 import pandas as pd
 import numpy as np
 
+# 市價單滑價估計(%):以訊號日隔日開盤掛市價,實際成交通常略高於開盤報價
+SLIPPAGE_PCT = 0.1
 
 # ── 訊號參數(與 screening0515.py 同步) ───────────────────────────────
 HIGH_BREAK_DAYS    = 60
@@ -74,13 +76,17 @@ def _load_daily_matrix(cache_dir):
         high_col   = 'max' if 'max' in df.columns else 'high'
         low_col    = 'min' if 'min' in df.columns else 'low'
         volume_col = 'Trading_Volume' if 'Trading_Volume' in df.columns else 'volume'
+        open_col   = 'open' if 'open' in df.columns else None
 
-        return {
+        result = {
             'close':  df.pivot(index='date', columns='stock_id', values='close'),
             'high':   df.pivot(index='date', columns='stock_id', values=high_col),
             'low':    df.pivot(index='date', columns='stock_id', values=low_col),
             'volume': df.pivot(index='date', columns='stock_id', values=volume_col),
         }
+        if open_col:
+            result['open'] = df.pivot(index='date', columns='stock_id', values=open_col)
+        return result
     except Exception as e:
         print(f"⚠ 讀取 daily matrix 失敗: {e}")
         return None
@@ -597,7 +603,8 @@ def _dedup_overlap(trades_df: pd.DataFrame, hold_days: int, trading_dates) -> pd
 
 
 def compute_signal_returns(signal_matrix, close_matrix, hold_days: int,
-                           dedup_within_hold: bool = True) -> pd.DataFrame:
+                           dedup_within_hold: bool = True,
+                           open_matrix=None) -> pd.DataFrame:
     """對訊號觸發點,算「進場後 hold_days 個交易日的報酬率」。
 
     Args:
@@ -606,16 +613,27 @@ def compute_signal_returns(signal_matrix, close_matrix, hold_days: int,
         hold_days:     持有交易日數
         dedup_within_hold: True = 同股票 hold_days 內第二次訊號會被忽略(避免持倉重疊
                        與強勢股權重灌水);False = 每天觸發都算一筆(原始逐日掃描)。
+        open_matrix:   隔日開盤價 DataFrame;提供時進場價改為「訊號日隔日開盤 + 滑價」,
+                       去除前視偏誤;None 時回退為訊號日收盤(舊行為)。
 
     Returns:
-        DataFrame[date, stock_id, entry_close, exit_close, return_pct]
-        return_pct = (exit_close - entry_close) / entry_close * 100
+        DataFrame[date, stock_id, entry_price, exit_close, return_pct]
+        return_pct = (exit_close - entry_price) / entry_price * 100
     """
     if signal_matrix is None or signal_matrix.empty:
         return pd.DataFrame()
 
-    # entry = 觸發當日收盤(假設收盤掛單),exit = 持有後 N 個交易日的收盤
+    # exit = 持有後 N 個交易日的收盤
     exit_close = close_matrix.shift(-hold_days)
+
+    # 進場價:隔日開盤(shift(-1)) + 滑價;無開盤資料時用當日收盤
+    if open_matrix is not None:
+        entry_open_next = open_matrix.shift(-1)   # 把 T+1 的開盤對齊到 T 行
+        # 有效性遮罩:開盤必須為正數才採用
+        use_open = entry_open_next.notna() & (entry_open_next > 0)
+        entry_price_mat = entry_open_next.where(use_open, close_matrix) * (1 + SLIPPAGE_PCT / 100)
+    else:
+        entry_price_mat = close_matrix
 
     # 把訊號矩陣 stack 成長表
     sig_long = signal_matrix.stack()
@@ -625,8 +643,8 @@ def compute_signal_returns(signal_matrix, close_matrix, hold_days: int,
     if sig_long.empty:
         return pd.DataFrame()
 
-    entry_long = close_matrix.stack().reset_index()
-    entry_long.columns = ['date', 'stock_id', 'entry_close']
+    entry_long = entry_price_mat.stack().reset_index()
+    entry_long.columns = ['date', 'stock_id', 'entry_price']
 
     exit_long = exit_close.stack().reset_index()
     exit_long.columns = ['date', 'stock_id', 'exit_close']
@@ -636,10 +654,12 @@ def compute_signal_returns(signal_matrix, close_matrix, hold_days: int,
         .merge(entry_long, on=['date', 'stock_id'], how='left')
         .merge(exit_long,  on=['date', 'stock_id'], how='left')
     )
-    merged = merged.dropna(subset=['entry_close', 'exit_close'])
-    merged = merged[merged['entry_close'] > 0]
+    merged = merged.dropna(subset=['entry_price', 'exit_close'])
+    merged = merged[merged['entry_price'] > 0]
 
-    merged['return_pct'] = (merged['exit_close'] - merged['entry_close']) / merged['entry_close'] * 100
+    merged['return_pct'] = (
+        (merged['exit_close'] - merged['entry_price']) / merged['entry_price'] * 100
+    )
     # 過濾離譜值(資料壞掉造成的 1000% 漲跌)
     merged = merged[merged['return_pct'].abs() < 100]
     merged = merged.sort_values('date').reset_index(drop=True)
@@ -696,26 +716,16 @@ def summarize(trades: pd.DataFrame, hold_days: int = 10) -> dict:
 # ══════════════════════════════════════════════════════════════════════
 # 對外主介面
 # ══════════════════════════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════
-# 重資料建構(可被 UI 層 cache,避免重複跑)
-# ══════════════════════════════════════════════════════════════════════
-def build_signal_matrices(cache_dir):
-    """建構 11 個訊號矩陣 + close matrix(回測的「重資料」)。
+def build_signal_matrices(cache_dir) -> dict:
+    """建構全部 11 個訊號矩陣(+ matrices + open_matrix)並回傳。
 
-    這部分耗時 5~7 秒(讀 5 個 parquet + 算 11 個訊號 detection)。
-    呼叫端應該 cache 起來,讓改變 hold_days / date_range / combine_mode /
-    stock_filter 等輕量參數時不必重算 5 秒。
-
-    Returns:
-        {
-            "close":        DataFrame index=date, columns=stock_id,
-            "sig_matrices": {sig_name: bool DataFrame, ...},
-        }
-        失敗回 None
+    耗時 ~5-7 秒,供 UI 獨立 cache 後重複使用。
+    Returns: {"matrices": ..., "sig_matrices": {...}, "open_matrix": ...}
     """
     matrices = _load_daily_matrix(cache_dir)
     if matrices is None:
         return None
+
     fi_matrix     = _load_foreign_net_matrix(cache_dir)
     it_matrix     = _load_it_net_matrix(cache_dir)
     dealer_matrix = _load_dealer_net_matrix(cache_dir)
@@ -727,23 +737,23 @@ def build_signal_matrices(cache_dir):
 
     _breakout = detect_breakout_signals(matrices)
     sig_matrices = {
-        # Tier S
         "resonance":        detect_resonance_signals(matrices, retail_matrix),
         "foreign":          detect_foreign_signals(matrices, fi_matrix),
         "revenue_breakout": detect_revenue_breakout_signals(matrices, _breakout, double_red_matrix),
-        # Tier A
         "margin_squeeze":   detect_margin_short_squeeze_signals(matrices, margin_mats),
         "triple_buy":       detect_triple_buy_signals(matrices, fi_matrix, it_matrix, dealer_matrix),
         "investment_trust": detect_investment_trust_signals(matrices, it_matrix),
         "breakout":         _breakout,
-        # Tier B
         "momentum_top":     detect_momentum_top_signals(matrices),
         "quality_breakout": detect_quality_breakout_signals(matrices, _breakout),
         "ma_golden_cross":  detect_ma_golden_cross_signals(matrices),
-        # Tier C
         "kd_cross":         detect_kd_cross_signals(matrices),
     }
-    return {"close": matrices['close'], "sig_matrices": sig_matrices}
+    return {
+        "matrices":     matrices,
+        "sig_matrices": sig_matrices,
+        "open_matrix":  matrices.get('open'),
+    }
 
 
 def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
@@ -754,42 +764,38 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
     """跑一次回測。
 
     Args:
-        cache_dir:  pathlib.Path 指向 CACHE_DIR
-        signal:     'breakout' / 'foreign' / 'kd_cross'
-        hold_days:  持有交易日數(5/10/20)
-        date_range: (start_date, end_date) 兩個 pd.Timestamp;None = 全部
+        cache_dir:    pathlib.Path 指向 CACHE_DIR
+        signal:       'breakout' / 'foreign' / 'kd_cross' 或 list
+        hold_days:    持有交易日數(5/10/20)
+        date_range:   (start_date, end_date) 兩個 pd.Timestamp;None = 全部
+        precomputed:  build_signal_matrices() 的回傳值;提供時略過重建矩陣(加速)
 
     Returns:
         {
             "signal": 'breakout',
             "hold_days": 10,
-            "trades": DataFrame[date, stock_id, entry_close, exit_close, return_pct],
+            "trades": DataFrame[date, stock_id, entry_price, exit_close, return_pct],
             "stats": {"n": ..., "win_rate": ..., ...},
-            "all_signals_stats": {  # 三個訊號的 stats,用於對照圖
-                "breakout":  {...},
-                "foreign":   {...},
-                "kd_cross":  {...},
-            },
+            "all_signals_stats": {...},
             "error": str (僅失敗時),
         }
     """
-    # 用呼叫端提供的 precomputed 矩陣,避免重新跑 5-7 秒重計算
-    # (UI 端會用 @st.cache_data 把 build_signal_matrices 結果 cache 起來)
-    if precomputed is None:
-        precomputed = build_signal_matrices(cache_dir)
-    if precomputed is None:
-        return {"error": "無法讀取 daily 快取", "trades": pd.DataFrame(), "stats": {"n": 0}}
-
-    close_matrix = precomputed["close"]
-    matrices = {"close": close_matrix}   # 後續只用 close,其他欄位由 sig_matrices 承接
-    # copy 一份避免 stock_filter 修改影響 cache 內物件
-    sig_matrices = {k: v for k, v in precomputed["sig_matrices"].items()}
+    if precomputed is not None:
+        matrices     = precomputed["matrices"]
+        sig_matrices = precomputed["sig_matrices"]
+        open_matrix  = precomputed.get("open_matrix")
+    else:
+        built = build_signal_matrices(cache_dir)
+        if built is None:
+            return {"error": "無法讀取 daily 快取", "trades": pd.DataFrame(), "stats": {"n": 0}}
+        matrices     = built["matrices"]
+        sig_matrices = built["sig_matrices"]
+        open_matrix  = built.get("open_matrix")
 
     # ── 個股回測過濾:若指定 stock_filter,只保留該股票欄位 ──
-    # 若該股不在 matrix 內,結果為空(由上層判斷顯示提示)
     if stock_filter:
         _sid = str(stock_filter).strip()
-        if _sid in close_matrix.columns:
+        if _sid in matrices['close'].columns:
             for k in list(sig_matrices.keys()):
                 # 保留該股一欄,其他欄位全設 False(等同過濾)
                 _mat = sig_matrices[k]
@@ -815,13 +821,14 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
     # 對每個訊號算交易與摘要(供對照圖)
     all_signals_stats = {}
     for sig_name, sig_mat in sig_matrices.items():
-        trades = compute_signal_returns(_slice_by_date(sig_mat), matrices['close'], hold_days,
-                                        dedup_within_hold=dedup_within_hold)
+        trades = compute_signal_returns(
+            _slice_by_date(sig_mat), matrices['close'], hold_days,
+            dedup_within_hold=dedup_within_hold, open_matrix=open_matrix,
+        )
         all_signals_stats[sig_name] = summarize(trades, hold_days=hold_days)
 
     # 算「選定組合」的交易
     if len(selected_list) == 1 and selected_list[0] in sig_matrices:
-        # 單一訊號:直接用上面已算好的
         combined_mat = _slice_by_date(sig_matrices[selected_list[0]])
     else:
         combined_mat = combine_signals(sig_matrices, selected_list, mode=combine_mode)
@@ -829,8 +836,10 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
             combined_mat = _slice_by_date(combined_mat)
 
     selected_trades = (
-        compute_signal_returns(combined_mat, matrices['close'], hold_days,
-                               dedup_within_hold=dedup_within_hold)
+        compute_signal_returns(
+            combined_mat, matrices['close'], hold_days,
+            dedup_within_hold=dedup_within_hold, open_matrix=open_matrix,
+        )
         if combined_mat is not None else pd.DataFrame()
     )
 

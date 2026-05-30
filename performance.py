@@ -10,63 +10,92 @@ from picks_history import get_picks
 
 # 台股來回交易成本估計(%):手續費買賣各 ~0.1425% + 賣出交易稅 0.3%,約 0.5%
 TRADE_COST_PCT = 0.5
+# 市價單滑價估計(%):以隔日開盤掛市價,實際成交通常略高於開盤報價
+SLIPPAGE_PCT = 0.1
 
 
 # ══════════════════════════════════════════════════════════════════════
-# 載入 close 矩陣(優化:一次讀檔,所有 pick 共用)
+# 載入價格矩陣(優化:一次讀檔,所有 pick 共用)
 # ══════════════════════════════════════════════════════════════════════
-def _load_close_matrix(cache_dir):
-    """讀最新 daily parquet,組成 close pivot table。
+def _load_price_matrices(cache_dir):
+    """讀最新 daily parquet,組成 close + open pivot tables。
 
     Returns:
-        DataFrame index=date(Timestamp), columns=stock_id(str), values=close
+        {"close": DataFrame, "open": DataFrame | None}
+        index=date(Timestamp), columns=stock_id(str)
         失敗回 None
     """
     try:
         files = sorted(cache_dir.glob('daily_*.parquet'))
         if not files:
             return None
-        df = pd.read_parquet(files[-1], columns=['stock_id', 'date', 'close'])
+        try:
+            df = pd.read_parquet(files[-1], columns=['stock_id', 'date', 'close', 'open'])
+        except Exception:
+            df = pd.read_parquet(files[-1], columns=['stock_id', 'date', 'close'])
         if df.empty:
             return None
         df['date'] = pd.to_datetime(df['date'])
         df['stock_id'] = df['stock_id'].astype(str)
-        # 同一 (date, stock_id) 可能有重複(上市/上櫃撞號),取最後一筆
         df = df.drop_duplicates(subset=['date', 'stock_id'], keep='last')
-        return df.pivot(index='date', columns='stock_id', values='close')
+        close = df.pivot(index='date', columns='stock_id', values='close')
+        open_ = (
+            df.pivot(index='date', columns='stock_id', values='open')
+            if 'open' in df.columns else None
+        )
+        return {"close": close, "open": open_}
     except Exception as e:
-        print(f"⚠ 讀取 close 矩陣失敗: {e}")
+        print(f"⚠ 讀取 price 矩陣失敗: {e}")
         return None
 
 
-def _forward_return(close_matrix, sid: str, entry_date, n_days: int):
-    """算「entry_date 後 n_days 個交易日的報酬率(%)」。
+def _forward_return(matrices, sid: str, entry_date, n_days: int):
+    """算「entry_date 訊號日隔日開盤進場、持有 n_days 個交易日的報酬率(%)」。
 
-    若 entry_date 不在矩陣 / 該股不在矩陣 / 後續天數不足,回 None。
+    進場以訊號日(T)的隔日(T+1)開盤 + SLIPPAGE_PCT 滑價為基準,
+    消除「用訊號當日收盤當進場價」的前視偏誤。
+    若無開盤資料則回退為訊號日收盤(舊行為,計算口徑不中斷)。
     """
-    if close_matrix is None or sid not in close_matrix.columns:
+    if matrices is None:
         return None
-    sid_series = close_matrix[sid].dropna()
-    if sid_series.empty:
+    close_matrix = matrices["close"]
+    open_matrix = matrices.get("open")
+
+    if sid not in close_matrix.columns:
+        return None
+    close_s = close_matrix[sid].dropna()
+    if close_s.empty:
         return None
 
-    # 找 entry_date 對應的索引位置(用 searchsorted 找最接近的交易日)
     entry_ts = pd.Timestamp(entry_date)
-    dates = sid_series.index
-    # 取「>= entry_date 的第一個交易日」
-    idx_arr = dates.searchsorted(entry_ts)
-    if idx_arr >= len(dates):
+    dates = close_s.index
+    idx = dates.searchsorted(entry_ts)
+    if idx >= len(dates):
         return None
-    entry_idx = idx_arr
-    target_idx = entry_idx + n_days
-    if target_idx >= len(dates):
-        return None  # 還沒到 N 日後
 
-    entry_close = sid_series.iloc[entry_idx]
-    target_close = sid_series.iloc[target_idx]
-    if entry_close <= 0 or pd.isna(entry_close) or pd.isna(target_close):
+    next_idx = idx + 1          # T+1:隔日
+    target_idx = idx + n_days   # T+n:出場日
+    if next_idx >= len(dates) or target_idx >= len(dates):
         return None
-    return (target_close - entry_close) / entry_close * 100
+
+    target_close = close_s.iloc[target_idx]
+    if pd.isna(target_close):
+        return None
+
+    # 取隔日開盤;無資料時回退為訊號日收盤
+    entry_open = float('nan')
+    if open_matrix is not None and sid in open_matrix.columns:
+        next_date = dates[next_idx]
+        if next_date in open_matrix.index:
+            entry_open = open_matrix.loc[next_date, sid]
+
+    if pd.isna(entry_open) or entry_open <= 0:
+        entry_open = close_s.iloc[idx]   # fallback: T close
+
+    actual_entry = entry_open * (1 + SLIPPAGE_PCT / 100)
+    if actual_entry <= 0 or pd.isna(actual_entry):
+        return None
+    return (target_close - actual_entry) / actual_entry * 100
 
 
 def _risk_metrics(returns_in_date_order: list, hold_days: int) -> dict:
@@ -137,9 +166,10 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
         }
         資料不足回 {"samples": [], "overall": {}, "by_score": {}}
     """
-    close_matrix = _load_close_matrix(cache_dir)
-    if close_matrix is None:
+    matrices = _load_price_matrices(cache_dir)
+    if matrices is None:
         return {"samples": [], "overall": {}, "by_score": {}, "error": "無法讀取 daily 快取"}
+    close_matrix = matrices["close"]
 
     samples = []
     for entry in history:
@@ -156,7 +186,7 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
                 continue
             row = {"date": entry["date"], "sid": sid, "score": score}
             for n in n_days_list:
-                row[f"return_{n}d"] = _forward_return(close_matrix, sid, entry_date, n)
+                row[f"return_{n}d"] = _forward_return(matrices, sid, entry_date, n)
             samples.append(row)
 
     # ── 整體統計 ──
@@ -262,9 +292,10 @@ def backtest_market_filter(history: list, cache_dir, hold_days: int = 5, ma_days
         }
         資料不足回 {"error": "..."}。
     """
-    close_matrix = _load_close_matrix(cache_dir)
-    if close_matrix is None:
+    matrices = _load_price_matrices(cache_dir)
+    if matrices is None:
         return {"error": "無法讀取 daily 快取"}
+    close_matrix = matrices["close"]
     twii = _load_twii_regime(cache_dir, ma_days)
     if twii is None:
         return {"error": f"找不到 ^TWII 或資料不足 {ma_days} 日,無法判斷大盤狀態"}
@@ -304,7 +335,7 @@ def backtest_market_filter(history: list, cache_dir, hold_days: int = 5, ma_days
             sid = str(pick.get("sid", ""))
             if not sid:
                 continue
-            ret = _forward_return(close_matrix, sid, entry_ts, hold_days)
+            ret = _forward_return(matrices, sid, entry_ts, hold_days)
             if ret is None:
                 continue
             recs.append({"ret": ret, "bullish": bullish, "temp": temp})
@@ -345,12 +376,19 @@ def backtest_market_filter(history: list, cache_dir, hold_days: int = 5, ma_days
     }
 
 
-def _price_path(close_matrix, sid: str, entry_date, max_hold: int):
+def _price_path(matrices, sid: str, entry_date, max_hold: int):
     """進場後每日報酬路徑 [r_day1, ..., r_dayMax](%)。
 
+    進場以訊號日(T)隔日(T+1)開盤 + SLIPPAGE_PCT 滑價估算;
+    路徑 r_dayk = (close[T+k] - actual_entry) / actual_entry。
     需要完整 max_hold 個交易日(不足回 None),確保各出場策略評估同一批 pick。
     """
-    if close_matrix is None or sid not in close_matrix.columns:
+    if matrices is None:
+        return None
+    close_matrix = matrices["close"]
+    open_matrix = matrices.get("open")
+
+    if sid not in close_matrix.columns:
         return None
     s = close_matrix[sid].dropna()
     if s.empty:
@@ -359,15 +397,26 @@ def _price_path(close_matrix, sid: str, entry_date, max_hold: int):
     idx = dates.searchsorted(pd.Timestamp(entry_date))
     if idx >= len(dates) or idx + max_hold >= len(dates):
         return None
-    entry_close = s.iloc[idx]
-    if pd.isna(entry_close) or entry_close <= 0:
+
+    # 取隔日開盤作為進場價;無資料時回退為當日收盤
+    entry_open = float('nan')
+    if open_matrix is not None and sid in open_matrix.columns and idx + 1 < len(dates):
+        next_date = dates[idx + 1]
+        if next_date in open_matrix.index:
+            entry_open = open_matrix.loc[next_date, sid]
+    if pd.isna(entry_open) or entry_open <= 0:
+        entry_open = s.iloc[idx]   # fallback: T close
+
+    actual_entry = entry_open * (1 + SLIPPAGE_PCT / 100)
+    if pd.isna(actual_entry) or actual_entry <= 0:
         return None
+
     rets = []
     for k in range(1, max_hold + 1):
         c = s.iloc[idx + k]
         if pd.isna(c):
             return None
-        rets.append((c - entry_close) / entry_close * 100)
+        rets.append((c - actual_entry) / actual_entry * 100)
     return rets
 
 
@@ -381,8 +430,8 @@ def backtest_exit_rules(history: list, cache_dir, max_hold: int = 10) -> dict:
         {"max_hold","n","strategies":[{name,win_rate,avg,net_exp,avg_days,worst,daily}, ...]}
         資料不足回 {"error": ...}。
     """
-    close_matrix = _load_close_matrix(cache_dir)
-    if close_matrix is None:
+    matrices = _load_price_matrices(cache_dir)
+    if matrices is None:
         return {"error": "無法讀取 daily 快取"}
 
     paths = []
@@ -397,7 +446,7 @@ def backtest_exit_rules(history: list, cache_dir, max_hold: int = 10) -> dict:
             sid = str(pick.get("sid", ""))
             if not sid:
                 continue
-            p = _price_path(close_matrix, sid, entry_ts, max_hold)
+            p = _price_path(matrices, sid, entry_ts, max_hold)
             if p:
                 paths.append(p)
 
@@ -483,9 +532,10 @@ def attribute_signals(history: list, cache_dir, hold_days: int = 5) -> dict:
         }
         無法讀快取回 {"error": ...};尚無 sig 樣本回 {"n_eval":0,...} 供 UI 顯示累積中。
     """
-    close_matrix = _load_close_matrix(cache_dir)
-    if close_matrix is None:
+    matrices = _load_price_matrices(cache_dir)
+    if matrices is None:
         return {"error": "無法讀取 daily 快取"}
+    close_matrix = matrices["close"]
 
     recs = []          # (sig_dict, ret)
     n_with_sig = 0     # 有 sig 欄位的 pick 數(不論是否滿持有期)
@@ -504,7 +554,7 @@ def attribute_signals(history: list, cache_dir, hold_days: int = 5) -> dict:
             if not isinstance(sig, dict):
                 continue
             n_with_sig += 1
-            ret = _forward_return(close_matrix, sid, entry_ts, hold_days)
+            ret = _forward_return(matrices, sid, entry_ts, hold_days)
             if ret is None:
                 continue
             recs.append((sig, ret))
@@ -558,9 +608,10 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
     """
     from pathlib import Path
 
-    close_matrix = _load_close_matrix(cache_dir)
-    if close_matrix is None:
+    matrices = _load_price_matrices(cache_dir)
+    if matrices is None:
         return None
+    close_matrix = matrices["close"]
 
     # 讀 ^TWII close(優先用 fetch_cache 落地的 parquet)
     twii_close = None
@@ -591,7 +642,7 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
         for pick in picks:
             sid = str(pick.get("sid", ""))
             if sid:
-                ret = _forward_return(close_matrix, sid, entry_date, hold_days)
+                ret = _forward_return(matrices, sid, entry_date, hold_days)
                 if ret is not None:
                     valid_returns.append(ret)
         if not valid_returns:

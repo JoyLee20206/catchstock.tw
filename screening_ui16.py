@@ -1457,7 +1457,10 @@ with _tab_trend:
 
 with _tab_perf:
     if _hist_days >= 5:  # 至少有 5 天歷史才有意義
-        st.caption("回答「我這套系統真的有用嗎?」— 對每筆歷史選股,從 daily 快取算出後續 N 日報酬。")
+        st.caption(
+            "回答「我這套系統真的有用嗎?」— 對每筆歷史選股,從 daily 快取算出後續 N 日報酬。"
+            "  \n⚙️ **進場假設:訊號日隔日開盤 + 0.1% 滑價**(去除前視偏誤);出場:持有 N 日後收盤;交易成本 0.5%。"
+        )
 
         # ── 📖 指標判讀小抄(預設收合,點開對照) ──
         with st.expander("📖 指標怎麼看?(判讀門檻小抄)", expanded=False):
@@ -2163,6 +2166,7 @@ with _tab_bt:
     st.caption(
         "用**過去的歷史資料**驗證「某個買進條件,照著做到底會不會賺」。"
         "下面可勾一個或多個條件做組合測試。"
+        "  \n⚙️ **進場假設:訊號日隔日開盤 + 0.1% 滑價**(去除前視偏誤);出場:持有 N 日後收盤。"
     )
 
     # ── 📖 使用說明 / FAQ(摺疊,整頁全寬;放在選擇訊號上方)──
@@ -2614,7 +2618,7 @@ with _tab_bt:
             display_df = trades.head(top_n_bt).copy()
             display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
             display_df['名稱'] = display_df['stock_id'].map(ui_name_map).fillna('')
-            display_df['進場'] = display_df['entry_close'].apply(lambda x: f"{x:,.1f}")
+            display_df['進場'] = display_df['entry_price'].apply(lambda x: f"{x:,.1f}")
             display_df['出場'] = display_df['exit_close'].apply(lambda x: f"{x:,.1f}")
             # 台股紅漲綠跌的著色用 emoji 代替(streamlit dataframe 著色需 styler 較重)
             display_df['報酬'] = display_df['return_pct'].apply(
