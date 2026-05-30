@@ -120,6 +120,12 @@ VERDICT_STYLE = {
 BIAS_MA20_HOT = 12.0   # 股價高於 MA20 超過此 % → 短中期延伸過大
 BIAS_MA60_HOT = 20.0   # 股價高於季線 MA60 超過此 % → 中期追高風險
 
+# 🎯 籌碼抄底雷達:選股結果表標記「今天同時觸發這幾個訊號」的股(④ 實證固化的組合)。
+# 取 backtest 的 detect 訊號矩陣最新一列做 AND。資減券增 + 大戶逆勢增持 是實證裡
+# 唯一「樣本夠(78 筆)+ 平均正(+3.95%)+ 夏普>1」的籌碼底部組合(優於加 KD背離的稀有 6 筆組合)。
+# 要調整這組合(④ 重新驗證後)只改這一行即可;UI 文字會引用此清單長度。
+DIP_COMBO_SIGNALS = ["margin_squeeze", "chip_accumulation"]
+
 
 def render_verdict_pill(verdict: str, reason: str = "") -> None:
     """渲染進場節奏 pill(用 markdown HTML)。
@@ -2487,6 +2493,41 @@ def _build_signal_matrices_cached(cache_date_str: str):
     return build_signal_matrices(CACHE_DIR)
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _load_dip_radar(cache_key: str, lookback: int = 6):
+    """🎯 籌碼抄底雷達:回傳 (命中代號 set, 依據日期字串)。
+
+    重用 _build_signal_matrices_cached(同一份 cache key,跟訊號回測分頁共用,已建過就秒切),
+    取每個訊號矩陣「最近一個資料到齊的交易日」做 AND 交集。
+
+    為何不直接用 iloc[-1]:融資融券(margin_squeeze)資料常比股價**慢一個交易日** → 最後一列會
+    全 False(資料未到),直接取最後一列會讓雷達永遠空。故由最新往回找第一個「每個 combo 訊號該列
+    都至少 1 檔觸發」的日期(= margin 資料到齊的最近日),在那天交集。lookback 限制最多回看幾天,
+    避免資料真的長期缺漏時抓到太舊日期。缺資料/結構不符 → 回 (set(), '')。"""
+    try:
+        pre = _build_signal_matrices_cached(cache_key)
+        if not pre or not isinstance(pre.get("sig_matrices"), dict):
+            return set(), ""
+        sig = pre["sig_matrices"]
+        if not all(k in sig for k in DIP_COMBO_SIGNALS):
+            return set(), ""
+        mats = [sig[k] for k in DIP_COMBO_SIGNALS]
+        if any(m is None or m.empty for m in mats):
+            return set(), ""
+        idx = mats[0].index
+        for off in range(1, min(lookback, len(idx)) + 1):
+            rows = [m.iloc[-off] for m in mats]
+            if all(r.astype(bool).any() for r in rows):     # 該日每個訊號都有資料(≥1 觸發)
+                hit = None
+                for r in rows:
+                    s = set(r[r.astype(bool)].index.astype(str))
+                    hit = s if hit is None else (hit & s)
+                return (hit or set()), str(idx[-off].date())
+        return set(), ""
+    except Exception:
+        return set(), ""
+
+
 @st.cache_data(ttl=900, show_spinner="計算交易報酬中…")
 def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
                          combine_mode: str, dedup: bool, stock_filter: str = ""):
@@ -3763,6 +3804,27 @@ with col_list:
                     help=f"乖離 MA20 > {BIAS_MA20_HOT:.0f}% 或 季線 > {BIAS_MA60_HOT:.0f}% 標 🟡;勾選後從清單與複製碼移除",
                 ):
                     filtered = filtered[filtered['過熱'] != '🟡']
+
+        # 🎯 籌碼抄底雷達(④ 實證固化:資減券增 + 大戶逆勢增持)。預設關閉 → 不啟用就不付建矩陣的 ~5 秒。
+        # 勾選才計算(且重用訊號回測分頁的同一份 cache),標出今天同時觸發兩個籌碼底部訊號的標的。
+        if st.checkbox(
+            "🎯 標記籌碼抄底雷達(資減券增＋大戶逆勢增持)",
+            value=False, key="_dip_on",
+            help="標出今天同時觸發「資減券增(軋空力道)」與「大戶逆勢增持(低檔吃貨)」兩個籌碼底部訊號的股。\n"
+                 "④回測:78 筆、勝率 46%、平均 +3.95%、夏普 1.35(全多頭資料、中位數偏負)→ 當『觀察名單』,"
+                 "別當閉眼買;進場等帶量確認、嚴設停損。第一次勾選需建訊號矩陣約 5 秒。",
+        ):
+            _radar_key = f"{_cache_date.strftime('%Y-%m-%d') if _cache_date is not None else 'no_data'}|v3-tierR"
+            _dip_set, _dip_date = _load_dip_radar(_radar_key)
+            if not filtered.empty:
+                filtered['抄底雷達'] = filtered['代號'].astype(str).map(lambda c: '🎯' if c in _dip_set else '')
+                _n_dip = int((filtered['抄底雷達'] == '🎯').sum())
+                _dstr = f"(依 {_dip_date} 融資券資料)" if _dip_date else "(暫無資料)"
+                st.caption(f"🎯 全市場命中 **{len(_dip_set)}** 檔{_dstr};其中落在目前清單 **{_n_dip}** 檔"
+                           + ("" if _n_dip else " —(清單內沒命中屬正常:此組合很挑,常整天 0~數檔)"))
+                if _n_dip and st.checkbox("　↳ 只看雷達命中股", value=False, key="_only_dip"):
+                    filtered = filtered[filtered['抄底雷達'] == '🎯']
+
         filtered = filtered.reset_index(drop=True)
         event = st.dataframe(filtered, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
