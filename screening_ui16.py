@@ -1021,6 +1021,31 @@ def _load_stock_futures_map():
     except Exception:
         return {}
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_etf_futures_map():
+    """讀 ETF 期貨快取 → {code: {"name", "specs": {mult: {"init_amt","maint_amt"}}}}。
+    ETF 期貨保證金為**固定金額(元/口)**(非比例),標準乘數 10,000、小型 1,000。
+    無快取回 {}(UI 優雅降級)。"""
+    try:
+        files = sorted(CACHE_DIR.glob("etf_futures_*.parquet"))
+        if not files:
+            return {}
+        df = pd.read_parquet(files[-1])
+        out = {}
+        for _, r in df.iterrows():
+            code = str(r["stock_id"])
+            m = int(r.get("multiplier", 10000) or 10000)
+            if code not in out:
+                # 去掉名稱裡的「小型」前綴讓顯示乾淨;保留一個代表名
+                out[code] = {"name": str(r.get("name", "")).replace("小型", "").strip(), "specs": {}}
+            out[code]["specs"][m] = {
+                "init_amt":  int(r["init_amt"]) if pd.notna(r.get("init_amt")) else None,
+                "maint_amt": int(r["maint_amt"]) if pd.notna(r.get("maint_amt")) else None,
+            }
+        return out
+    except Exception:
+        return {}
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_latest_close_map():
     """從 daily 快取建 {stock_id: 最新收盤},給保證金頁自動帶價。"""
@@ -1059,7 +1084,8 @@ with _tab_margin:
         "算期貨的**保證金、槓桿、對應現股/指數本金**,評估「用期貨槓桿操作」要準備多少錢、槓桿多大。"
         "資料來自期交所(TAIFEX)。"
     )
-    _fmode = st.radio("類型", ["個股期貨", "台指期(大/小/微台)"], horizontal=True, key="_margin_mode")
+    _fmode = st.radio("類型", ["個股期貨", "ETF 期貨", "台指期(大/小/微台)"],
+                      horizontal=True, key="_margin_mode")
 
     if _fmode == "個股期貨":
         _sf_map = _load_stock_futures_map()
@@ -1072,8 +1098,12 @@ with _tab_margin:
             _mgn_date = (_mgn_files[-1].stem.replace("stock_margin_", "") if _mgn_files else None)
             _date_note = (f"保證金比例資料日期 **{_mgn_date}**" if _mgn_date
                           else "⚠️ 尚無官方保證金比例快取(暫用預設 13.5%)")
+            # 契約數 = 各股的契約規格(標準/小型)加總;與官網「以契約計」的列數對齊
+            _n_contracts = sum(len(v.get("mults") or [1]) for v in _sf_map.values())
             st.caption(
-                f"目前共 **{len(_sf_map)} 檔**有個股期貨可交易。{_date_note}。"
+                f"目前共 **{len(_sf_map)} 檔股票**有個股期貨可交易"
+                f"(含標準/小型契約共 **{_n_contracts}** 個;官網以**契約**計,故列數會比檔數多——"
+                f"同一檔的標準型與小型契約在官網分開列,在這裡是進去後的「契約規格」選項)。{_date_note}。"
                 f"　🔗 [上 TAIFEX 官網核對最新保證金](https://www.taifex.com.tw/cht/5/stockMarginingDetail)"
                 f"(比例每週更新一次,連假前/大波動後若有調整,以官網為準)。"
             )
@@ -1187,6 +1217,93 @@ with _tab_margin:
                                 "保證金比例依個股風險分級,期交所定期調整,"
                                 "請以 [TAIFEX 官網](https://www.taifex.com.tw/cht/5/stockMarginingDetail)/你的券商公告為準。"
                             )
+
+    elif _fmode == "ETF 期貨":
+        # ── ETF 期貨:保證金為期交所公告「固定金額(元/口)」,非比例;契約值用 ETF 價格 × 乘數 ──
+        _etf_map = _load_etf_futures_map()
+        if not _etf_map:
+            st.info("尚無 ETF 期貨快取——需跑過新版 `fetch_cache.py` 一次才有(部署後跑一次即可)。")
+        else:
+            _close_map = _load_latest_close_map()
+            _efiles = sorted(CACHE_DIR.glob("etf_futures_*.parquet"))
+            _edate = _efiles[-1].stem.replace("etf_futures_", "") if _efiles else None
+            st.caption(
+                f"目前共 **{len(_etf_map)} 檔 ETF** 有期貨可交易"
+                f"(ETF 期貨保證金是 **TAIFEX 公告固定金額(元/口)**,不是比例%)。"
+                + (f"資料日期 **{_edate}**。" if _edate else "")
+                + "　🔗 [上 TAIFEX 官網核對最新保證金](https://www.taifex.com.tw/cht/5/stockMarginingDetail)"
+                  "(每週更新一次,以官網為準)。"
+            )
+            _ec1, _ec2 = st.columns([2, 1])
+            _eq = _ec1.text_input("ETF 代號 / 名稱", value="", placeholder="例 0050 或 台灣50",
+                                  key="_etf_q",
+                                  help="可輸入代號(例 0050)或名稱關鍵字(例 台灣50);名稱比對僅限有 ETF 期貨的標的").strip()
+            _elots = _ec2.number_input("口數", min_value=1, max_value=1000, value=1, step=1, key="_etf_lots")
+            # 解析:純代號(00 開頭)直接用;否則名稱關鍵字模糊比對
+            _ecode = ""
+            if _eq:
+                if _eq in _etf_map:
+                    _ecode = _eq
+                elif _eq.startswith("00"):
+                    _ecode = _eq
+                else:
+                    _ms = [(c, v["name"]) for c, v in _etf_map.items() if _eq in str(v["name"])]
+                    if len(_ms) == 1:
+                        _ecode = _ms[0][0]
+                    elif len(_ms) > 1:
+                        _opts = [f"{c} {n}" for c, n in _ms[:30]]
+                        _pk = _ec1.selectbox(f"找到 {len(_ms)} 檔含「{_eq}」,請選擇", _opts, key="_etf_pick")
+                        _ecode = _pk.split()[0] if _pk else ""
+                    else:
+                        st.warning(f"⚠️ ETF 期貨中找不到名稱含「{_eq}」的標的。請改輸入代號。")
+            if _ecode:
+                if _ecode not in _etf_map:
+                    st.warning(f"⚠️ **{_ecode} 沒有 ETF 期貨**(不在 TAIFEX 清單)。")
+                else:
+                    _einfo  = _etf_map[_ecode]
+                    _enm    = _einfo["name"]
+                    _especs = _einfo["specs"]              # {mult: {init_amt, maint_amt}}
+                    _emults = sorted(_especs.keys())
+                    _auto   = _close_map.get(_ecode)
+                    _p1, _p2, _p3 = st.columns(3)
+                    _eprice = _p1.number_input(
+                        "ETF 價格(≈市價)", min_value=0.0,
+                        value=round(_auto, 2) if _auto else 0.0, step=0.01,
+                        key=f"_etf_price_{_ecode}",
+                        help="預設帶入最新收盤(若快取有),可自行改成你的進場價")
+                    if len(_emults) > 1:
+                        _lbl = {m: (f"小型 {m:,} 股" if m == 1000 else f"標準 {m:,} 股") for m in _emults}
+                        _emult = int(_p2.radio("契約規格", _emults, format_func=lambda m: _lbl[m],
+                                               key=f"_etf_spec_{_ecode}",
+                                               help="此 ETF 同時有標準型與小型契約,選一個試算"))
+                    else:
+                        _emult = int(_emults[0])
+                        _p2.metric("契約乘數(股/口)", f"{_emult:,}")
+                    _einit_amt  = _especs[_emult]["init_amt"]
+                    _emaint_amt = _especs[_emult]["maint_amt"]
+                    _p3.metric("原始保證金(元/口)", f"{_einit_amt:,}" if _einit_amt else "—",
+                               help="TAIFEX 公告固定金額;ETF 期貨用金額計、非比例")
+                    if _eprice > 0 and _einit_amt:
+                        _ecv    = _eprice * _emult * _elots
+                        _einit  = _einit_amt * _elots
+                        _emaint = (_emaint_amt * _elots) if _emaint_amt else None
+                        _elev   = _ecv / _einit if _einit > 0 else 0
+                        st.divider()
+                        st.markdown(f"#### {_ecode} {_enm}　{_elots} 口 × {_emult:,} 股 @ {_eprice:,.2f}")
+                        _r = st.columns(4)
+                        _r[0].metric("契約總值", f"{_ecv:,.0f}", help="= ETF 價格 × 乘數 × 口數(元)")
+                        _r[1].metric("原始保證金", f"{_einit:,.0f}", help="進場需準備(公告固定金額 × 口數)")
+                        _r[2].metric("維持保證金", f"{_emaint:,.0f}" if _emaint else "—",
+                                     help="低於此值會被追繳")
+                        _r[3].metric("槓桿倍數", f"{_elev:.1f} 倍", help="= 契約總值 ÷ 原始保證金")
+                        st.caption(
+                            f"💡 用 ETF 期貨只需 **{_einit:,.0f} 元**保證金,就能操作 **{_ecv:,.0f} 元**的部位。"
+                            f"槓桿 **{_elev:.1f} 倍**會同步放大損益,跌破維持保證金會被**追繳**。"
+                        )
+                        st.caption(
+                            "✅ ETF 期貨保證金為 **TAIFEX 公告固定金額(元/口)**(非比例),每週更新;"
+                            "[查官網最新](https://www.taifex.com.tw/cht/5/stockMarginingDetail)。"
+                        )
 
     else:
         # ── 台指期(大/小/微台):保證金為期交所公告固定金額,契約值用加權指數 ──

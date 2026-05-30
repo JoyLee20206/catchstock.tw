@@ -1408,6 +1408,8 @@ def fetch_taifex_stock_futures():
             sid = str(r[c_id]).strip()
             if not (sid.isdigit() and len(sid) == 4):
                 continue
+            if sid.startswith("00"):         # 00 開頭 = ETF(0050/0052/0056),走 etf_futures 專屬處理,別混進個股
+                continue
             if "●" not in str(r[c_stf]):     # 只留「是股票期貨標的」
                 continue
             try:
@@ -1487,8 +1489,10 @@ def fetch_taifex_stock_margin():
             sid = str(r[c_id]).strip()
             if not (sid.isdigit() and len(sid) == 4):
                 continue
+            if sid.startswith("00"):         # ETF(0050/0052/0056)用固定金額,不是比例 → 由 etf_futures 處理
+                continue
             init_rate = _pct(r[c_init])
-            # 保證金比例必為 1~100%;超出範圍 = 欄位錯位的雜訊(曾見 71000),跳過
+            # 保證金比例必為 1~100%;超出範圍 = 欄位錯位的雜訊,跳過
             if init_rate is None or not (1.0 <= init_rate <= 100.0):
                 continue
             maint_rate = _pct(r[c_maint]) if c_maint else None
@@ -1513,6 +1517,74 @@ def fetch_taifex_stock_margin():
 
 
 fetch_taifex_stock_margin()
+
+
+# ==========================================
+# [4d-3] ETF 期貨(代號 + 乘數 + 固定保證金金額,給 UI「ETF 期貨」模式)
+# ==========================================
+# 來源:同一份 TAIFEX 保證金 CSV(stockMarginingDown)。ETF 期貨(代號 00 開頭)與個股期貨不同:
+# 保證金是「固定金額(元/口)」而非比例%,且 CSV 該段少了「級距」欄會使欄位左移
+# → 不靠欄位位置,改用「該列的金額(>1000):最大=原始、次大=維持」穩健解析。
+# 乘數:標準型 10,000、小型(名稱含「小型」)1,000。寫成 etf_futures_*.parquet。週更、隔離請求、失敗墊舊檔。
+def fetch_taifex_etf_futures():
+    if not need_fetch("etf_futures"):
+        print("[etf_futures] ETF 期貨已有今日快取,略過"); return
+    if _should_skip_weekly("etf_futures"):
+        print("[etf_futures] 非更新時機,略過(固定每週六更新)"); return
+    print("[etf_futures] 抓取 TAIFEX ETF 期貨清單 + 固定保證金...")
+    try:
+        headers = random.choice(HTTP_HEADERS_POOL).copy()
+        resp = SESSION.get("https://www.taifex.com.tw/cht/5/stockMarginingDown",
+                           headers=headers, timeout=25, verify=False)
+        if resp.status_code != 200:
+            raise ValueError(f"HTTP {resp.status_code}")
+        lines = resp.content.decode("cp950", errors="replace").splitlines()
+        hdr_idx = next((i for i, l in enumerate(lines) if "原始保證金適用比例" in l), None)
+        if hdr_idx is None:
+            raise ValueError("找不到欄位標頭(TAIFEX 可能改版)")
+
+        rows = []
+        for l in lines[hdr_idx + 1:]:
+            parts = [p.strip() for p in l.split(",")]
+            if len(parts) < 6:
+                continue
+            code = parts[2].strip()
+            if not code.startswith("00"):     # 只要 ETF(00 開頭;含 00679B 這類債券 ETF)
+                continue
+            name = parts[3].strip()
+            # 收集該列所有「金額」(>1000;比例%會 <100 被排除),最大=原始、次大=維持
+            amts = []
+            for p in parts[5:]:
+                try:
+                    v = float(p.replace("%", "").replace(",", "").strip())
+                    if v > 1000:
+                        amts.append(v)
+                except (ValueError, TypeError):
+                    continue
+            amts.sort(reverse=True)
+            if len(amts) < 2:
+                continue
+            mult = 1000 if "小型" in name else 10000   # 小型 1,000 股/口;標準 10,000
+            rows.append({
+                "stock_id":   code,
+                "name":       name,
+                "multiplier": mult,
+                "init_amt":   int(amts[0]),   # 原始保證金(元/口)
+                "maint_amt":  int(amts[1]),   # 維持保證金(元/口)
+            })
+        if not rows:
+            raise ValueError("無有效 ETF 期貨")
+        out = pd.DataFrame(rows).drop_duplicates(subset=["stock_id", "multiplier"], keep="last").reset_index(drop=True)
+        out.to_parquet(path_for("etf_futures"))
+        _n_small = int((out["multiplier"] == 1000).sum())
+        print(f"   -> ETF 期貨快取完成 ({out['stock_id'].nunique()} 檔 / {len(out)} 契約,含小型 {_n_small})")
+        cleanup_old_cache("etf_futures")
+    except Exception as e:
+        print(f"   !!! ETF 期貨抓取失敗: {e}")
+        _fallback_prev_to_today("etf_futures")
+
+
+fetch_taifex_etf_futures()
 
 
 # ==========================================
