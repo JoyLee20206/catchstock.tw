@@ -318,9 +318,15 @@ st.set_page_config(page_title="台股選股", page_icon="📊", layout="wide")
 st.markdown("""
 <style>
 .block-container, [data-testid="stMainBlockContainer"], [data-testid="stAppViewBlockContainer"] {
-    padding-top: 1.8rem !important;
+    padding-top: 2.8rem !important;   /* 比預設(~6rem)緊,但仍清開頂部工具列、不蓋標題 */
 }
-[data-testid="stMainBlockContainer"] h1 { margin-top: 0 !important; padding-top: 0 !important; }
+/* 標題字體縮小,首頁更精簡、不佔高 */
+h1, [data-testid="stMainBlockContainer"] h1 {
+    font-size: 2rem !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0.2rem !important;
+}
 hr { margin: 0.6rem 0 !important; }
 </style>
 """, unsafe_allow_html=True)
