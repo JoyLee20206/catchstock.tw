@@ -1400,6 +1400,7 @@ def fetch_taifex_stock_futures():
         c_name = find("簡稱")
         c_stf  = find("股票期貨", "標的", exclude=("商品",))   # 「是否為股票期貨標的」欄
         c_mult = find("標準型") or find("股數")
+        c_code = find("商品代碼")                              # 期貨/選擇權商品代碼前綴(2碼,如 CD/QF)
         if c_id is None or c_stf is None:
             raise ValueError("欄位對應失敗(TAIFEX 可能改版)")
 
@@ -1416,9 +1417,13 @@ def fetch_taifex_stock_futures():
                 mult = int(float(str(r[c_mult]).replace(",", ""))) if c_mult is not None else 2000
             except (ValueError, TypeError):
                 mult = 2000
+            # 期貨英文代碼 = 2碼前綴 + "F"(TAIFEX 慣例:期貨尾 F、選擇權尾 O);stockLists 每列即一個契約
+            _pref = str(r[c_code]).strip() if c_code is not None else ""
+            eng_code = (_pref + "F") if _pref and _pref.lower() != "nan" else ""
             rows.append({"stock_id": sid,
                          "name": str(r[c_name]).strip() if c_name else "",
-                         "multiplier": mult})
+                         "multiplier": mult,
+                         "eng_code": eng_code})
         if not rows:
             raise ValueError("無有效個股期貨標的")
         # 同一檔可能同時有標準型(2000)與小型(100)契約 → 保留 (代號, 乘數) 兩列,
@@ -1491,6 +1496,9 @@ def fetch_taifex_stock_margin():
                 continue
             if sid.startswith("00"):         # ETF(0050/0052/0056)用固定金額,不是比例 → 由 etf_futures 處理
                 continue
+            _nm = str(r[c_name]).strip() if c_name else ""
+            if "選擇權" in _nm:               # 排除選擇權(與期貨同標的會撞 stock_id,保證金算法不同)
+                continue
             init_rate = _pct(r[c_init])
             # 保證金比例必為 1~100%;超出範圍 = 欄位錯位的雜訊,跳過
             if init_rate is None or not (1.0 <= init_rate <= 100.0):
@@ -1500,7 +1508,7 @@ def fetch_taifex_stock_margin():
                 maint_rate = None
             rows.append({
                 "stock_id":   sid,
-                "name":       str(r[c_name]).strip() if c_name else "",
+                "name":       _nm,
                 "tier":       str(r[c_tier]).strip() if c_tier else "",
                 "init_rate":  init_rate,
                 "maint_rate": maint_rate,
@@ -1548,10 +1556,13 @@ def fetch_taifex_etf_futures():
             parts = [p.strip() for p in l.split(",")]
             if len(parts) < 6:
                 continue
+            eng_code = parts[1].strip()       # 英文商品代碼(如 NYF/SRF;選擇權尾 O)
             code = parts[2].strip()
             if not code.startswith("00"):     # 只要 ETF(00 開頭;含 00679B 這類債券 ETF)
                 continue
             name = parts[3].strip()
+            if "選擇權" in name:               # 排除 ETF 選擇權(與期貨同標的會撞,保證金算法不同)
+                continue
             # 收集該列所有「金額」(>1000;比例%會 <100 被排除),最大=原始、次大=維持
             amts = []
             for p in parts[5:]:
@@ -1569,6 +1580,7 @@ def fetch_taifex_etf_futures():
                 "stock_id":   code,
                 "name":       name,
                 "multiplier": mult,
+                "eng_code":   eng_code,
                 "init_amt":   int(amts[0]),   # 原始保證金(元/口)
                 "maint_amt":  int(amts[1]),   # 維持保證金(元/口)
             })

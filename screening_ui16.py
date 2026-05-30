@@ -996,10 +996,13 @@ def _load_stock_futures_map():
             sid = str(r["stock_id"])
             m = int(r.get("multiplier", 2000) or 2000)
             if sid not in out:
-                out[sid] = {"name": str(r.get("name", "")), "mults": [],
+                out[sid] = {"name": str(r.get("name", "")), "mults": [], "eng": {},
                             "init_rate": None, "maint_rate": None, "tier": ""}
             if m not in out[sid]["mults"]:
                 out[sid]["mults"].append(m)
+            _ec = str(r.get("eng_code", "") or "").strip()
+            if _ec:
+                out[sid]["eng"][m] = _ec        # 英文期貨代碼,per 契約乘數(標準/小型不同碼)
         for v in out.values():
             v["mults"].sort()
         # merge 官方保證金比例(逐檔原始/維持/級距)
@@ -1041,6 +1044,7 @@ def _load_etf_futures_map():
             out[code]["specs"][m] = {
                 "init_amt":  int(r["init_amt"]) if pd.notna(r.get("init_amt")) else None,
                 "maint_amt": int(r["maint_amt"]) if pd.notna(r.get("maint_amt")) else None,
+                "eng":       str(r.get("eng_code", "") or "").strip(),
             }
         return out
     except Exception:
@@ -1190,8 +1194,10 @@ with _tab_margin:
                         else:
                             _maint_margin = _init_margin * 0.767
                         _leverage     = 100 / _rate_in
+                        _eng = _info.get("eng", {}).get(_mult_in, "")
                         st.divider()
-                        st.markdown(f"#### {_sid_in} {_nm}　{_lots} 口 × {_mult_in:,} 股 @ {_price_in:,.2f}")
+                        _eng_tag = f"（{_eng}）" if _eng else ""
+                        st.markdown(f"#### {_sid_in} {_nm}{_eng_tag}　{_lots} 口 × {_mult_in:,} 股 @ {_price_in:,.2f}")
                         _r = st.columns(4)
                         _r[0].metric("契約總值", f"{_contract_val:,.0f}", help="= 買等量現股要花的錢(元)")
                         _r[1].metric("原始保證金", f"{_init_margin:,.0f}", help="進場需準備的保證金(元)")
@@ -1288,8 +1294,10 @@ with _tab_margin:
                         _einit  = _einit_amt * _elots
                         _emaint = (_emaint_amt * _elots) if _emaint_amt else None
                         _elev   = _ecv / _einit if _einit > 0 else 0
+                        _eeng = _especs[_emult].get("eng", "")
                         st.divider()
-                        st.markdown(f"#### {_ecode} {_enm}　{_elots} 口 × {_emult:,} 股 @ {_eprice:,.2f}")
+                        _eeng_tag = f"（{_eeng}）" if _eeng else ""
+                        st.markdown(f"#### {_ecode} {_enm}{_eeng_tag}　{_elots} 口 × {_emult:,} 股 @ {_eprice:,.2f}")
                         _r = st.columns(4)
                         _r[0].metric("契約總值", f"{_ecv:,.0f}", help="= ETF 價格 × 乘數 × 口數(元)")
                         _r[1].metric("原始保證金", f"{_einit:,.0f}", help="進場需準備(公告固定金額 × 口數)")
