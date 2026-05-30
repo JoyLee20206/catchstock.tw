@@ -1051,10 +1051,30 @@ with _tab_margin:
             _close_map = _load_latest_close_map()
             st.caption(f"目前共 **{len(_sf_map)} 檔**有個股期貨可交易。")
             _mc1, _mc2 = st.columns([2, 1])
-            _sid_in = _mc1.text_input("股票代號", value="", placeholder="例 2330",
-                                      key="_margin_sid").strip()
+            _q_in = _mc1.text_input("股票代號 / 名稱", value="", placeholder="例 2330 或 台積",
+                                    key="_margin_sid",
+                                    help="可輸入代號(例 2330)或名稱關鍵字(例 台積);名稱比對僅限有個股期貨的標的").strip()
             _lots = _mc2.number_input("口數", min_value=1, max_value=1000, value=1, step=1,
                                       key="_margin_lots")
+            # 解析輸入:純代號直接用;否則當名稱關鍵字,在個股期貨清單裡模糊比對
+            _sid_in = ""
+            if _q_in:
+                if _q_in in _sf_map:                      # 完全命中代號
+                    _sid_in = _q_in
+                elif _q_in.isdigit():                     # 純數字但不在清單 → 視為「無個股期貨的代號」
+                    _sid_in = _q_in
+                else:                                     # 名稱關鍵字 → 比對 _sf_map 的 name
+                    _matches = [(s, v["name"]) for s, v in _sf_map.items() if _q_in in str(v["name"])]
+                    if len(_matches) == 1:
+                        _sid_in = _matches[0][0]
+                    elif len(_matches) > 1:
+                        _opts = [f"{s} {n}" for s, n in _matches[:30]]
+                        _pick = _mc1.selectbox(f"找到 {len(_matches)} 檔含「{_q_in}」,請選擇",
+                                               _opts, key="_margin_name_pick")
+                        _sid_in = _pick.split()[0] if _pick else ""
+                    else:
+                        st.warning(f"⚠️ 個股期貨標的中找不到名稱含「{_q_in}」的股票。"
+                                   f"請改輸入代號,或確認該股是否有個股期貨。")
             if _sid_in:
                 if _sid_in not in _sf_map:
                     st.warning(f"⚠️ **{_sid_in} 沒有個股期貨**(不在 TAIFEX 標的清單,無法用期貨交易)。"
@@ -1636,12 +1656,16 @@ with _tab_perf:
                                 f"⚖️ 風險指標(回檔/夏普/波動)以**每入選日平均報酬**計算"
                                 f"(共 {risk_n} 個交易日),已避開「逐筆+重疊窗口」的灌水,"
                                 f"口徑與上方「vs 大盤」走勢圖一致。"
+                                f"　註:持有期越長、可用天數/筆數越少(最近的 pick 還沒滿天數),"
+                                f"故各持有期的「天數」「筆數」本來就會不同。"
                             )
                         else:
                             st.caption(
                                 f"⚠️ 風險指標需 ≥ {RISK_MIN_N} 個入選日才顯示;目前僅 **{risk_n} 天**。"
                                 f"樣本太少時會出現「回檔假性 0% / 夏普被年化灌大」的失真"
                                 f"(尤其全在多頭時),故暫標「樣本不足」,先看勝率/淨期望值/損益比即可。"
+                                f"　註:持有期越長、可用天數/筆數越少(最近的 pick 還沒滿天數),"
+                                f"故各持有期的「天數」「筆數」本來就會不同。"
                             )
 
             # ── 📊 系統 picks vs 大盤 後續報酬對照 ─────────────────────────
