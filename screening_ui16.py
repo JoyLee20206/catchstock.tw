@@ -305,6 +305,7 @@ def _market_summary_from_twii():
         "pct":      (today_close - prev_close) / prev_close * 100,
         "bias":     (today_close - ma60) / ma60 * 100,
         "bullish":  today_close >= ma60,
+        "latest_date": closes.index[-1],   # 最新一筆指數的日期(供延遲偵測)
     }
 
 
@@ -366,10 +367,23 @@ with _status_cols[1]:
         _bull_icon = "📈" if _mkt["bullish"] else "📉"
         _bull_txt  = "多頭" if _mkt["bullish"] else "空頭"
         _pct_color = "#dc2626" if _mkt["pct"] > 0 else ("#16a34a" if _mkt["pct"] < 0 else "#6b7280")
+        # 延遲偵測(B):指數最新日期落後個股 cache 最新日 → 標示「資料延遲」,避免拿落後值誤判
+        _stale_note = ""
+        _twii_date = _mkt.get("latest_date")
+        if _twii_date is not None and _cache_date is not None:
+            try:
+                if pd.Timestamp(_twii_date).normalize() < pd.Timestamp(_cache_date).normalize():
+                    _stale_note = (
+                        f"<br><span style='color:#d97706;font-size:12px'>"
+                        f"⚠️ 指數資料延遲至 {pd.Timestamp(_twii_date).strftime('%m/%d')}(來源更新中)</span>"
+                    )
+            except Exception:
+                pass
         st.markdown(
             f"**{_bull_icon} {_bull_txt}** "
             f"<span style='color:{_pct_color};font-weight:600'>{_mkt['pct']:+.2f}%</span><br>"
-            f"加權指數 {_mkt['close']:,.0f} / 乖離 {_mkt['bias']:+.1f}%",
+            f"加權指數 {_mkt['close']:,.0f} / 乖離 {_mkt['bias']:+.1f}%"
+            f"{_stale_note}",
             unsafe_allow_html=True,
         )
 

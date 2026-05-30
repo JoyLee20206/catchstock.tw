@@ -1062,53 +1062,165 @@ fetch_yfinance_daily(info, d180)
 
 
 # ==========================================
-# [4b] ^TWII 大盤指數(2 年歷史,給 UI K 線圖 RS 線、狀態總覽、大盤情緒用)
+# [4b] 加權指數 TAIEX(2 年歷史,給 UI 狀態總覽 / RS 線 / 季線多空 / 大盤情緒回測用)
 # ==========================================
-# 為什麼要落地:
-#   UI _load_twii_cached 只有 5 分鐘記憶體 cache,Streamlit 重啟/新 session
-#   都會冷打 yfinance(~10-15 秒)。把它寫成 parquet 後,UI 改成 parquet 先讀,
-#   冷啟動從 10 秒降到 < 100ms。
-def fetch_twii_daily():
-    if not need_fetch("twii"):
-        print("[twii] ^TWII 已有今日快取,略過"); return
-    print("[twii] 抓取 ^TWII 2 年歷史 K 線...")
+# 主來源改為「證交所官方」:yfinance 的 ^TWII 對台股常延遲一天、且數值與官方收盤
+#   有出入(盤中值殘留)。改抓 TWSE 官方發行量加權股價指數歷史,數字與 Yahoo 奇摩一致、
+#   當日盤後即齊。yfinance 保留為 fallback,官方端點失效時自動退回(零退步)。
+# 寫成 parquet 後,UI 改 parquet 先讀,冷啟動 < 100ms。
+TWII_BACKFILL_MONTHS = 25   # 首次切換官方源時回補的月數(約 2 年)
+
+
+def _roc_date_to_iso(s):
+    """民國日期字串 '115/05/29' → '2026-05-29'。失敗回 None。"""
+    parts = str(s).strip().split("/")
+    if len(parts) != 3:
+        return None
+    try:
+        return f"{int(parts[0]) + 1911:04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+    except (ValueError, TypeError):
+        return None
+
+
+def _fetch_twse_taiex_month(yyyymmdd):
+    """抓 TWSE 官方加權指數某月的日 OHLC,回 DataFrame[date,Open,High,Low,Close]。
+    端點一次回傳該 date 所屬「整個月」。失敗 / 改版回空 DataFrame。"""
+    url = "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST"
+    resp = session_get(url, params={"date": yyyymmdd, "response": "json"}, timeout=20)
+    if resp is None:
+        return pd.DataFrame()
+    try:
+        data = resp.json()
+    except ValueError:
+        return pd.DataFrame()
+    if str(data.get("stat", "")).upper() != "OK":
+        return pd.DataFrame()
+    fields, rows = data.get("fields", []), data.get("data", [])
+    if not fields or not rows:
+        return pd.DataFrame()
+
+    def col_idx(kw):
+        return next((i for i, f in enumerate(fields) if kw in str(f)), None)
+
+    i_d, i_o, i_h, i_l, i_c = (col_idx("日期"), col_idx("開盤"),
+                               col_idx("最高"), col_idx("最低"), col_idx("收盤"))
+    if i_d is None or i_c is None:   # 找不到日期/收盤 → 視為改版,放棄(觸發 fallback)
+        return pd.DataFrame()
+
+    def num(r, i):
+        if i is None or i >= len(r):
+            return None
+        try:
+            return float(str(r[i]).replace(",", "").strip())
+        except (ValueError, TypeError):
+            return None
+
+    recs = []
+    for r in rows:
+        iso = _roc_date_to_iso(r[i_d]) if i_d < len(r) else None
+        c = num(r, i_c)
+        if iso and c is not None:
+            recs.append({"date": iso, "Open": num(r, i_o), "High": num(r, i_h),
+                         "Low": num(r, i_l), "Close": c})
+    return pd.DataFrame(recs)
+
+
+def _twii_yfinance_fallback():
+    """官方源全失敗時的備援:沿用舊的 yfinance ^TWII 2 年下載。"""
+    print("   !!! TWSE 官方抓取失敗,改用 yfinance ^TWII 備援...")
     try:
         data = yf.download("^TWII", period="2y", auto_adjust=True,
                            progress=False, threads=False)
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
         if data.empty:
-            print("   !!! ^TWII 抓取無資料,沿用舊檔(若有)")
-            # 失敗時拿舊檔墊
-            prev_files = sorted(CACHE_DIR.glob("twii_*.parquet"))
-            if prev_files and not path_for("twii").exists():
-                pd.read_parquet(prev_files[-1]).to_parquet(path_for("twii"))
-                cleanup_old_cache("twii")
-            return
+            raise ValueError("yfinance 回傳空")
         if data.index.tz is not None:
             data.index = data.index.tz_localize(None)
-        # 整理欄位:把 index (date) 拉出來變欄位,方便 UI 重讀
         df_twii = data.reset_index()
-        # 標準化日期欄名(yfinance 不同版本可能是 Date / Datetime / index)
         for col in ("Date", "Datetime", "index", "level_0"):
             if col in df_twii.columns:
                 df_twii = df_twii.rename(columns={col: "date"})
                 break
+        df_twii["source"] = "yfinance"
         df_twii.to_parquet(path_for("twii"))
-        print(f"   -> ^TWII 2 年 K 線快取完成 ({len(df_twii)} 筆,"
-              f"{df_twii['date'].min().date()} ~ {df_twii['date'].max().date()})")
+        print(f"   -> [備援] yfinance ^TWII 快取完成 ({len(df_twii)} 筆)")
         cleanup_old_cache("twii")
+        return True
     except Exception as e:
-        print(f"   !!! ^TWII 抓取失敗: {e}")
-        # 失敗時拿舊檔墊
-        prev_files = sorted(CACHE_DIR.glob("twii_*.parquet"))
-        if prev_files and not path_for("twii").exists():
-            try:
-                pd.read_parquet(prev_files[-1]).to_parquet(path_for("twii"))
-                cleanup_old_cache("twii")
-                print("   -> 已用昨日 ^TWII 墊檔")
-            except Exception as e2:
-                print(f"   !!! 連墊檔都失敗: {e2}")
+        print(f"   !!! yfinance 備援也失敗: {e}")
+        return False
+
+
+def fetch_twii_daily():
+    if not need_fetch("twii"):
+        print("[twii] 加權指數已有今日快取,略過"); return
+    print("[twii] 抓取加權指數(TWSE 官方 TAIEX,yfinance 備援)...")
+
+    # 讀既有 parquet:決定增量 vs 回補,並在合併時保留更久的歷史
+    prev = pd.DataFrame()
+    prev_files = sorted(CACHE_DIR.glob("twii_*.parquet"))
+    if prev_files:
+        try:
+            prev = pd.read_parquet(prev_files[-1])
+        except Exception:
+            prev = pd.DataFrame()
+    _has_official = (not prev.empty and "source" in prev.columns
+                     and (prev["source"] == "twse").any())
+
+    # 要抓的月份(用每月任一日當參數,端點會回整月)
+    _now = datetime.now(TPE_TZ)
+    if _has_official:
+        # 已官方回補過 → 只刷新當月 + 上月(捕捉最新與月初校正)
+        months = [_now, (_now.replace(day=1) - timedelta(days=1))]
+    else:
+        # 首次切換 / 舊 yfinance 檔 → 完整回補約 2 年
+        print(f"   首次切換官方源:回補約 {TWII_BACKFILL_MONTHS} 個月(較久,之後每日僅刷新近月)...")
+        months, cur = [], _now.replace(day=1)
+        for _ in range(TWII_BACKFILL_MONTHS):
+            months.append(cur)
+            cur = (cur - timedelta(days=1)).replace(day=1)
+
+    new_frames = []
+    for m in months:
+        dfm = _fetch_twse_taiex_month(m.strftime("%Y%m%d"))
+        if not dfm.empty:
+            new_frames.append(dfm)
+        time.sleep(TWSE_DELAY)
+
+    if not new_frames:
+        # 官方一筆都沒抓到 → 退回 yfinance(維持舊行為,零退步)
+        if not _twii_yfinance_fallback():
+            # 連 yfinance 都失敗 → 拿舊檔墊
+            if prev_files and not path_for("twii").exists():
+                try:
+                    pd.read_parquet(prev_files[-1]).to_parquet(path_for("twii"))
+                    cleanup_old_cache("twii")
+                    print("   -> 已用昨日加權指數墊檔")
+                except Exception as e2:
+                    print(f"   !!! 連墊檔都失敗: {e2}")
+        return
+
+    official = pd.concat(new_frames, ignore_index=True)
+    official["source"] = "twse"
+
+    # 合併既有歷史(官方優先);日期統一成字串再去重,避免 datetime/str 混型無法去重
+    merge_parts = [official]
+    if not prev.empty and "date" in prev.columns:
+        _keep = [c for c in ("date", "Open", "High", "Low", "Close", "source") if c in prev.columns]
+        merge_parts.append(prev[_keep].copy())
+    for part in merge_parts:
+        part["date"] = pd.to_datetime(part["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    combined = (pd.concat(merge_parts, ignore_index=True)
+                  .dropna(subset=["date", "Close"])
+                  .drop_duplicates(subset=["date"], keep="first")   # official 排前面 → 同日保官方
+                  .sort_values("date").reset_index(drop=True))
+    combined["date"] = pd.to_datetime(combined["date"])  # 與舊版一致(UI 會再 to_datetime)
+    combined.to_parquet(path_for("twii"))
+    _n_official = int((combined["source"] == "twse").sum()) if "source" in combined.columns else 0
+    print(f"   -> 加權指數快取完成 ({len(combined)} 筆,官方 {_n_official} 筆,"
+          f"{combined['date'].min().date()} ~ {combined['date'].max().date()})")
+    cleanup_old_cache("twii")
 
 
 fetch_twii_daily()
