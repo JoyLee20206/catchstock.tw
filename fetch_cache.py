@@ -1582,12 +1582,14 @@ def fetch_taifex_etf_futures():
             name = parts[3].strip()
             if "選擇權" in name:               # 排除 ETF 選擇權(與期貨同標的會撞,保證金算法不同)
                 continue
-            # 收集該列所有「金額」(>1000;比例%會 <100 被排除),最大=原始、次大=維持
+            # 收集該列所有「金額」,最大=原始、次大=維持。
+            # ETF 列無百分比欄(級距欄空、其餘為金額),門檻 >100 即可區隔(避免漏掉維持金額較小的小型契約);
+            # 個股的百分比列在此函式前已被 code 不以 00 開頭 / 選擇權過濾掉,不會誤入。
             amts = []
             for p in parts[5:]:
                 try:
                     v = float(p.replace("%", "").replace(",", "").strip())
-                    if v > 1000:
+                    if v > 100:
                         amts.append(v)
                 except (ValueError, TypeError):
                     continue

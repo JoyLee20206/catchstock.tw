@@ -633,7 +633,8 @@ def compute_signal_returns(signal_matrix, close_matrix, hold_days: int,
         use_open = entry_open_next.notna() & (entry_open_next > 0)
         entry_price_mat = entry_open_next.where(use_open, close_matrix) * (1 + SLIPPAGE_PCT / 100)
     else:
-        entry_price_mat = close_matrix
+        # 無開盤資料(舊 daily 無 open 欄)→ 退回當日收盤進場,仍加滑價,與 performance.py 口徑一致
+        entry_price_mat = close_matrix * (1 + SLIPPAGE_PCT / 100)
 
     # 把訊號矩陣 stack 成長表
     sig_long = signal_matrix.stack()
@@ -725,6 +726,14 @@ def build_signal_matrices(cache_dir) -> dict:
     matrices = _load_daily_matrix(cache_dir)
     if matrices is None:
         return None
+
+    # 排除 ETF(代號 00 開頭)欄位:個股訊號回測不含 ETF,且避免 ETF 拉動 momentum_top 的
+    # 跨股分位數 / rs_market 的跨股中位數(兩者對 close 全欄位算)。ETF 價格仍保留在 daily 快取
+    # 供「ETF 期貨」分頁帶價(_load_latest_close_map 另讀),這裡只清訊號掃描用的矩陣。
+    _etf_cols = [c for c in matrices['close'].columns if str(c).startswith("00")]
+    if _etf_cols:
+        matrices = {k: v.drop(columns=[c for c in _etf_cols if c in v.columns])
+                    for k, v in matrices.items() if v is not None}
 
     fi_matrix     = _load_foreign_net_matrix(cache_dir)
     it_matrix     = _load_it_net_matrix(cache_dir)
