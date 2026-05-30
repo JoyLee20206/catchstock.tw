@@ -1878,19 +1878,16 @@ with _tab_bt:
     )
 
     sig_options = list(SIGNAL_LABELS.keys())
-    _sig_col, _faq_col = st.columns(2)
-    with _sig_col:
-        sig_choice_multi = st.multiselect(
-            "選擇訊號(可複選)", sig_options,
-            default=["breakout"],
-            format_func=lambda k: SIGNAL_LABELS[k],
-            key="bt_signals",
-            help="多選時依「合併模式」交集 / 聯集 — 例:選『外資+投信』模式 AND = 兩家同日都買超才算",
-        )
-    # ── 📖 使用說明 / FAQ(摺疊,放右欄與「選擇訊號」同列)──
-    with _faq_col:
-        with st.expander("📖 使用說明 / FAQ", expanded=False):
-            st.markdown("""
+    sig_choice_multi = st.multiselect(
+        "選擇訊號(可複選)", sig_options,
+        default=["breakout"],
+        format_func=lambda k: SIGNAL_LABELS[k],
+        key="bt_signals",
+        help="多選時依「合併模式」交集 / 聯集 — 例:選『外資+投信』模式 AND = 兩家同日都買超才算",
+    )
+    # ── 📖 使用說明 / FAQ(摺疊,整頁全寬較好閱讀)──
+    with st.expander("📖 使用說明 / FAQ", expanded=False):
+        st.markdown("""
 ### 🎯 這頁在做什麼?
 對歷史資料**掃描每個交易日**,標出符合訊號的點當作「進場」,算進場後 N 個交易日的報酬。
 最終回答:**「我選的這些訊號條件,真的能賺錢嗎?」**
@@ -2039,7 +2036,7 @@ with _tab_bt:
 
 ### ⏱ 持有天數敏感度怎麼用
 打開下面那個摺疊區,**同一組訊號**會跑 5/10/20/40 日對比 → 直接看到「**這策略最佳持有期是幾天?**」
-            """)
+        """)
 
     bc1, bc2, bc3 = st.columns(3)
     combine_mode_choice = bc1.radio(
