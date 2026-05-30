@@ -789,6 +789,23 @@ def fetch_yfinance_daily(info_df, default_start_date, chunk_size=400):
         (f"{r.stock_id}.TWO" if str(r.type).lower() in ('tpex', 'otc') else f"{r.stock_id}.TW"): r.stock_id
         for _, r in info_df.iterrows()
     }
+    # 加入「ETF 期貨標的」(0050/0056…)——這些不在個股清單(info)裡,但 ETF 期貨分頁需要每日市價自動帶入。
+    # 安全:選股 universe 由 info 決定(all_ids = info...),daily 只是價格查表來源,多抓 ETF 不會污染選股。
+    # 註:daily 在 etf_futures 之前執行,故首次部署當天 ETF 清單尚未生成 → 隔日(或 --force-daily 重跑)起自動帶價。
+    try:
+        _eff = sorted(CACHE_DIR.glob("etf_futures_*.parquet"))
+        if _eff:
+            _etf_ids = pd.read_parquet(_eff[-1], columns=["stock_id"])["stock_id"].astype(str).unique()
+            _added = 0
+            for _eid in _etf_ids:
+                _tk = f"{_eid}.TW"          # ETF(含債券 ETF)幾乎都是上市 .TW
+                if _tk not in ticker_map:
+                    ticker_map[_tk] = _eid
+                    _added += 1
+            if _added:
+                print(f"   + 併入 {_added} 檔 ETF 期貨標的(供「ETF 期貨」分頁自動帶價)")
+    except Exception as _e:
+        print(f"   ⚠ 併入 ETF 標的失敗(略過,不影響個股): {_e}")
     tickers = list(ticker_map.keys())
     chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
     
