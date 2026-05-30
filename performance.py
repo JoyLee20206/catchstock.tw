@@ -704,6 +704,66 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
     }
 
 
+def compute_per_stock_performance(history: list, cache_dir, hold_days: int = 5,
+                                  min_picks: int = 1) -> list:
+    """個股層級績效:把每筆 pick 依「個股」分組,算每檔入選後 N 日報酬的統計。
+
+    回答「系統選的『哪些股票』真的賺/賠?」——彙總層級看不出個股優劣,這裡拆到單檔。
+    進場口徑與其他回測一致(訊號日隔日開盤 + 滑價,走 _forward_return)。
+
+    Args:
+        history: load_history() 結果
+        cache_dir: CACHE_DIR
+        hold_days: 持有交易日數
+        min_picks: 至少入選幾次(有完整報酬)才列入,過濾單筆雜訊
+
+    Returns:
+        list[dict] 依平均報酬高→低排序:
+          {sid, n, win_rate, avg, best, worst, avg_score, last_date}
+        無法讀快取或無樣本回 []。
+    """
+    matrices = _load_price_matrices(cache_dir)
+    if matrices is None:
+        return []
+
+    rec = {}   # sid -> list of (ret, score, date_str)
+    for entry in history:
+        if entry.get("date") == "legacy":
+            continue
+        try:
+            entry_ts = pd.Timestamp(entry["date"])
+        except Exception:
+            continue
+        for pick in get_picks(entry):
+            sid = str(pick.get("sid", ""))
+            if not sid:
+                continue
+            ret = _forward_return(matrices, sid, entry_ts, hold_days)
+            if ret is None:
+                continue
+            rec.setdefault(sid, []).append((ret, pick.get("score"), entry["date"]))
+
+    out = []
+    for sid, items in rec.items():
+        rets = [r for r, _, _ in items]
+        if len(rets) < min_picks:
+            continue
+        wins = sum(1 for r in rets if r > 0)
+        scores = [s for _, s, _ in items if s is not None]
+        out.append({
+            "sid":       sid,
+            "n":         len(rets),
+            "win_rate":  wins / len(rets),
+            "avg":       sum(rets) / len(rets),
+            "best":      max(rets),
+            "worst":     min(rets),
+            "avg_score": (sum(scores) / len(scores)) if scores else None,
+            "last_date": max(d for _, _, d in items),
+        })
+    out.sort(key=lambda x: (-x["avg"], -x["n"]))
+    return out
+
+
 def format_performance_summary(perf: dict) -> str:
     """產生一行 TG 用的績效摘要。"""
     o = perf.get("overall", {})

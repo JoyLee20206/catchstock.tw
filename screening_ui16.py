@@ -43,7 +43,7 @@ from data_health import check_data_health
 from industry_rotation import compute_industry_rotation
 from performance import (
     compute_performance, compute_equity_curve, backtest_market_filter,
-    attribute_signals, backtest_exit_rules,
+    attribute_signals, backtest_exit_rules, compute_per_stock_performance,
 )
 from backtest import run_backtest, SIGNAL_LABELS, build_signal_matrices
 from market_sentiment import (
@@ -904,6 +904,12 @@ def _load_signal_attribution_cached(hold_days=5):
 def _load_exit_rules_cached(max_hold=10):
     """出場規則回測(固定持有 vs 停損/停利/移動停損),快取 10 分鐘。"""
     return backtest_exit_rules(load_history(), CACHE_DIR, max_hold=max_hold)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_per_stock_perf_cached(hold_days=5):
+    """個股層級績效(系統選的哪些股真的賺/賠),快取 10 分鐘。"""
+    return compute_per_stock_performance(load_history(), CACHE_DIR, hold_days=hold_days)
 
 # ── 🎯 首頁速覽卡片(3 秒看完今日重點) ──
 # 4 張 metric:今日達標 / 大盤狀態 / 最強產業 / 系統 5 日勝率
@@ -2208,6 +2214,37 @@ with _tab_perf:
                         f"⚠️ 僅 {_ex['n']} 筆滿 {_ex['max_hold']} 日的樣本,結論不穩;"
                         f"且全在多頭期間,停損的價值在空頭才會凸顯。累積更多、跨多空後再採用。"
                     )
+
+            # ── 📌 個股層級績效(系統選的『哪些股票』真的賺/賠?) ──
+            st.divider()
+            st.markdown("**📌 個股層級績效(系統選的『哪些股票』真的賺/賠?)**")
+            _psc1, _psc2 = st.columns([1, 1])
+            _ps_hold = _psc1.selectbox("持有天數", [3, 5, 10, 20], index=1, key="_perstock_hold")
+            _ps_min = _psc2.number_input("只看入選 ≥ N 次", min_value=1, max_value=50, value=1,
+                                         step=1, key="_perstock_min",
+                                         help="過濾只入選 1~2 次的雜訊;次數多又穩賺才是系統的常勝股")
+            _ps = _load_per_stock_perf_cached(hold_days=_ps_hold)
+            _ps = [r for r in _ps if r["n"] >= _ps_min]
+            if not _ps:
+                st.info("📊 尚無足夠樣本(需有 pick 已滿持有天數,或放寬「入選 ≥ N 次」)。")
+            else:
+                _ps_rows = [{
+                    "代號":      r["sid"],
+                    "名稱":      ui_name_map.get(r["sid"], ""),
+                    "入選次數":  r["n"],
+                    "勝率%":     round(r["win_rate"] * 100, 0),
+                    f"平均{_ps_hold}日報酬%": round(r["avg"], 2),
+                    "最佳%":     round(r["best"], 2),
+                    "最差%":     round(r["worst"], 2),
+                    "平均分":    round(r["avg_score"], 1) if r["avg_score"] is not None else None,
+                    "最近入選":  r["last_date"],
+                } for r in _ps]
+                st.dataframe(pd.DataFrame(_ps_rows), use_container_width=True, hide_index=True)
+                st.caption(
+                    f"依「平均 {_ps_hold} 日報酬」高→低排序,共 {len(_ps)} 檔(已滿天數)。"
+                    "點欄位標題可改排序;**入選次數多又穩賺**=系統的常勝股,**常賠**的可加進選股表的「排除過熱」或自行避開。"
+                    "進場口徑同其他回測(訊號日隔日開盤 + 0.1% 滑價);樣本少時僅看方向。"
+                )
 
             # ── 進行中觀察樣本(剛入選還沒滿 5 個交易日,目前浮動報酬) ──
             samples = perf.get("samples", [])
