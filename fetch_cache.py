@@ -1082,47 +1082,71 @@ def _roc_date_to_iso(s):
         return None
 
 
+# TAIEX 日資料候選端點(TWSE 改版過多次,一次試多個;FMTQIK 給收盤指數、MI_5MINS_HIST 給 OHLC)
+# 找到可用的就記住(_TAIEX_OK_URL),之後每月直接用,不再逐一試。
+_TAIEX_ENDPOINTS = [
+    "https://www.twse.com.tw/exchangeReport/FMTQIK",        # 確認可用:含「發行量加權股價指數」(收盤)
+    "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST",   # 確認可用:含「收盤指數」+ OHLC
+    "https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK",   # 備用
+    "https://www.twse.com.tw/exchangeReport/MI_5MINS_HIST", # 備用
+]
+_TAIEX_OK_URL = {"url": None}
+
+
 def _fetch_twse_taiex_month(yyyymmdd):
-    """抓 TWSE 官方加權指數某月的日 OHLC,回 DataFrame[date,Open,High,Low,Close]。
-    端點一次回傳該 date 所屬「整個月」。失敗 / 改版回空 DataFrame。"""
-    url = "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST"
-    resp = session_get(url, params={"date": yyyymmdd, "response": "json"}, timeout=20)
-    if resp is None:
-        return pd.DataFrame()
-    try:
-        data = resp.json()
-    except ValueError:
-        return pd.DataFrame()
-    if str(data.get("stat", "")).upper() != "OK":
-        return pd.DataFrame()
-    fields, rows = data.get("fields", []), data.get("data", [])
-    if not fields or not rows:
-        return pd.DataFrame()
+    """抓 TWSE 官方加權指數某月的日收盤(FMTQIK 的「發行量加權股價指數」或 MI_5MINS_HIST 的「收盤指數」)。
 
-    def col_idx(kw):
-        return next((i for i, f in enumerate(fields) if kw in str(f)), None)
-
-    i_d, i_o, i_h, i_l, i_c = (col_idx("日期"), col_idx("開盤"),
-                               col_idx("最高"), col_idx("最低"), col_idx("收盤"))
-    if i_d is None or i_c is None:   # 找不到日期/收盤 → 視為改版,放棄(觸發 fallback)
-        return pd.DataFrame()
-
-    def num(r, i):
-        if i is None or i >= len(r):
-            return None
+    重要:**用隔離請求,不走 session_get** —— 否則端點 404 會計入全域熔斷器、
+    一路 sys.exit 把整個 fetch_cache 拖垮。這裡任何失敗都只回空 DataFrame → 觸發 yfinance fallback。
+    回 DataFrame[date, Open?, High?, Low?, Close]。
+    """
+    urls = [_TAIEX_OK_URL["url"]] if _TAIEX_OK_URL["url"] else _TAIEX_ENDPOINTS
+    for url in urls:
         try:
-            return float(str(r[i]).replace(",", "").strip())
-        except (ValueError, TypeError):
-            return None
+            headers = random.choice(HTTP_HEADERS_POOL).copy()
+            resp = SESSION.get(url, params={"date": yyyymmdd, "response": "json"},
+                               headers=headers, timeout=20, verify=False)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+        except Exception:
+            continue
+        if str(data.get("stat", "")).upper() != "OK":
+            continue
+        fields, rows = data.get("fields", []), data.get("data", [])
+        if not fields or not rows:
+            continue
 
-    recs = []
-    for r in rows:
-        iso = _roc_date_to_iso(r[i_d]) if i_d < len(r) else None
-        c = num(r, i_c)
-        if iso and c is not None:
-            recs.append({"date": iso, "Open": num(r, i_o), "High": num(r, i_h),
-                         "Low": num(r, i_l), "Close": c})
-    return pd.DataFrame(recs)
+        def col_idx(*kws):
+            return next((i for i, f in enumerate(fields)
+                         if any(k in str(f) for k in kws)), None)
+
+        # 收盤:FMTQIK 叫「發行量加權股價指數」、MI_5MINS_HIST 叫「收盤指數」
+        i_d = col_idx("日期")
+        i_c = col_idx("收盤", "加權股價指數")
+        i_o, i_h, i_l = col_idx("開盤"), col_idx("最高"), col_idx("最低")
+        if i_d is None or i_c is None:
+            continue
+
+        def num(r, i):
+            if i is None or i >= len(r):
+                return None
+            try:
+                return float(str(r[i]).replace(",", "").strip())
+            except (ValueError, TypeError):
+                return None
+
+        recs = []
+        for r in rows:
+            iso = _roc_date_to_iso(r[i_d]) if i_d < len(r) else None
+            c = num(r, i_c)
+            if iso and c is not None:
+                recs.append({"date": iso, "Open": num(r, i_o), "High": num(r, i_h),
+                             "Low": num(r, i_l), "Close": c})
+        if recs:
+            _TAIEX_OK_URL["url"] = url   # 記住可用端點
+            return pd.DataFrame(recs)
+    return pd.DataFrame()
 
 
 def _twii_yfinance_fallback():
@@ -1182,10 +1206,14 @@ def fetch_twii_daily():
             cur = (cur - timedelta(days=1)).replace(day=1)
 
     new_frames = []
-    for m in months:
+    for _mi, m in enumerate(months):
         dfm = _fetch_twse_taiex_month(m.strftime("%Y%m%d"))
         if not dfm.empty:
             new_frames.append(dfm)
+        elif _mi >= 1 and not new_frames:
+            # 前 2 個月都抓不到 → 官方端點疑似失效,別再硬試剩下的月份,直接走 fallback
+            print("   !!! TWSE 官方端點連續無有效回應,提前改用 yfinance 備援")
+            break
         time.sleep(TWSE_DELAY)
 
     if not new_frames:
