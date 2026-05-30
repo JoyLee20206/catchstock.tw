@@ -114,11 +114,14 @@ VERDICT_STYLE = {
 }
 
 
-def render_verdict_pill(verdict: str) -> None:
-    """渲染進場節奏 pill(用 markdown HTML)。"""
+def render_verdict_pill(verdict: str, reason: str = "") -> None:
+    """渲染進場節奏 pill(用 markdown HTML)。
+    reason:選填,顯示在標籤後(例「乖離季線 +22%」),讓使用者知道為何黃燈/綠燈。"""
     if verdict not in VERDICT_STYLE:
         return
     s = VERDICT_STYLE[verdict]
+    import html as _html
+    _reason_html = f" · {_html.escape(reason)}" if reason else ""
     st.markdown(
         f"""<div style="
             display: inline-block;
@@ -130,7 +133,7 @@ def render_verdict_pill(verdict: str) -> None:
             font-size: 14px;
             margin: 4px 0;
             border: 1px solid {s['color']};
-        ">{s['icon']} 進場節奏 · {s['label']}</div>""",
+        ">{s['icon']} 進場節奏 · {s['label']}{_reason_html}</div>""",
         unsafe_allow_html=True
     )
 
@@ -3647,11 +3650,15 @@ with col_chart:
 
         # ── 📌 進場節奏快速判斷(純量化規則,不打 AI,個股首頁自動顯示) ──
         # 規則:
-        #   🟡 拉回再進 — K>80 或 5 日漲幅 >10%(短線過熱)
-        #   🟢 可進場   — K<70 且 5 日漲幅 <8% 且站上 MA20 且站上 MA60(季線過濾,避開下降趨勢反彈)
+        #   🟡 拉回再進 — 短線過熱:K>80 / 5 日漲幅 >10% / 乖離過大(追高煞車)
+        #   🟢 可進場   — K<70 且 5 日漲幅 <8% 且站上 MA20 且站上 MA60 且乖離不過大
         #   🔵 觀察     — 其他(訊號模糊、跌破 MA20/MA60、新股資料不足)
+        # 乖離煞車(#3 過熱/估值煞車):股價離均線太遠 → 追高風險高,即使 K/漲幅未過熱也黃燈。
+        #   門檻(標準):MA20 乖離 > 12% 或 MA60(季線)乖離 > 20%。個股波動大,故比大盤的 ±8% 寬。
+        BIAS20_HOT, BIAS60_HOT = 12.0, 20.0
         _hist_quick = _cached_stock_history(sid)
         _verdict_quick = None
+        _verdict_reason = ""
         if _hist_quick is not None and not _hist_quick.empty and len(_hist_quick) >= 20:
             try:
                 _high_c = 'max' if 'max' in _hist_quick.columns else 'high'
@@ -3661,6 +3668,10 @@ with col_chart:
                 _ma20    = float(_close_s.tail(20).mean())
                 # MA60 需 60 筆,新股資料不足時設 None,後續判斷會跳過 MA60 條件
                 _ma60    = float(_close_s.tail(60).mean()) if len(_close_s) >= 60 else None
+                # 乖離率(%):股價相對均線的延伸程度
+                _bias20 = (_latest - _ma20) / _ma20 * 100 if _ma20 > 0 else 0.0
+                _bias60 = ((_latest - _ma60) / _ma60 * 100) if (_ma60 and _ma60 > 0) else None
+                _hot_bias = (_bias20 > BIAS20_HOT) or (_bias60 is not None and _bias60 > BIAS60_HOT)
                 if len(_close_s) < 6:
                     _verdict_quick = "觀察"
                 else:
@@ -3669,17 +3680,26 @@ with col_chart:
                     _k_last = next((k for k in reversed(_k_list) if k is not None), None) if _k_list else None
                     # 「站上季線」條件:有 MA60 時要 latest>MA60;沒 MA60 則略過(避免新股直接被判觀察)
                     _above_ma60 = (_ma60 is None) or (_latest > _ma60)
-                    if _k_last is not None and (_k_last > 80 or _gain5 > 10):
+                    _k_hot = _k_last is not None and _k_last > 80
+                    if _k_hot or _gain5 > 10 or _hot_bias:
                         _verdict_quick = "拉回再進"
+                        # 組過熱原因(讓使用者知道為何黃燈,不只一個顏色)
+                        _rs = []
+                        if _k_hot:           _rs.append(f"KD {_k_last:.0f} 過熱")
+                        if _gain5 > 10:      _rs.append(f"5 日漲 {_gain5:+.0f}%")
+                        if _bias20 > BIAS20_HOT:                    _rs.append(f"乖離MA20 {_bias20:+.0f}%")
+                        if _bias60 is not None and _bias60 > BIAS60_HOT: _rs.append(f"乖離季線 {_bias60:+.0f}%")
+                        _verdict_reason = "追高風險:" + "、".join(_rs)
                     elif (_k_last is None or _k_last < 70) and _gain5 < 8 and _latest > _ma20 and _above_ma60:
                         _verdict_quick = "可進場"
+                        _verdict_reason = f"乖離MA20 {_bias20:+.0f}%" + (f"、季線 {_bias60:+.0f}%" if _bias60 is not None else "")
                     else:
                         _verdict_quick = "觀察"
             except Exception:
                 pass
 
         if _verdict_quick:
-            render_verdict_pill(_verdict_quick)
+            render_verdict_pill(_verdict_quick, _verdict_reason)
 
         # 🧠 修改處：新增第四個 AI 分頁
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -3962,9 +3982,11 @@ with col_chart:
 - 🟢 綠色半透明色塊:**向下跳空缺口**(今日 high < 昨日 low)
 
 **💡 進場節奏 pill**(個股名稱下方)
-- 🟢 可進場:K<70、5 日漲幅<8%、站上 MA20+MA60
-- 🟡 拉回再進:K>80 或 5 日漲幅>10%(短線過熱)
+- 🟢 可進場:K<70、5 日漲幅<8%、站上 MA20+MA60、乖離不過大
+- 🟡 拉回再進:K>80 或 5 日漲幅>10% **或乖離過大**(MA20>12% / 季線>20%)→ 追高風險,pill 會標出是哪個原因
 - 🔵 觀察:其他(訊號模糊、跌破均線、資料不足)
+
+> **乖離煞車(避免追高)**:股價慢慢爬、離均線太遠時,即使 K/漲幅還沒過熱也會轉黃燈。乖離率=(股價−均線)/均線;個股波動比大盤大,故門檻(MA20>12%、季線>20%)比大盤位階的 ±8% 寬。
                     """)
             else: st.warning("暫無歷史數據。")
 
