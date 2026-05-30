@@ -129,8 +129,8 @@ streamlit run screening_ui16.py  # 打開網頁
 ├── performance.py             ← 績效追蹤(個股/整體/系統失效監控)
 ├── industry_rotation.py       ← 產業輪動(資金往哪跑)
 ├── watchlist_alerts.py        ← 自選股警示
-├── cache_status.py            ← 資料新鮮度檢查
-├── data_health.py             ← 資料健康度檢查
+├── cache_status.py            ← 資料**新鮮度**(看日期:資料是哪天的、夠不夠新)
+├── data_health.py             ← 資料**完整性**(看內容:有沒有壞掉/漏抓,如總量驟降、close=0)
 ├── smoke_test.py              ← 煙霧測試(改完程式跑一次,驗核心模組不崩+資料契約)
 │
 └── cache/                     ← 抓回來的資料(由 fetch_cache.py 寫入)
