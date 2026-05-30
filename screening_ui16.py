@@ -328,6 +328,13 @@ h1, [data-testid="stMainBlockContainer"] h1 {
     padding-bottom: 0.2rem !important;
 }
 hr { margin: 0.6rem 0 !important; }
+/* FAQ/說明 expander 內的標題縮小、間距收緊,讓說明更清爽不佔高(不影響主畫面 subheader) */
+[data-testid="stExpander"] h2 { font-size: 1.2rem !important; margin: 0.5rem 0 0.3rem !important; }
+[data-testid="stExpander"] h3 { font-size: 1.05rem !important; margin: 0.5rem 0 0.25rem !important; }
+[data-testid="stExpander"] h4 { font-size: 0.98rem !important; margin: 0.4rem 0 0.2rem !important; }
+[data-testid="stExpander"] p,
+[data-testid="stExpander"] li { font-size: 0.9rem !important; line-height: 1.5 !important; }
+[data-testid="stExpander"] hr { margin: 0.4rem 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 st.title("📊 台股選股工具")
@@ -1158,8 +1165,9 @@ with _tab_alloc:
     with st.expander("📖 使用說明 / FAQ", expanded=False):
         st.markdown("""
 ### 🎯 這頁在做什麼?
-把「今日達標清單」變成**可執行的部位配置**——回答「**每檔各買多少、會不會過度集中、最壞虧多少**」。
-核心是**風險基礎部位法(Risk-based Position Sizing)**:先決定「每筆最多虧多少」,再反推張數/口數,而不是憑感覺亂買。
+把「今日選出來的股」變成**實際能下單的張數/口數**——回答「**每檔各買多少、會不會壓太多在同產業、最壞會虧多少**」。
+
+核心一句話:**先想好「每筆最多能虧多少錢」,再回推該買幾張**,而不是憑感覺亂買。
 
 ---
 
