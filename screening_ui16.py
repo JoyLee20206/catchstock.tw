@@ -2528,6 +2528,20 @@ def _load_dip_radar(cache_key: str, lookback: int = 6):
         return set(), ""
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_industry_name_map() -> dict:
+    """從 info parquet 建 {stock_id: 產業代號}(供雷達清單沿用既有產業欄口徑;原 df '產業' 也是代號)。"""
+    try:
+        files = sorted(CACHE_DIR.glob("info_*.parquet"))
+        if not files:
+            return {}
+        d = pd.read_parquet(files[-1], columns=["stock_id", "industry_category"])
+        d = d.drop_duplicates("stock_id", keep="last")
+        return {str(r.stock_id): str(r.industry_category) for r in d.itertuples() if pd.notna(r.industry_category)}
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=900, show_spinner="計算交易報酬中…")
 def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
                          combine_mode: str, dedup: bool, stock_filter: str = ""):
@@ -3806,24 +3820,39 @@ with col_list:
                     filtered = filtered[filtered['過熱'] != '🟡']
 
         # 🎯 籌碼抄底雷達(④ 實證固化:資減券增 + 大戶逆勢增持)。預設關閉 → 不啟用就不付建矩陣的 ~5 秒。
-        # 勾選才計算(且重用訊號回測分頁的同一份 cache),標出今天同時觸發兩個籌碼底部訊號的標的。
-        if st.checkbox(
-            "🎯 標記籌碼抄底雷達(資減券增＋大戶逆勢增持)",
+        # 勾選後「整個表替換為 13 檔雷達清單」——抄底雷達是『找弱股反轉』,與選股清單『追強勢』邏輯相反,
+        # 命中股幾乎不會在選股清單裡,故獨立呈現才看得到。重用訊號回測分頁的同一份矩陣 cache。
+        _dip_on = st.checkbox(
+            "🎯 切換到籌碼抄底雷達(資減券增＋大戶逆勢增持)",
             value=False, key="_dip_on",
-            help="標出今天同時觸發「資減券增(軋空力道)」與「大戶逆勢增持(低檔吃貨)」兩個籌碼底部訊號的股。\n"
+            help="勾選後表格切換為「全市場今天同時觸發兩個籌碼底部訊號」的股(與『追強勢』選股相反邏輯,故獨立顯示)。\n"
                  "④回測:78 筆、勝率 46%、平均 +3.95%、夏普 1.35(全多頭資料、中位數偏負)→ 當『觀察名單』,"
                  "別當閉眼買;進場等帶量確認、嚴設停損。第一次勾選需建訊號矩陣約 5 秒。",
-        ):
+        )
+        if _dip_on:
             _radar_key = f"{_cache_date.strftime('%Y-%m-%d') if _cache_date is not None else 'no_data'}|v3-tierR"
             _dip_set, _dip_date = _load_dip_radar(_radar_key)
-            if not filtered.empty:
-                filtered['抄底雷達'] = filtered['代號'].astype(str).map(lambda c: '🎯' if c in _dip_set else '')
-                _n_dip = int((filtered['抄底雷達'] == '🎯').sum())
-                _dstr = f"(依 {_dip_date} 融資券資料)" if _dip_date else "(暫無資料)"
-                st.caption(f"🎯 全市場命中 **{len(_dip_set)}** 檔{_dstr};其中落在目前清單 **{_n_dip}** 檔"
-                           + ("" if _n_dip else " —(清單內沒命中屬正常:此組合很挑,常整天 0~數檔)"))
-                if _n_dip and st.checkbox("　↳ 只看雷達命中股", value=False, key="_only_dip"):
-                    filtered = filtered[filtered['抄底雷達'] == '🎯']
+            _dstr = f"(依 {_dip_date} 融資券資料)" if _dip_date else "(暫無資料)"
+            if not _dip_set:
+                st.info(f"🎯 抄底雷達:今日全市場 **0** 檔命中 {_dstr}——此組合很挑,常整天 0~數檔,屬正常。")
+                filtered = filtered.iloc[0:0]               # 清空表格,避免下方還顯示舊的追強勢清單
+            else:
+                _close_map = _load_latest_close_map()
+                _ind_map   = _load_industry_name_map()
+                _bias_for_radar = _bias_map if _bias_map else {}
+                _rows = []
+                for sid in sorted(_dip_set):
+                    _rows.append({
+                        "代號":      sid,
+                        "名稱":      ui_name_map.get(sid, ""),
+                        "最新價":    round(_close_map.get(sid), 2) if _close_map.get(sid) is not None else None,
+                        "產業":      _ind_map.get(sid, ""),
+                        "乖離MA20%": _bias_for_radar.get(sid, {}).get('bias20'),
+                        "乖離季線%": _bias_for_radar.get(sid, {}).get('bias60'),
+                    })
+                filtered = pd.DataFrame(_rows)
+                st.success(f"🎯 抄底雷達命中 **{len(_dip_set)}** 檔 {_dstr}。"
+                           f"與選股清單邏輯相反(找跌深+籌碼吃貨)→ 獨立呈現;當『觀察名單』,**別閉眼買**、進場等帶量、嚴設停損。")
 
         filtered = filtered.reset_index(drop=True)
         event = st.dataframe(filtered, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
