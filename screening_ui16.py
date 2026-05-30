@@ -1067,7 +1067,16 @@ with _tab_margin:
             st.info("尚無個股期貨標的快取——需 `fetch_cache.py` 抓過 TAIFEX 一次後才有(部署後跑一次即可)。")
         else:
             _close_map = _load_latest_close_map()
-            st.caption(f"目前共 **{len(_sf_map)} 檔**有個股期貨可交易。")
+            # 保證金比例快取日期(供使用者判斷新舊;週更,故附官網連結方便核對最新)
+            _mgn_files = sorted(CACHE_DIR.glob("stock_margin_*.parquet"))
+            _mgn_date = (_mgn_files[-1].stem.replace("stock_margin_", "") if _mgn_files else None)
+            _date_note = (f"保證金比例資料日期 **{_mgn_date}**" if _mgn_date
+                          else "⚠️ 尚無官方保證金比例快取(暫用預設 13.5%)")
+            st.caption(
+                f"目前共 **{len(_sf_map)} 檔**有個股期貨可交易。{_date_note}。"
+                f"　🔗 [上 TAIFEX 官網核對最新保證金](https://www.taifex.com.tw/cht/5/stockMarginingDetail)"
+                f"(比例每週更新一次,連假前/大波動後若有調整,以官網為準)。"
+            )
             _mc1, _mc2 = st.columns([2, 1])
             _q_in = _mc1.text_input("股票代號 / 名稱", value="", placeholder="例 2330 或 台積",
                                     key="_margin_sid",
@@ -1170,13 +1179,13 @@ with _tab_margin:
                                 f"✅ 保證金比例已自動帶入 **TAIFEX 官方**逐檔資料"
                                 f"({_tier}:原始 {_off_init:.2f}% / 維持 {_off_maint:.2f}%)。"
                                 f"期交所會依波動不定期調整,本頁每週更新;"
-                                f"[查官網最新](https://www.taifex.com.tw/cht/5/stockMargining)。"
+                                f"[查官網最新](https://www.taifex.com.tw/cht/5/stockMarginingDetail)。"
                             )
                         else:
                             st.caption(
                                 "⚠️ 本檔暫無官方比例快取(跑過 `fetch_cache.py` 後即有),目前用預設 13.5%。"
                                 "保證金比例依個股風險分級,期交所定期調整,"
-                                "請以 [TAIFEX 官網](https://www.taifex.com.tw/cht/5/stockMargining)/你的券商公告為準。"
+                                "請以 [TAIFEX 官網](https://www.taifex.com.tw/cht/5/stockMarginingDetail)/你的券商公告為準。"
                             )
 
     else:
