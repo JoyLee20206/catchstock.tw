@@ -846,7 +846,7 @@ def summarize(trades: pd.DataFrame, hold_days: int = 10) -> dict:
 # 對外主介面
 # ══════════════════════════════════════════════════════════════════════
 def build_signal_matrices(cache_dir) -> dict:
-    """建構全部 11 個訊號矩陣(+ matrices + open_matrix)並回傳。
+    """建構全部訊號矩陣(數量見 SIGNAL_LABELS)+ matrices + open_matrix 並回傳。
 
     耗時 ~5-7 秒,供 UI 獨立 cache 後重複使用。
     Returns: {"matrices": ..., "sig_matrices": {...}, "open_matrix": ...}
@@ -922,13 +922,18 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
             "error": str (僅失敗時),
         }
     """
+    # selected_list 提前算,供下方驗證 precomputed 是否包含所選訊號
+    _selected_check = [signal] if isinstance(signal, str) else list(signal)
+
     # 防禦性:precomputed 必須是「含 matrices + sig_matrices 的新格式 dict」才採用。
-    # 否則(None、或部署後 Streamlit 殘留的舊格式 cache 物件、或版本不同步)一律自行重建,
-    # 避免硬存取不存在的 key 觸發 KeyError(線上曾因 cache 殘留舊結構而崩潰)。
+    # 否則(None、或部署後 Streamlit 殘留的舊格式/舊訊號集 cache、或版本不同步)一律自行重建。
+    # 第二道:即使結構對,但所選訊號不在 sig_matrices 裡(= 新增訊號後 cache 沒更新)也要重建,
+    # 否則會「靜默回 0 觸發」(線上曾因 cache 殘留舊結構崩潰 / 漏新訊號回 0,兩次都是這類)。
     _valid_pre = (
         isinstance(precomputed, dict)
         and "matrices" in precomputed
-        and "sig_matrices" in precomputed
+        and isinstance(precomputed.get("sig_matrices"), dict)
+        and all(s in precomputed["sig_matrices"] for s in _selected_check)
     )
     if _valid_pre:
         matrices     = precomputed["matrices"]

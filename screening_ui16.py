@@ -2499,10 +2499,11 @@ def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
         start = end - pd.Timedelta(days=ndays)
         date_range = (start, end)
     # 取得已 cache 的訊號矩陣(第一次需 5-7s,之後秒切)
-    # cache key 加結構版本「v2-nextopen」:build_signal_matrices 改為「隔日開盤」結構後,
-    # 強制讓部署環境殘留的舊格式 cache(只 Rerun 未 full reboot 時)失效重算。
+    # cache key 帶結構/訊號版本:每次「改 build_signal_matrices 結構」或「新增/移除訊號」都要 bump,
+    # 否則殘留舊 cache(只 Rerun 未 full reboot 時)會找不到新訊號 → 靜默回 0 觸發。
+    # v2-nextopen:改隔日開盤結構;v3-tierR:新增反轉訊號(washout/kd_divergence/chip_accumulation)。
     _cache_key = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "no_data"
-    _precomputed = _build_signal_matrices_cached(f"{_cache_key}|v2-nextopen")
+    _precomputed = _build_signal_matrices_cached(f"{_cache_key}|v3-tierR")
     return run_backtest(CACHE_DIR, signal=list(signals_tuple), hold_days=hold_days,
                         date_range=date_range, combine_mode=combine_mode,
                         dedup_within_hold=dedup,
