@@ -780,10 +780,20 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
             "error": str (僅失敗時),
         }
     """
-    if precomputed is not None:
+    # 防禦性:precomputed 必須是「含 matrices + sig_matrices 的新格式 dict」才採用。
+    # 否則(None、或部署後 Streamlit 殘留的舊格式 cache 物件、或版本不同步)一律自行重建,
+    # 避免硬存取不存在的 key 觸發 KeyError(線上曾因 cache 殘留舊結構而崩潰)。
+    _valid_pre = (
+        isinstance(precomputed, dict)
+        and "matrices" in precomputed
+        and "sig_matrices" in precomputed
+    )
+    if _valid_pre:
         matrices     = precomputed["matrices"]
         sig_matrices = precomputed["sig_matrices"]
         open_matrix  = precomputed.get("open_matrix")
+        if open_matrix is None and isinstance(matrices, dict):
+            open_matrix = matrices.get("open")
     else:
         built = build_signal_matrices(cache_dir)
         if built is None:
