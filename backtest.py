@@ -637,12 +637,13 @@ def detect_washout_bounce_signals(matrices,
     return sig.fillna(False) & ma60.notna() & vol_ma20.notna()
 
 
-def detect_kd_bull_divergence_signals(matrices, window: int = 12, low_zone: float = 40.0):
-    """KD 低檔背離(bullish divergence):價格還在破底,但 KD 沒跟著破 → 下跌動能衰竭。
+def detect_kd_bull_divergence_signals(matrices, window: int = 12,
+                                      low_zone: float = 35.0, kd_gap: float = 3.0):
+    """KD 低檔背離(bullish divergence):價格創新低,但 KD 沒跟著破 → 下跌動能衰竭。
 
-    條件(向量化近似,window 日前為比較基準):
-    1. 價更低:close < window 日前的 close(仍在破底)
-    2. KD 沒更低:今日 K > window 日前的 K(動能背離,higher low)
+    條件(收緊版,避免「只是比 N 日前低」就觸發,提高篩選力):
+    1. 價格創 window 日**新低**:close ≤ 近 window 日最低收盤(真的破底)
+    2. KD **沒**創新低:今日 K > 近 window 日 K 的最低 + kd_gap(明顯高於區間低點 = 背離)
     3. 低檔區:今日 K < low_zone(確保是「底部」背離,不是高檔)
 
     意義:價格新低但指標不再新低 = 賣壓邊際遞減,常領先價格落底翻揚。
@@ -651,12 +652,12 @@ def detect_kd_bull_divergence_signals(matrices, window: int = 12, low_zone: floa
     K, _ = _calc_kd_matrix(matrices)
     close = matrices['close']
 
-    price_lower = close < close.shift(window)
-    kd_higher   = K > K.shift(window)
-    in_low_zone = K < low_zone
+    price_new_low = close <= close.rolling(window, min_periods=window).min()
+    kd_higher_low = K > (K.rolling(window, min_periods=window).min() + kd_gap)
+    in_low_zone   = K < low_zone
 
-    sig = price_lower & kd_higher & in_low_zone
-    return sig.fillna(False) & K.notna() & K.shift(window).notna()
+    sig = price_new_low & kd_higher_low & in_low_zone
+    return sig.fillna(False) & K.notna()
 
 
 def detect_chip_accumulation_signals(matrices, large_matrix, min_weekly_rise: float = 0.05):
