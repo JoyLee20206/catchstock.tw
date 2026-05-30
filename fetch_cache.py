@@ -798,12 +798,14 @@ def fetch_yfinance_daily(info_df, default_start_date, chunk_size=400):
             _etf_ids = pd.read_parquet(_eff[-1], columns=["stock_id"])["stock_id"].astype(str).unique()
             _added = 0
             for _eid in _etf_ids:
-                _tk = f"{_eid}.TW"          # ETF(含債券 ETF)幾乎都是上市 .TW
+                # 債券 ETF(代號「B」尾,如 00679B)在櫃買中心 → .TWO;其餘股票型 ETF 上市 → .TW
+                _suffix = ".TWO" if _eid.endswith("B") else ".TW"
+                _tk = f"{_eid}{_suffix}"
                 if _tk not in ticker_map:
                     ticker_map[_tk] = _eid
                     _added += 1
             if _added:
-                print(f"   + 併入 {_added} 檔 ETF 期貨標的(供「ETF 期貨」分頁自動帶價)")
+                print(f"   + 併入 {_added} 檔 ETF 期貨標的(供「ETF 期貨」分頁自動帶價;債券 ETF 走 .TWO)")
     except Exception as _e:
         print(f"   ⚠ 併入 ETF 標的失敗(略過,不影響個股): {_e}")
     tickers = list(ticker_map.keys())

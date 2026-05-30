@@ -613,8 +613,10 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
         return None
     close_matrix = matrices["close"]
 
-    # 讀 ^TWII close(優先用 fetch_cache 落地的 parquet)
+    # 讀 ^TWII close + open(優先用 fetch_cache 落地的 parquet)
+    # open 用於讓大盤對照與 picks 同口徑:都在 T+1 開盤進場(去除前視偏誤),避免 alpha 比較不公平
     twii_close = None
+    twii_open = None
     try:
         twii_files = sorted(Path(cache_dir).glob("twii_*.parquet"))
         if twii_files:
@@ -624,6 +626,8 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
                 df_twii = df_twii.set_index("date").sort_index()
             if "Close" in df_twii.columns:
                 twii_close = df_twii["Close"].dropna()
+            if "Open" in df_twii.columns and twii_close is not None:
+                twii_open = df_twii["Open"].reindex(twii_close.index)
     except Exception as e:
         print(f"⚠ 讀取 twii parquet 失敗(equity curve 無大盤對照): {e}")
 
@@ -649,18 +653,25 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
             continue
         avg_ret = sum(valid_returns) / len(valid_returns)
 
-        # 大盤:^TWII 同期間報酬
+        # 大盤:^TWII 同期間報酬。與 picks 同口徑:T+1 開盤進場、T+N 收盤出場(去除前視偏誤)。
+        # 指數為對照基準、不可直接交易 → 不加滑價(picks 端的 SLIPPAGE 是真實交易成本,基準不該也扣)。
         twii_ret = None
         if twii_close is not None:
-            idx_arr = twii_close.index.searchsorted(entry_date)
-            if idx_arr < len(twii_close):
-                entry_idx = idx_arr
-                target_idx = entry_idx + hold_days
-                if target_idx < len(twii_close):
-                    entry_p = twii_close.iloc[entry_idx]
-                    target_p = twii_close.iloc[target_idx]
-                    if entry_p > 0 and pd.notna(entry_p) and pd.notna(target_p):
-                        twii_ret = (target_p - entry_p) / entry_p * 100
+            idx = twii_close.index.searchsorted(entry_date)   # T
+            next_idx = idx + 1                                 # T+1(進場日,對齊 picks)
+            target_idx = idx + hold_days                       # T+N(出場日)
+            if next_idx < len(twii_close) and target_idx < len(twii_close):
+                # 進場價:T+1 開盤(無開盤資料則退回 T+1 收盤);出場價:T+N 收盤
+                entry_p = None
+                if twii_open is not None:
+                    _o = twii_open.iloc[next_idx]
+                    if pd.notna(_o) and _o > 0:
+                        entry_p = _o
+                if entry_p is None:
+                    entry_p = twii_close.iloc[next_idx]
+                target_p = twii_close.iloc[target_idx]
+                if entry_p is not None and entry_p > 0 and pd.notna(entry_p) and pd.notna(target_p):
+                    twii_ret = (target_p - entry_p) / entry_p * 100
         if twii_ret is None:
             twii_ret = 0.0  # 找不到大盤資料時當 0,避免下方統計噴掉
 
