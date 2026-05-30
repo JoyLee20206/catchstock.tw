@@ -1131,10 +1131,13 @@ with _tab_margin:
                         "期交所依個股風險分級,常見 13.5% / 16.2% / 20.25%;"
                         "(本檔暫無官方比例快取,使用預設 13.5%,請依該檔實際適用比例調整)"
                     )
+                    # key 帶上官方比例:當該檔官方比例(_rate_default)變動時 key 跟著變,
+                    # 強制 number_input 重新以新 value 建立——否則 Streamlit 會沿用 session_state
+                    # 舊值、忽略 value=(曾發生:parquet 未同步前先搜過 → 卡在 13.5 不跳官方比例)。
                     _rate_in = _p3.number_input(
                         "原始保證金比例 %", min_value=1.0, max_value=100.0,
                         value=_rate_default, step=0.05,
-                        key=f"_margin_rate_{_sid_in}", help=_rate_help)
+                        key=f"_margin_rate_{_sid_in}_{_rate_default:g}", help=_rate_help)
                     if _price_in > 0:
                         _contract_val = _price_in * _mult_in * _lots
                         _init_margin  = _contract_val * _rate_in / 100
