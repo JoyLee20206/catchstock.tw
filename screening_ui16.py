@@ -555,9 +555,9 @@ if _freshness["level"] != "missing":
                 _click_force = st.button(
                     "🔄 強制更新日 K", type="primary", use_container_width=True,
                     help=(
-                        "無視當日 cache,重新抓取**所有股票**的日 K 資料。\n\n"
-                        "**用途**:盤中已經跑過、要拿到真正收盤價時(14:00 後再按)。\n"
-                        "**只重抓 daily**:法人/融資券/營收/大戶 仍沿用今日 cache,不浪費 API 額度。\n"
+                        "無視當日 cache,重新抓取**個股日 K + 加權指數**(兩者都是台股,盤後重抓才是真收盤)。\n\n"
+                        "**用途**:盤中已經跑過、盤後要拿到真正收盤價時(14:00 後再按)。\n"
+                        "VIX 是美股、當天抓過不會變,故**不重抓**;法人/融資券/營收/大戶 也沿用今日 cache,不浪費 API。\n"
                         "**冷卻**:2 分鐘內只能按一次。"
                     )
                 )
@@ -580,7 +580,7 @@ if _freshness["level"] != "missing":
                 except Exception as e:
                     st.error(f"❌ 發生未知的錯誤:{e}")
 
-        # ── 按鈕 2:強制更新日 K(無視 cache,只重抓 daily) ──
+        # ── 按鈕 2:強制更新日 K(無視 cache,重抓 daily + 加權指數 twii;VIX 不重抓=美股當天不變) ──
         if _click_force:
             with st.status("正在強制重抓 daily K 線...", expanded=True) as _status:
                 try:

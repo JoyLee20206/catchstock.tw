@@ -78,14 +78,14 @@ def path_for(name):   return CACHE_DIR / f"{name}_{today}.parquet"
 def need_fetch(name):
     """判斷是否需要重抓。
     - FORCE: 全部資源強制重抓
-    - FORCE_DAILY: 'daily' + 大盤指數 'twii' / 'vix' 一併強制重抓,其餘資源若已有當日檔仍略過
-      (理由:收盤後按「強制重抓日 K」時,大盤指數也該從盤中值更新成收盤值,
-       否則 twii/vix 會卡在盤中那筆,UI 顯示的加權指數與官方收盤對不上)
+    - FORCE_DAILY: 'daily' + 加權指數 'twii' 一併強制重抓(兩者都是台股,盤後要更新成真收盤);
+      其餘資源(含 VIX)若已有當日檔仍略過。
+      (VIX 是美股,台灣白天美股休市 → 當日抓過的就是已定案收盤、不會變,強制重抓無意義)
     - 預設: 沒當日檔就抓
     """
     if FORCE:
         return True
-    if FORCE_DAILY and name in ("daily", "twii", "vix"):
+    if FORCE_DAILY and name in ("daily", "twii"):
         return True
     return not path_for(name).exists()
 
@@ -1084,68 +1084,93 @@ def _roc_date_to_iso(s):
 
 # TAIEX 日資料候選端點(TWSE 改版過多次,一次試多個;FMTQIK 給收盤指數、MI_5MINS_HIST 給 OHLC)
 # 找到可用的就記住(_TAIEX_OK_URL),之後每月直接用,不再逐一試。
+# 只放「實測確認存在」的兩個端點(其餘路徑實測為真 404 / 回 HTML,留著只會浪費重試)。
+# 注意:TWSE 邊際節點「限速」時也會回 404,故下方把 404 當「短暫」退讓重試,而非「端點不存在」。
 _TAIEX_ENDPOINTS = [
-    "https://www.twse.com.tw/exchangeReport/FMTQIK",        # 確認可用:含「發行量加權股價指數」(收盤)
-    "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST",   # 確認可用:含「收盤指數」+ OHLC
-    "https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK",   # 備用
-    "https://www.twse.com.tw/exchangeReport/MI_5MINS_HIST", # 備用
+    "https://www.twse.com.tw/exchangeReport/FMTQIK",        # 含「發行量加權股價指數」(收盤)
+    "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST",   # 含「收盤指數」+ OHLC
 ]
 _TAIEX_OK_URL = {"url": None}
 
 
-def _fetch_twse_taiex_month(yyyymmdd):
-    """抓 TWSE 官方加權指數某月的日收盤(FMTQIK 的「發行量加權股價指數」或 MI_5MINS_HIST 的「收盤指數」)。
+def _parse_taiex_json(data):
+    """TWSE 回傳的 dict → DataFrame[date,Open?,High?,Low?,Close];格式不符/空回 None。"""
+    if str(data.get("stat", "")).upper() != "OK":
+        return None
+    fields, rows = data.get("fields", []), data.get("data", [])
+    if not fields or not rows:
+        return None
 
-    重要:**用隔離請求,不走 session_get** —— 否則端點 404 會計入全域熔斷器、
-    一路 sys.exit 把整個 fetch_cache 拖垮。這裡任何失敗都只回空 DataFrame → 觸發 yfinance fallback。
-    回 DataFrame[date, Open?, High?, Low?, Close]。
-    """
-    urls = [_TAIEX_OK_URL["url"]] if _TAIEX_OK_URL["url"] else _TAIEX_ENDPOINTS
-    for url in urls:
+    def col_idx(*kws):
+        return next((i for i, f in enumerate(fields)
+                     if any(k in str(f) for k in kws)), None)
+
+    # 收盤:FMTQIK 叫「發行量加權股價指數」、MI_5MINS_HIST 叫「收盤指數」
+    i_d = col_idx("日期")
+    i_c = col_idx("收盤", "加權股價指數")
+    i_o, i_h, i_l = col_idx("開盤"), col_idx("最高"), col_idx("最低")
+    if i_d is None or i_c is None:
+        return None
+
+    def num(r, i):
+        if i is None or i >= len(r):
+            return None
         try:
-            headers = random.choice(HTTP_HEADERS_POOL).copy()
-            resp = SESSION.get(url, params={"date": yyyymmdd, "response": "json"},
-                               headers=headers, timeout=20, verify=False)
-            if resp.status_code != 200:
-                continue
-            data = resp.json()
-        except Exception:
-            continue
-        if str(data.get("stat", "")).upper() != "OK":
-            continue
-        fields, rows = data.get("fields", []), data.get("data", [])
-        if not fields or not rows:
-            continue
+            return float(str(r[i]).replace(",", "").strip())
+        except (ValueError, TypeError):
+            return None
 
-        def col_idx(*kws):
-            return next((i for i, f in enumerate(fields)
-                         if any(k in str(f) for k in kws)), None)
+    recs = []
+    for r in rows:
+        iso = _roc_date_to_iso(r[i_d]) if i_d < len(r) else None
+        c = num(r, i_c)
+        if iso and c is not None:
+            recs.append({"date": iso, "Open": num(r, i_o), "High": num(r, i_h),
+                         "Low": num(r, i_l), "Close": c})
+    return pd.DataFrame(recs) if recs else None
 
-        # 收盤:FMTQIK 叫「發行量加權股價指數」、MI_5MINS_HIST 叫「收盤指數」
-        i_d = col_idx("日期")
-        i_c = col_idx("收盤", "加權股價指數")
-        i_o, i_h, i_l = col_idx("開盤"), col_idx("最高"), col_idx("最低")
-        if i_d is None or i_c is None:
-            continue
 
-        def num(r, i):
-            if i is None or i >= len(r):
-                return None
+def _fetch_twse_taiex_month(yyyymmdd, max_retries=3):
+    """抓 TWSE 官方加權指數某月的日收盤。回 DataFrame[date,Open?,High?,Low?,Close]。
+
+    重要:**用隔離請求,不走 session_get** —— 否則端點 404 會計入全域熔斷器、sys.exit 拖垮整個流程。
+    重試策略(騎過雲端 IP 短暫限速):
+      - 短暫失敗(timeout/連線錯誤/404/429/503/200-非-JSON 的限速頁)→ 退讓後重試,最多 max_retries 次
+        (TWSE 邊際節點限速時會回 404,故 404 也視為短暫、要重試)
+      - 200+JSON 但「格式不符/空」→ 該端點不適用,直接換下一個候選端點(重試無益)
+    全部端點 × 全部重試都拿不到 → 回空 DataFrame(觸發上層保留官方 / yfinance 備援)。
+    """
+    def _backoff(attempt):
+        # 3s → 7s(+jitter):限速(404/429)需要一點時間退去,比連線錯誤稍長
+        time.sleep(3 + attempt * 4 + random.uniform(0, 2))
+
+    urls = [_TAIEX_OK_URL["url"]] if _TAIEX_OK_URL["url"] else list(_TAIEX_ENDPOINTS)
+    for url in urls:
+        for attempt in range(max_retries):
             try:
-                return float(str(r[i]).replace(",", "").strip())
-            except (ValueError, TypeError):
-                return None
-
-        recs = []
-        for r in rows:
-            iso = _roc_date_to_iso(r[i_d]) if i_d < len(r) else None
-            c = num(r, i_c)
-            if iso and c is not None:
-                recs.append({"date": iso, "Open": num(r, i_o), "High": num(r, i_h),
-                             "Low": num(r, i_l), "Close": c})
-        if recs:
-            _TAIEX_OK_URL["url"] = url   # 記住可用端點
-            return pd.DataFrame(recs)
+                headers = random.choice(HTTP_HEADERS_POOL).copy()
+                resp = SESSION.get(url, params={"date": yyyymmdd, "response": "json"},
+                                   headers=headers, timeout=20, verify=False)
+            except Exception:
+                if attempt < max_retries - 1:   # 連線層失敗(timeout/conn)→ 退讓重試
+                    _backoff(attempt)
+                continue
+            if resp.status_code != 200:
+                # 含 404 —— TWSE 限速常以 404 回應,一律當短暫、退讓重試
+                if attempt < max_retries - 1:
+                    _backoff(attempt)
+                continue
+            try:
+                data = resp.json()
+            except ValueError:
+                if attempt < max_retries - 1:   # 200 但非 JSON(限速 HTML)→ 退讓重試
+                    _backoff(attempt)
+                continue
+            df = _parse_taiex_json(data)
+            if df is not None and not df.empty:
+                _TAIEX_OK_URL["url"] = url       # 記住可用端點
+                return df
+            break              # 200+JSON 但格式不符/空 → 換下一個 URL(重試無益)
     return pd.DataFrame()
 
 
@@ -1217,9 +1242,20 @@ def fetch_twii_daily():
         time.sleep(TWSE_DELAY)
 
     if not new_frames:
-        # 官方一筆都沒抓到 → 退回 yfinance(維持舊行為,零退步)
+        # 官方一筆都沒抓到。分兩種情況:
+        if _has_official and not prev.empty:
+            # (a) 已有官方歷史 → 保留它,絕不用 yfinance 覆蓋
+            #     否則會丟失官方資料,且下次 _has_official=False 又觸發整整 25 個月重抓(來回跳)
+            if not path_for("twii").exists():
+                try:
+                    prev.to_parquet(path_for("twii"))
+                    cleanup_old_cache("twii")
+                except Exception as e2:
+                    print(f"   !!! 保留既有官方檔失敗: {e2}")
+            print("   !!! TWSE 官方本次失敗,但**保留既有官方快取**(不覆蓋、最新日待下次補)")
+            return
+        # (b) 從未抓到官方(首次就失敗)→ 才退 yfinance,至少有資料可用
         if not _twii_yfinance_fallback():
-            # 連 yfinance 都失敗 → 拿舊檔墊
             if prev_files and not path_for("twii").exists():
                 try:
                     pd.read_parquet(prev_files[-1]).to_parquet(path_for("twii"))
