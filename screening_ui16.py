@@ -44,6 +44,7 @@ from industry_rotation import compute_industry_rotation
 from performance import (
     compute_performance, compute_equity_curve, backtest_market_filter,
     attribute_signals, backtest_exit_rules, compute_per_stock_performance,
+    check_system_health,
 )
 from backtest import run_backtest, SIGNAL_LABELS, build_signal_matrices
 from market_sentiment import (
@@ -911,6 +912,13 @@ def _load_per_stock_perf_cached(hold_days=5):
     """個股層級績效(系統選的哪些股真的賺/賠),快取 10 分鐘。"""
     return compute_per_stock_performance(load_history(), CACHE_DIR, hold_days=hold_days)
 
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_system_health_cached(hold_days=5, recent_window=20):
+    """系統失效監控(近期 edge 是否還在),快取 10 分鐘。"""
+    return check_system_health(load_history(), CACHE_DIR,
+                               hold_days=hold_days, recent_window=recent_window)
+
 # ── 🎯 首頁速覽卡片(3 秒看完今日重點) ──
 # 4 張 metric:今日達標 / 大盤狀態 / 最強產業 / 系統 5 日勝率
 if meta is not None and df is not None:
@@ -1726,6 +1734,20 @@ with _tab_perf:
             "回答「我這套系統真的有用嗎?」— 對每筆歷史選股,從 daily 快取算出後續 N 日報酬。"
             "  \n⚙️ **進場假設:訊號日隔日開盤 + 0.1% 滑價**(去除前視偏誤);出場:持有 N 日後收盤;交易成本 0.5%。"
         )
+
+        # ── 🚨 系統失效監控(近期 edge 還在嗎?)──────────────────────────
+        # 比較近期 vs 全期的每入選日淨期望值 + 回檔,策略退化時主動示警(符合「何時該停止相信它」)。
+        _health = _load_system_health_cached(hold_days=5, recent_window=20)
+        _hstatus = _health.get("status")
+        _hmsg = f"**{_health.get('label','')}　系統失效監控(近 {_health.get('n_recent',0)} 個入選日)**：{_health.get('reason','')}"
+        if _hstatus == "fail":
+            st.error(_hmsg)
+        elif _hstatus == "warn":
+            st.warning(_hmsg)
+        elif _hstatus == "ok":
+            st.success(_hmsg)
+        else:
+            st.info(_hmsg)   # insufficient → 累積中
 
         # ── 📖 指標判讀小抄(預設收合,點開對照) ──
         with st.expander("📖 指標怎麼看?(判讀門檻小抄)", expanded=False):

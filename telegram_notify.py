@@ -13,7 +13,7 @@ from cache_status import cache_freshness
 from picks_history import load_history, save_history, compute_streak, build_picks_from_df, get_sids, compute_hot_picks
 from data_health import check_data_health, format_health_for_tg
 from watchlist_alerts import check_watchlist, format_alerts_for_tg
-from performance import compute_performance, format_performance_summary
+from performance import compute_performance, format_performance_summary, check_system_health
 from market_sentiment import compute_sentiment, format_sentiment_for_tg
 
 WATCHLIST_FILE = str(CACHE_DIR / "watchlist.json")  # 由 UI 寫入,TG 讀取做警示
@@ -452,6 +452,14 @@ def main():
                 content += f"\n{perf_text}\n"
         except Exception as e:
             print(f"⚠ 績效摘要產生失敗(略過): {e}")
+
+        # ── 6d. 系統失效警報(僅 🟡警戒/🔴失效 才推,避免每日洗版;🟢/累積中不推)──
+        try:
+            sysh = check_system_health(history, CACHE_DIR, hold_days=5, recent_window=20)
+            if sysh.get("status") in ("warn", "fail"):
+                content += f"\n🚨 <b>{sysh.get('label','')}</b>:{sysh.get('reason','')}\n"
+        except Exception as e:
+            print(f"⚠ 系統失效監控產生失敗(略過): {e}")
 
         content += (
             f"\n🌐 <b>"

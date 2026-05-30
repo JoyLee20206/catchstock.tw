@@ -764,6 +764,101 @@ def compute_per_stock_performance(history: list, cache_dir, hold_days: int = 5,
     return out
 
 
+def check_system_health(history: list, cache_dir, hold_days: int = 5,
+                        recent_window: int = 20) -> dict:
+    """系統失效監控:策略近期的 edge 還在嗎?
+
+    用「每入選日平均報酬」序列(對齊風險指標口徑,避免重疊窗口灌水),
+    比較『近期 vs 全期』+ 當前回檔,判斷策略是否退化/失效。
+
+    狀態(由嚴到鬆):
+      🔴 fail  近期淨期望值 < 0 —— 近期選股扣成本後是賠的,edge 可能失效
+      🟡 warn  近期仍正,但 (回檔過深 / 近期勝率 < 40% / 近期淨期望值 < 全期一半) 任一
+      🟢 ok    近期表現正常
+      ⏳ insufficient  樣本太少(全期 < 20 或近期 < 8 個入選日)不評估,避免誤報
+
+    Returns:
+        {"status","label","reason","recent_net_exp","all_net_exp",
+         "recent_win_rate","mdd_recent","n_recent","n_all","hold_days"}
+    """
+    MDD_WARN   = -10.0   # 當前回檔(每入選日平均報酬複利曲線)深於此 % → 警戒
+    WIN_WARN   = 0.40    # 近期(日)勝率低於此 → 警戒
+    DECAY_FRAC = 0.5     # 近期淨期望值低於全期的此比例(且全期為正)→ 警戒
+    MIN_ALL    = 20      # 全期最少入選日
+    MIN_RECENT = 8       # 近期視窗最少入選日
+
+    matrices = _load_price_matrices(cache_dir)
+    if matrices is None:
+        return {"status": "insufficient", "label": "⏳ 累積中",
+                "reason": "無法讀取 daily 快取", "n_all": 0, "n_recent": 0,
+                "hold_days": hold_days}
+
+    # 每入選日平均報酬(date 排序)
+    by_date = {}
+    for entry in history:
+        if entry.get("date") == "legacy":
+            continue
+        try:
+            entry_ts = pd.Timestamp(entry["date"])
+        except Exception:
+            continue
+        rets = []
+        for pick in get_picks(entry):
+            sid = str(pick.get("sid", ""))
+            if not sid:
+                continue
+            r = _forward_return(matrices, sid, entry_ts, hold_days)
+            if r is not None:
+                rets.append(r)
+        if rets:
+            by_date[entry["date"]] = sum(rets) / len(rets)
+
+    series = [v for _, v in sorted(by_date.items())]   # 依日期排序的每日平均報酬
+    n_all = len(series)
+    recent = series[-recent_window:] if recent_window > 0 else series
+    n_recent = len(recent)
+
+    base = {"n_all": n_all, "n_recent": n_recent, "hold_days": hold_days,
+            "recent_net_exp": None, "all_net_exp": None,
+            "recent_win_rate": None, "mdd_recent": None}
+
+    if n_all < MIN_ALL or n_recent < MIN_RECENT:
+        base.update({"status": "insufficient", "label": "⏳ 累積中",
+                     "reason": f"樣本不足(全期 {n_all}/{MIN_ALL} 入選日、近期 {n_recent}/{MIN_RECENT}),"
+                               f"暫不評估失效,避免年輕/全多頭資料誤報。"})
+        return base
+
+    all_net_exp    = sum(series) / n_all - TRADE_COST_PCT
+    recent_net_exp = sum(recent) / n_recent - TRADE_COST_PCT
+    recent_win     = sum(1 for r in recent if r > 0) / n_recent
+    mdd_recent     = _risk_metrics(recent, hold_days)["mdd"]   # 近期回檔(%)
+    base.update({"recent_net_exp": recent_net_exp, "all_net_exp": all_net_exp,
+                 "recent_win_rate": recent_win, "mdd_recent": mdd_recent})
+
+    if recent_net_exp < 0:
+        base.update({"status": "fail", "label": "🔴 失效警報",
+                     "reason": f"近 {n_recent} 個入選日的淨期望值轉為 {recent_net_exp:+.2f}%(扣成本後賠錢)——"
+                               f"策略 edge 可能失效,建議暫停新進場、回頭檢查訊號與大盤環境。"})
+        return base
+
+    warns = []
+    if mdd_recent < MDD_WARN:
+        warns.append(f"近期回檔 {mdd_recent:.1f}%(深於 {MDD_WARN:.0f}%)")
+    if recent_win < WIN_WARN:
+        warns.append(f"近期勝率 {recent_win*100:.0f}%(低於 {WIN_WARN*100:.0f}%)")
+    if all_net_exp > 0 and recent_net_exp < all_net_exp * DECAY_FRAC:
+        warns.append(f"近期淨期望值 {recent_net_exp:+.2f}% 不到全期 {all_net_exp:+.2f}% 的一半(衰退)")
+
+    if warns:
+        base.update({"status": "warn", "label": "🟡 警戒",
+                     "reason": "、".join(warns) + "。edge 仍在但轉弱,建議收緊停損、降低部位。"})
+    else:
+        base.update({"status": "ok", "label": "🟢 正常",
+                     "reason": f"近 {n_recent} 個入選日淨期望值 {recent_net_exp:+.2f}%、勝率 {recent_win*100:.0f}%,"
+                               f"與全期({all_net_exp:+.2f}%)一致,edge 維持中。"})
+    return base
+
+
 def format_performance_summary(perf: dict) -> str:
     """產生一行 TG 用的績效摘要。"""
     o = perf.get("overall", {})
