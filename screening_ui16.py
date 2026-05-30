@@ -971,14 +971,24 @@ _tab_trend, _tab_perf, _tab_bt, _tab_sent, _tab_margin, _tab_alloc = st.tabs([
 # ── 🧮 期貨保證金分頁(個股期貨) ──────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_stock_futures_map():
-    """讀 TAIFEX 個股期貨標的清單 → {stock_id: (簡稱, 契約乘數)}。"""
+    """讀 TAIFEX 個股期貨標的清單 → {stock_id: {"name", "mults": [乘數...]}}。
+    同一檔可能同時有標準型(2000)與小型(100)契約 → 收集所有乘數(升冪)。"""
     try:
         files = sorted(CACHE_DIR.glob("stock_futures_*.parquet"))
         if not files:
             return {}
         df_sf = pd.read_parquet(files[-1])
-        return {str(r["stock_id"]): (str(r.get("name", "")), int(r.get("multiplier", 2000)))
-                for _, r in df_sf.iterrows()}
+        out = {}
+        for _, r in df_sf.iterrows():
+            sid = str(r["stock_id"])
+            m = int(r.get("multiplier", 2000) or 2000)
+            if sid not in out:
+                out[sid] = {"name": str(r.get("name", "")), "mults": []}
+            if m not in out[sid]["mults"]:
+                out[sid]["mults"].append(m)
+        for v in out.values():
+            v["mults"].sort()
+        return out
     except Exception:
         return {}
 
@@ -1039,7 +1049,10 @@ with _tab_margin:
                     st.warning(f"⚠️ **{_sid_in} 沒有個股期貨**(不在 TAIFEX 標的清單,無法用期貨交易)。"
                                f"目前只有約 {len(_sf_map)} 檔較活絡的股票有個股期貨。")
                 else:
-                    _nm, _mult_default = _sf_map[_sid_in]
+                    _info = _sf_map[_sid_in]
+                    _nm = _info["name"]
+                    _mults = _info["mults"] or [2000]
+                    _has_small = 100 in _mults
                     _auto_price = _close_map.get(_sid_in)
                     _p1, _p2, _p3 = st.columns(3)
                     _price_in = _p1.number_input(
@@ -1047,10 +1060,17 @@ with _tab_margin:
                         value=round(_auto_price, 2) if _auto_price else 0.0, step=0.05,
                         key=f"_margin_price_{_sid_in}",
                         help="預設帶入最新收盤,可自行改成你的進場價")
-                    _mult_in = _p2.number_input(
-                        "契約乘數(股/口)", min_value=1, value=int(_mult_default), step=100,
-                        key=f"_margin_mult_{_sid_in}",
-                        help="標準型個股期貨 2,000 股/口;小型 100 股/口")
+                    # 有小型契約就讓使用者選標準/小型;否則直接用唯一乘數
+                    if len(_mults) > 1:
+                        _mc_lbl = {m: (f"小型 {m} 股" if m == 100 else f"標準 {m} 股") for m in _mults}
+                        _mult_pick = _p2.radio("契約規格", _mults,
+                                               format_func=lambda m: _mc_lbl[m],
+                                               key=f"_margin_spec_{_sid_in}",
+                                               help="此標的同時有標準型與小型契約,選一個試算")
+                        _mult_in = int(_mult_pick)
+                    else:
+                        _mult_in = int(_mults[0])
+                        _p2.metric("契約乘數(股/口)", f"{_mult_in:,}")
                     _rate_in = _p3.number_input(
                         "原始保證金比例 %", min_value=1.0, max_value=100.0, value=13.5, step=0.05,
                         key="_margin_rate",
@@ -1249,6 +1269,9 @@ with _tab_alloc:
                                          step=0.05, key="_alloc_fut_rate",
                                          help="期交所分級 13.5/16.2/20.25%,以實際適用比例為準")
             _sf_map = _load_stock_futures_map()
+            _only_small = st.checkbox("只列有小型個股期貨的標的(100 股/口,小資金友善)",
+                                      value=True, key="_alloc_only_small",
+                                      help="小型契約 1 口僅 100 股,曝險小、適合小資金;取消勾選則一併列出只有標準型(2000 股)的標的")
             if not _sf_map:
                 st.info("尚無個股期貨清單快取(需 `fetch_cache.py` 抓過 TAIFEX 一次),無法用期貨配置。")
             else:
@@ -1258,18 +1281,29 @@ with _tab_alloc:
                     _price = r.get('現價')
                     if _sid not in _sf_map or _price is None or pd.isna(_price) or _price <= 0:
                         continue
-                    _mult = _sf_map[_sid][1] or 2000
+                    _mults = _sf_map[_sid].get("mults") or [2000]
+                    if _only_small:
+                        if 100 not in _mults:      # 「以小型為主」:沒有小型契約的標的不列
+                            continue
+                        _mult = 100
+                    else:
+                        _mult = min(_mults)        # 優先用最小契約(小型 100)
+                    _spec = "小型" if _mult == 100 else ("標準" if _mult == 2000 else f"{_mult}股")
                     _stop_pct = _stop_of(r)
                     _one_notional = _mult * float(_price)
                     _one_margin   = _one_notional * _mrate / 100.0
                     _one_risk     = _one_notional * _stop_pct / 100.0
                     _lots = int(_risk_budget // _one_risk) if _one_risk > 0 else 0
                     _fr.append({"代號": _sid, "名稱": r.get('名稱', ''), "產業": (r.get('產業') or '其他'),
-                                "price": float(_price), "stop_pct": _stop_pct,
+                                "price": float(_price), "stop_pct": _stop_pct, "spec": _spec, "mult": _mult,
                                 "one_notional": _one_notional, "one_margin": _one_margin,
                                 "one_risk": _one_risk, "lots": _lots})
                 if not _fr:
-                    st.warning("今日達標股中,沒有任何一檔有個股期貨可交易。")
+                    if _only_small:
+                        st.warning("今日達標股中,沒有任何一檔有**小型個股期貨**(100 股/口)。"
+                                   "可取消上方勾選,改列含標準型(2000 股)的標的。")
+                    else:
+                        st.warning("今日達標股中,沒有任何一檔有個股期貨可交易。")
                 else:
                     _placed = [x for x in _fr if x["lots"] >= 1]
                     _tot_margin   = sum(x["lots"] * x["one_margin"] for x in _placed)
@@ -1287,7 +1321,7 @@ with _tab_alloc:
                     # 列出「所有有期貨的標的」——即使建議 0 口,也看得到每口經濟(避免畫面全空)
                     _fdisp = pd.DataFrame([{
                         "代號": x["代號"], "名稱": x["名稱"], "產業": x["產業"],
-                        "現價": f"{x['price']:,.2f}",
+                        "契約": f"{x['spec']}({x['mult']:,})", "現價": f"{x['price']:,.2f}",
                         "1口保證金": f"{x['one_margin']:,.0f}",
                         "1口曝險": f"{x['one_notional']:,.0f}",
                         "1口風險%": f"{x['one_risk']/_cap*100:.1f}%",
@@ -1295,9 +1329,15 @@ with _tab_alloc:
                     } for x in sorted(_fr, key=lambda z: z["one_notional"])])
                     st.dataframe(_fdisp, use_container_width=True, hide_index=True)
                     _n0 = sum(1 for x in _fr if x["lots"] == 0)
-                    st.caption(
-                        f"💡 今日達標中 **{len(_fr)} 檔有個股期貨**。「建議口數」依**每筆風險%**反推;"
-                        f"「1口風險%」= 買 1 口若停損會虧總資金的幾 %,**超過你的單筆風險% → 建議口數=0**。")
+                    if _only_small:
+                        st.caption(
+                            f"💡 列出 **{len(_fr)} 檔有小型個股期貨**(100 股/口)的標的。"
+                            f"「建議口數」依**每筆風險%**反推;「1口風險%」超過你的單筆風險% → 建議口數=0。")
+                    else:
+                        _nsmall = sum(1 for x in _fr if x["mult"] == 100)
+                        st.caption(
+                            f"💡 今日達標中 **{len(_fr)} 檔有個股期貨**(其中 {_nsmall} 檔用小型 100 股/口)。"
+                            f"「建議口數」依**每筆風險%**反推;「1口風險%」超過你的單筆風險% → 建議口數=0。")
                     if _n0:
                         st.caption(
                             f"ℹ️ 其中 {_n0} 檔建議 0 口:**1 口的曝險太大**(高價股),風險超過你的單筆風險%設定。"

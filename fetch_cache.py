@@ -1419,9 +1419,12 @@ def fetch_taifex_stock_futures():
                          "multiplier": mult})
         if not rows:
             raise ValueError("無有效個股期貨標的")
-        out = pd.DataFrame(rows).drop_duplicates(subset=["stock_id"]).reset_index(drop=True)
+        # 同一檔可能同時有標準型(2000)與小型(100)契約 → 保留 (代號, 乘數) 兩列,
+        # 別 dedup 成一列,否則高價股的小型契約資訊會遺失
+        out = pd.DataFrame(rows).drop_duplicates(subset=["stock_id", "multiplier"]).reset_index(drop=True)
         out.to_parquet(path_for("stock_futures"))
-        print(f"   -> 個股期貨標的快取完成 ({len(out)} 檔)")
+        _n_small = int((out["multiplier"] == 100).sum())
+        print(f"   -> 個股期貨標的快取完成 ({out['stock_id'].nunique()} 檔 / {len(out)} 契約,含小型 {_n_small})")
         cleanup_old_cache("stock_futures")
     except Exception as e:
         print(f"   !!! 個股期貨清單抓取失敗: {e}")
