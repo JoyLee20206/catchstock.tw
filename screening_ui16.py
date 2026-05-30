@@ -114,6 +114,12 @@ VERDICT_STYLE = {
 }
 
 
+# 乖離率「過熱黃燈」門檻(%)— 個股波動比大盤大,故比大盤位階的 ±8% 寬。
+# 進場節奏 pill 與選股結果表共用同一組門檻(避免兩處數字不一致)。
+BIAS_MA20_HOT = 12.0   # 股價高於 MA20 超過此 % → 短中期延伸過大
+BIAS_MA60_HOT = 20.0   # 股價高於季線 MA60 超過此 % → 中期追高風險
+
+
 def render_verdict_pill(verdict: str, reason: str = "") -> None:
     """渲染進場節奏 pill(用 markdown HTML)。
     reason:選填,顯示在標籤後(例「乖離季線 +22%」),讓使用者知道為何黃燈/綠燈。"""
@@ -1063,6 +1069,44 @@ def _load_latest_close_map():
         d = pd.read_parquet(files[-1], columns=["stock_id", "date", "close"])
         d = d.sort_values("date").drop_duplicates("stock_id", keep="last")
         return {str(r.stock_id): float(r.close) for r in d.itertuples() if pd.notna(r.close)}
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_bias_map(cache_key: str):
+    """從 daily 快取算每檔的乖離率 → {stock_id: {"bias20","bias60","hot"}}。
+    bias20 = (最新收盤 − MA20)/MA20×100;bias60 同理用季線 MA60(資料不足 60 筆則 None)。
+    hot = 乖離過熱(MA20>BIAS_MA20_HOT 或 季線>BIAS_MA60_HOT)→ 選股表標 🟡 避免追高。
+    cache_key 傳 daily 日期字串,日期一變自動重算。"""
+    try:
+        files = sorted(CACHE_DIR.glob("daily_*.parquet"))
+        if not files:
+            return {}
+        d = pd.read_parquet(files[-1], columns=["stock_id", "date", "close"])
+        if d.empty:
+            return {}
+        d["stock_id"] = d["stock_id"].astype(str)
+        d = d.drop_duplicates(subset=["date", "stock_id"], keep="last")
+        close = d.pivot(index="date", columns="stock_id", values="close").sort_index()
+        ma20 = close.tail(20).mean()                      # 各股近 20 日均價(Series,index=stock_id)
+        ma60 = close.tail(60).mean() if len(close) >= 60 else None
+        latest = close.ffill().iloc[-1]                   # 各股最新收盤(補洞避免最後一日缺值)
+        out = {}
+        for sid in close.columns:
+            lt, m20 = latest.get(sid), ma20.get(sid)
+            if pd.isna(lt) or pd.isna(m20) or m20 <= 0:
+                continue
+            b20 = (lt - m20) / m20 * 100
+            b60 = None
+            if ma60 is not None:
+                m60 = ma60.get(sid)
+                if pd.notna(m60) and m60 > 0:
+                    b60 = (lt - m60) / m60 * 100
+            hot = (b20 > BIAS_MA20_HOT) or (b60 is not None and b60 > BIAS_MA60_HOT)
+            out[str(sid)] = {"bias20": round(b20, 1),
+                             "bias60": (round(b60, 1) if b60 is not None else None),
+                             "hot": bool(hot)}
+        return out
     except Exception:
         return {}
 
@@ -3600,7 +3644,25 @@ with col_list:
             st.caption(f"📊 達標股皆為 **{score_min} 分**(同分,免用分數篩選)")
             selected_industries = st.multiselect("產業篩選", industries, default=industries)
 
-        filtered = df[(df['總分'] >= score_threshold) & (df['產業'].isin(selected_industries))]
+        filtered = df[(df['總分'] >= score_threshold) & (df['產業'].isin(selected_industries))].copy()
+
+        # 🚦 乖離煞車:標出離均線過遠(追高風險)的標的,可一鍵排除(#3 過熱/估值煞車的清單版)
+        _daily_files = sorted(CACHE_DIR.glob("daily_*.parquet"))
+        _bias_map = _load_bias_map(_daily_files[-1].stem if _daily_files else "none")
+        if _bias_map and not filtered.empty:
+            _codes = filtered['代號'].astype(str)
+            filtered['乖離MA20%'] = _codes.map(lambda c: _bias_map.get(c, {}).get('bias20'))
+            filtered['乖離季線%'] = _codes.map(lambda c: _bias_map.get(c, {}).get('bias60'))
+            filtered['過熱'] = _codes.map(lambda c: '🟡' if _bias_map.get(c, {}).get('hot') else '')
+            _n_hot = int((filtered['過熱'] == '🟡').sum())
+            if _n_hot:
+                if st.checkbox(
+                    f"🚦 排除過熱標的(乖離高、追高風險)— 目前 {_n_hot}/{len(filtered)} 檔",
+                    value=False, key="_excl_hot",
+                    help=f"乖離 MA20 > {BIAS_MA20_HOT:.0f}% 或 季線 > {BIAS_MA60_HOT:.0f}% 標 🟡;勾選後從清單與複製碼移除",
+                ):
+                    filtered = filtered[filtered['過熱'] != '🟡']
+        filtered = filtered.reset_index(drop=True)
         event = st.dataframe(filtered, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
 
         st.divider()
@@ -3655,7 +3717,7 @@ with col_chart:
         #   🔵 觀察     — 其他(訊號模糊、跌破 MA20/MA60、新股資料不足)
         # 乖離煞車(#3 過熱/估值煞車):股價離均線太遠 → 追高風險高,即使 K/漲幅未過熱也黃燈。
         #   門檻(標準):MA20 乖離 > 12% 或 MA60(季線)乖離 > 20%。個股波動大,故比大盤的 ±8% 寬。
-        BIAS20_HOT, BIAS60_HOT = 12.0, 20.0
+        BIAS20_HOT, BIAS60_HOT = BIAS_MA20_HOT, BIAS_MA60_HOT   # 與選股結果表共用模組常數
         _hist_quick = _cached_stock_history(sid)
         _verdict_quick = None
         _verdict_reason = ""
