@@ -692,9 +692,10 @@ with st.sidebar:
 * **預設**:最通用,平常就用這個。
 * **多頭寬鬆**:大盤明顯在漲時用 → 條件放寬,才不會漏掉剛起漲的股。
 * **空頭嚴格**:大盤在跌/亂時用 → 條件變嚴,只挑最強、最抗跌的股。
-* **KD 起漲**:專找「剛從低點翻揚」的股,適合抓跌深反彈。
+* **低檔發動**:**抄底向**,跟上面三個「追強勢」相反。專找「KD 從**很深的超賣**剛翻揚、而且**今日還在低檔**(還沒漲上去)」的股,並把門檻降到 5(底部股通常還沒突破、沒 RS 等動能分數,門檻太高會被濾掉)。適合抓**跌深翻揚的轉折**。
+    > ⚠️ 抄底天生勝率較低、容易接刀子 → **進場要等帶量紅K確認、嚴設停損**;用「🔬 訊號回測」先驗證有沒有 edge 再實戰。
 
-> 💡 小白就先用「預設」,熟了再依大盤多空切換。
+> 💡 小白就先用「預設」,熟了再依大盤多空切換;想找轉折再用「低檔發動」。
 
 ---
 
@@ -731,7 +732,9 @@ with st.sidebar:
     st.button("預設",     on_click=apply_preset, args=('default',),   use_container_width=True)
     st.button("多頭寬鬆", on_click=apply_preset, args=('bull',),      use_container_width=True)
     st.button("空頭嚴格", on_click=apply_preset, args=('bear',),      use_container_width=True)
-    st.button("KD 起漲",  on_click=apply_preset, args=('kd_start',),  use_container_width=True)
+    st.button("低檔發動", on_click=apply_preset, args=('low_launch',), use_container_width=True,
+              help="抄底向:找 KD 從深超賣剛翻揚、今日仍在低檔(還沒漲上去)的股;門檻降到 5。"
+                   "與其他偏追強勢的組合互補,先用訊號回測驗證再用。")
 
     st.divider()
     st.subheader("📌 核心 / KD")
