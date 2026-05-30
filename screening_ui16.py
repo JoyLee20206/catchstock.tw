@@ -1564,6 +1564,10 @@ with _tab_perf:
                 st.divider()
 
             # 各持有期詳細指標(收進 expander,預設收起;標題即帶關鍵數字)
+            # 風險指標(回檔/夏普/波動)用「每入選日平均報酬」序列算,點數 = risk_n。
+            # 點數太少時,這幾項會出現「回檔 0.00% / 夏普飆到兩位數」這種小樣本假象
+            # (全多頭、重疊窗口、年化係數放大),故 < RISK_MIN_N 時不顯示精確值,改標「樣本不足」。
+            RISK_MIN_N = 20
             st.markdown("**📂 各持有期詳細指標**(點開看賺賠結構與風險面)")
             for n_days in (3, 5, 10, 20):
                 key_n = f"n_{n_days}d"
@@ -1573,8 +1577,10 @@ with _tab_perf:
                 _wr  = overall.get(f"win_rate_{n_days}d", 0) * 100
                 _exp = overall.get(f"net_expectancy_{n_days}d", 0)
                 _shp = overall.get(f"sharpe_{n_days}d", 0)
+                _risk_n_hdr = overall.get(f"risk_n_{n_days}d", 0)
+                _shp_str = f"{_shp:.2f}" if _risk_n_hdr >= RISK_MIN_N else "—"
                 _label = (f"入選後 {n_days} 日　勝率 {_wr:.0f}% ｜ 淨期望值 {_exp:+.2f}% "
-                          f"｜ 夏普 {_shp:.2f} ｜ 樣本 {overall[key_n]} 筆")
+                          f"｜ 夏普 {_shp_str} ｜ 樣本 {overall[key_n]} 筆")
                 with st.expander(_label, expanded=False):
                     # 第一排:報酬
                     m_cols = st.columns(4)
@@ -1608,21 +1614,35 @@ with _tab_perf:
                         mdd = overall.get(f"mdd_{n_days}d", 0)
                         std = overall.get(f"std_{n_days}d", 0)
                         risk_n = overall.get(f"risk_n_{n_days}d", 0)
-                        m3[0].metric("最大回檔", f"{mdd:.2f}%", delta_color="off",
-                                     help="以每入選日平均報酬串成的資金曲線,從高點到低點最大跌幅。越接近 0 越穩")
-                        m3[1].metric("夏普值", f"{_shp:.2f}", delta_color="off",
-                                     help="風險調整後報酬(年化)。>1 不錯,>2 很好,>3 極佳")
-                        m3[2].metric("報酬波動(標準差)", f"{std:.2f}%", delta_color="off",
+                        _enough = risk_n >= RISK_MIN_N   # 風險序列點數足夠才顯示精確值
+                        _na = "樣本不足"
+                        m3[0].metric("最大回檔", f"{mdd:.2f}%" if _enough else _na,
+                                     delta_color="off",
+                                     help="以每入選日平均報酬串成的資金曲線,從高點到低點最大跌幅。越接近 0 越穩"
+                                          "(點數太少時全多頭易出現假性 0%,故暫不顯示)")
+                        m3[1].metric("夏普值", f"{_shp:.2f}" if _enough else _na,
+                                     delta_color="off",
+                                     help="風險調整後報酬(年化)。>1 不錯,>2 很好,>3 極佳"
+                                          "(點數太少時年化係數會把數字灌大到失真,故暫不顯示)")
+                        m3[2].metric("報酬波動(標準差)", f"{std:.2f}%" if _enough else _na,
+                                     delta_color="off",
                                      help="每日平均報酬的起伏程度,越大代表越不穩定")
                         min_ret = overall.get(f"min_return_{n_days}d")
                         if min_ret is not None:
                             m3[3].metric("最差單筆", f"{min_ret:+.2f}%", delta_color="off",
                                          help="這個持有期裡,賠最多的那一筆(逐筆,非每日平均)")
-                        st.caption(
-                            f"⚖️ 風險指標(回檔/夏普/波動)以**每入選日平均報酬**計算"
-                            f"(共 {risk_n} 個交易日),已避開「逐筆+重疊窗口」的灌水,"
-                            f"口徑與上方「vs 大盤」走勢圖一致。"
-                        )
+                        if _enough:
+                            st.caption(
+                                f"⚖️ 風險指標(回檔/夏普/波動)以**每入選日平均報酬**計算"
+                                f"(共 {risk_n} 個交易日),已避開「逐筆+重疊窗口」的灌水,"
+                                f"口徑與上方「vs 大盤」走勢圖一致。"
+                            )
+                        else:
+                            st.caption(
+                                f"⚠️ 風險指標需 ≥ {RISK_MIN_N} 個入選日才顯示;目前僅 **{risk_n} 天**。"
+                                f"樣本太少時會出現「回檔假性 0% / 夏普被年化灌大」的失真"
+                                f"(尤其全在多頭時),故暫標「樣本不足」,先看勝率/淨期望值/損益比即可。"
+                            )
 
             # ── 📊 系統 picks vs 大盤 後續報酬對照 ─────────────────────────
             # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。
