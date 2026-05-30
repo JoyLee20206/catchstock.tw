@@ -43,6 +43,12 @@ SIGNAL_LABELS = {
     "ma_golden_cross":   "MA 黃金交叉(MA20 上穿 MA60)",
     # ── Tier C ❌ 效果不顯著(待驗證) ──
     "kd_cross":          "KD 低檔金叉",
+    # ── Tier R 🔄 反轉/抄底(實驗,需自行回測驗證 edge) ──
+    # 與上方「追強勢」訊號方向相反:在價弱/跌深時找轉折,勝率天生較低、務必嚴設停損。
+    # 另:資減券增(margin_squeeze)、籌碼共振散戶↓(resonance)本身也偏底部,可搭配。
+    "washout_bounce":      "跌深量縮後帶量翻揚",
+    "kd_bull_divergence":  "KD 低檔背離(價創低、KD 沒破)",
+    "chip_accumulation":   "大戶逆勢增持(低檔吃貨)",
     # ── 已移除:ma20_pullback (葛蘭碧 2,實證無 alpha);detect_ma20_pullback_signals 函式保留 orphan ──
 }
 
@@ -193,6 +199,42 @@ def _load_retail_pct_matrix(cache_dir):
         return retail.pivot(index='date', columns='stock_id', values='percent')
     except Exception as e:
         print(f"⚠ 讀取散戶 matrix 失敗: {e}")
+        return None
+
+
+# TDCC HoldingSharesLevel:12=400,001~600,000 股;13/14=~100 萬;15=100 萬股以上(= 400 張以上大戶)
+# 與 screening0515.LARGE_HOLDER_LEVELS 同步,確保「大戶」定義一致
+LARGE_HOLDER_LEVELS = [12, 13, 14, 15]
+
+
+def _load_large_holder_pct_matrix(cache_dir):
+    """讀 holders parquet,組成「每週各股『大戶(400 張以上)』合計持股率 %」pivot。
+
+    大戶% = HoldingSharesLevel ∈ [12,13,14,15] 的 percent 加總(每股每週)。
+    用於「大戶逆勢增持」訊號:大戶% 週對週上升 = 主力在吃貨。
+    """
+    try:
+        files = sorted(cache_dir.glob('holders_*.parquet'))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        if df.empty or 'HoldingSharesLevel' not in df.columns:
+            return None
+        df['date']     = pd.to_datetime(df['date'])
+        df['stock_id'] = df['stock_id'].astype(str)
+        df['HoldingSharesLevel'] = pd.to_numeric(df['HoldingSharesLevel'], errors='coerce')
+        df['percent']  = pd.to_numeric(
+            df['percent'].astype(str).str.replace('%', '', regex=False).str.strip(),
+            errors='coerce'
+        )
+        df = df.dropna(subset=['percent', 'HoldingSharesLevel'])
+        large = df[df['HoldingSharesLevel'].isin(LARGE_HOLDER_LEVELS)]
+        if large.empty:
+            return None
+        agg = large.groupby(['date', 'stock_id'], as_index=False)['percent'].sum()
+        return agg.pivot(index='date', columns='stock_id', values='percent')
+    except Exception as e:
+        print(f"⚠ 讀取大戶 matrix 失敗: {e}")
         return None
 
 
@@ -557,6 +599,91 @@ def detect_kd_cross_signals(matrices):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Tier R:反轉/抄底訊號(找「低檔即將起漲」,與追強勢方向相反)
+# ══════════════════════════════════════════════════════════════════════
+def detect_washout_bounce_signals(matrices,
+                                  quiet_days: int = 5, quiet_ratio: float = 0.8,
+                                  surge_ratio: float = 1.5):
+    """跌深量縮後帶量翻揚(washout bounce):賣壓耗盡 → 第一根帶量紅K 起漲。
+
+    三條件同時成立:
+    1. 跌深/中期偏弱:今日 close < MA60(站在季線之下)
+    2. 量縮築底:前 quiet_days 日(不含今日)平均量 < MA20量 × quiet_ratio(賣壓耗盡)
+    3. 今日帶量翻揚:今日量 > MA20量 × surge_ratio,且今日紅K(close > open;無 open 則用 close > 昨收)
+
+    意義:跌深後沒人想賣了(量縮),突然一根帶量紅K = 買方回頭,常是反轉起點。
+    Returns: DataFrame index=date, columns=stock_id, values=bool
+    """
+    close = matrices['close']
+    vol   = matrices['volume']
+    open_ = matrices.get('open')
+
+    ma60     = close.rolling(60, min_periods=60).mean()
+    vol_ma20 = vol.rolling(20, min_periods=20).mean()
+
+    below_ma60 = close < ma60
+    # 前 quiet_days 日(shift(1) 排除今日)平均量偏低 = 量縮築底
+    prior_avg_vol = vol.shift(1).rolling(quiet_days, min_periods=quiet_days).mean()
+    quiet = prior_avg_vol < vol_ma20 * quiet_ratio
+    # 今日帶量
+    vol_surge = vol > vol_ma20 * surge_ratio
+    # 今日紅K(優先用開盤;無開盤資料則退回「今日收 > 昨收」)
+    if open_ is not None:
+        red_k = (close > open_) & (close > close.shift(1))
+    else:
+        red_k = close > close.shift(1)
+
+    sig = below_ma60 & quiet & vol_surge & red_k
+    return sig.fillna(False) & ma60.notna() & vol_ma20.notna()
+
+
+def detect_kd_bull_divergence_signals(matrices, window: int = 12, low_zone: float = 40.0):
+    """KD 低檔背離(bullish divergence):價格還在破底,但 KD 沒跟著破 → 下跌動能衰竭。
+
+    條件(向量化近似,window 日前為比較基準):
+    1. 價更低:close < window 日前的 close(仍在破底)
+    2. KD 沒更低:今日 K > window 日前的 K(動能背離,higher low)
+    3. 低檔區:今日 K < low_zone(確保是「底部」背離,不是高檔)
+
+    意義:價格新低但指標不再新低 = 賣壓邊際遞減,常領先價格落底翻揚。
+    Returns: DataFrame index=date, columns=stock_id, values=bool
+    """
+    K, _ = _calc_kd_matrix(matrices)
+    close = matrices['close']
+
+    price_lower = close < close.shift(window)
+    kd_higher   = K > K.shift(window)
+    in_low_zone = K < low_zone
+
+    sig = price_lower & kd_higher & in_low_zone
+    return sig.fillna(False) & K.notna() & K.shift(window).notna()
+
+
+def detect_chip_accumulation_signals(matrices, large_matrix, min_weekly_rise: float = 0.05):
+    """大戶逆勢增持(低檔吃貨):大戶持股率上升,但股價還沒漲上去。
+
+    條件:
+    1. 大戶% 週對週上升 > min_weekly_rise(主力在吃貨)
+    2. 今日 close < MA20(股價還在低檔/沒起漲 → 是「逆勢吃貨」而非追高)
+
+    holders 是週資料 → 把週訊號 ffill 延伸到該週每個交易日(同 detect_resonance_signals)。
+    意義:底部最可靠的領先訊號是「價平/價跌但籌碼在集中」,聰明錢常先price 一步動。
+    Returns: DataFrame index=date, columns=stock_id, values=bool
+    """
+    close = matrices['close']
+    if large_matrix is None:
+        return pd.DataFrame(False, index=close.index, columns=close.columns)
+    delta = large_matrix.diff()               # 週對週大戶%變化
+    accumulating = delta > min_weekly_rise    # 大戶逆勢增持(週)
+    daily = accumulating.reindex(
+        index=close.index, columns=close.columns, method='ffill'
+    ).fillna(False).astype(bool)
+    ma20 = close.rolling(20, min_periods=20).mean()
+    weak = (close < ma20).fillna(False)       # 股價還沒起漲(低檔)
+    return daily & weak
+
+
+# ══════════════════════════════════════════════════════════════════════
 # 多訊號合併
 # ══════════════════════════════════════════════════════════════════════
 def combine_signals(sig_dict: dict, selected: list, mode: str = "and") -> pd.DataFrame:
@@ -739,6 +866,7 @@ def build_signal_matrices(cache_dir) -> dict:
     it_matrix     = _load_it_net_matrix(cache_dir)
     dealer_matrix = _load_dealer_net_matrix(cache_dir)
     retail_matrix = _load_retail_pct_matrix(cache_dir)
+    large_matrix  = _load_large_holder_pct_matrix(cache_dir)
     margin_mats   = _load_margin_matrices(cache_dir)
     double_red_matrix = _load_double_red_revenue_matrix(
         cache_dir, matrices['close'].index, matrices['close'].columns
@@ -757,6 +885,10 @@ def build_signal_matrices(cache_dir) -> dict:
         "quality_breakout": detect_quality_breakout_signals(matrices, _breakout),
         "ma_golden_cross":  detect_ma_golden_cross_signals(matrices),
         "kd_cross":         detect_kd_cross_signals(matrices),
+        # Tier R 反轉/抄底
+        "washout_bounce":      detect_washout_bounce_signals(matrices),
+        "kd_bull_divergence":  detect_kd_bull_divergence_signals(matrices),
+        "chip_accumulation":   detect_chip_accumulation_signals(matrices, large_matrix),
     }
     return {
         "matrices":     matrices,
