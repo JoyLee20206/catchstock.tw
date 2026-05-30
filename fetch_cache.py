@@ -137,6 +137,35 @@ def _fallback_prev_to_today(name):
         print(f"   [墊檔失敗] {name}: {e}")
         return False
 
+def _should_skip_weekly(name, weekday=5, min_days=6, catch_up_days=9):
+    """週更類快取的閘門(適用變動很少的資料:個股期貨清單、台指期保證金)。
+
+    更新時機鎖定「**每逢週六、且距上次抓 ≥ min_days 天**」;另加過期補抓安全網。
+    規則(回 True=略過、False=要抓),依序判斷:
+      - 沒有任何舊檔 → 抓(初次建檔,不等週六)
+      - 檔齡 ≥ catch_up_days(預設 9 天)→ **任一天都補抓**(漏了週六、資料太舊的安全網,連 FORCE 也補)
+      - FORCE 且檔還不算太舊 → 略過(force 不為這類變動少的資料多打 TAIFEX)
+      - 今天是週六 且 檔齡 ≥ min_days → 抓(正常每週更新)
+      - 其餘(非週六 / 太近)→ 略過
+    weekday: 0=Mon … 5=Sat … 6=Sun(datetime.weekday())。
+    """
+    files = sorted(CACHE_DIR.glob(f"{name}_*.parquet"))
+    if not files:
+        return False     # 無檔 → 一定要抓(初次建檔不等週六)
+    try:
+        date_str = files[-1].name[len(name) + 1:].replace(".parquet", "")  # name_ 前綴後即日期
+        file_date = datetime.strptime(date_str, "%Y-%m-%d")
+        age = (datetime.now(TPE_TZ).replace(tzinfo=None) - file_date).days
+    except Exception:
+        return False     # 檔名解析失敗 → 保守起見照抓
+    if age >= catch_up_days:
+        return False     # 過期補抓:太舊就任一天補抓(漏週六的安全網)
+    if FORCE:
+        return True      # FORCE 且還不算太舊 → 略過
+    if datetime.now(TPE_TZ).weekday() == weekday and age >= min_days:
+        return False     # 正常:週六且夠久 → 抓
+    return True          # 非週六 / 太近 → 略過
+
 def _trim_by_retention(df, label=""):
     """依 CACHE_RETAIN_DAYS 截斷 DataFrame,只保留 cutoff 日期之後的 row。
     df 必須有 'date' 欄 (字串格式 'YYYY-MM-DD')。
@@ -1345,6 +1374,8 @@ fetch_vix_daily()
 def fetch_taifex_stock_futures():
     if not need_fetch("stock_futures"):
         print("[stock_futures] 個股期貨清單已有今日快取,略過"); return
+    if _should_skip_weekly("stock_futures"):
+        print("[stock_futures] 非更新時機,略過(標的清單變動少,固定每週六更新)"); return
     print("[stock_futures] 抓取 TAIFEX 個股期貨標的清單...")
     try:
         headers = random.choice(HTTP_HEADERS_POOL).copy()
@@ -1408,6 +1439,8 @@ fetch_taifex_stock_futures()
 def fetch_taifex_index_margin():
     if not need_fetch("idx_margin"):
         print("[idx_margin] 台指期保證金已有今日快取,略過"); return
+    if _should_skip_weekly("idx_margin"):
+        print("[idx_margin] 非更新時機,略過(保證金一年僅調整數次,固定每週六更新)"); return
     print("[idx_margin] 抓取 TAIFEX 台指期保證金...")
     try:
         headers = random.choice(HTTP_HEADERS_POOL).copy()
