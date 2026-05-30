@@ -956,12 +956,13 @@ _rotation = _load_industry_rotation_cached()
 
 # ── 4 個分析區塊改用 Tabs 並排,省直向空間 ──
 # 「熱度榜 + 產業輪動」同屬「近期趨勢觀察」(個股層級 vs 產業層級),合併同頁。
-_tab_trend, _tab_perf, _tab_bt, _tab_sent, _tab_margin = st.tabs([
+_tab_trend, _tab_perf, _tab_bt, _tab_sent, _tab_margin, _tab_alloc = st.tabs([
     f"🔥 熱度 & 輪動(近{HOT_WINDOW}日)",
     "📊 策略績效",
     "🔬 訊號回測",
     "🌡️ 大盤情緒",
     "🧮 期貨保證金",
+    "💰 資金配置",
 ])
 
 # ── 🧮 期貨保證金分頁(個股期貨) ──────────────────────────────────────────
@@ -1119,6 +1120,122 @@ with _tab_margin:
                     f"槓桿約 **{_lev:.1f} 倍**——比個股期貨高很多,指數動 1% 對本金影響放大約 {_lev:.0f}%。務必嚴設停損。"
                 )
                 st.caption("⚠️ 保證金金額由期交所依波動定期調整,本頁取自 TAIFEX 最新快取;實際以期交所公告為準。")
+
+# ── 💰 資金配置(把今日達標股 → 各買多少) ────────────────────────────────
+with _tab_alloc:
+    st.caption(
+        "回答「**各買多少**」:依「每筆固定風險 %」反推建議張數(停損用 ATR),"
+        "並控管**單檔 / 單一產業集中度**。把選股清單變成可執行的部位配置。"
+    )
+    if df is None or df.empty:
+        st.info("先按左側「開始選股」產生今日達標清單,才能做資金配置。")
+    else:
+        _ac = st.columns(5)
+        _cap   = _ac[0].number_input("總資金(元)", min_value=10000, value=1_000_000,
+                                     step=100_000, key="_alloc_cap")
+        _risk  = _ac[1].number_input("單筆風險 %", min_value=0.1, max_value=10.0, value=1.5,
+                                     step=0.1, key="_alloc_risk",
+                                     help="每檔若觸及停損,最多虧總資金的這個 %(專業常用 1~2%)")
+        _atrm  = _ac[2].number_input("停損 ATR 倍數", min_value=0.5, max_value=6.0, value=2.0,
+                                     step=0.5, key="_alloc_atr",
+                                     help="停損幅度 = ATR% × 倍數;停損價 = 現價 ×(1 − 停損幅度)")
+        _pcap  = _ac[3].number_input("單檔上限 %", min_value=1, max_value=100, value=20,
+                                     step=5, key="_alloc_pcap", help="單一個股投入上限(佔總資金)")
+        _icap  = _ac[4].number_input("單一產業上限 %", min_value=5, max_value=100, value=40,
+                                     step=5, key="_alloc_icap", help="同產業合計投入上限;超標自動等比例縮減")
+
+        _smin, _smax = int(df['總分'].min()), int(df['總分'].max())
+        _minscore = st.slider("只配置總分 ≥", _smin, _smax, _smin) if _smin != _smax else _smin
+        _fb_stop  = st.number_input("ATR 缺值時的預設停損 %", min_value=1.0, max_value=30.0,
+                                    value=8.0, step=0.5, key="_alloc_fbstop")
+
+        _work = df[df['總分'] >= _minscore].copy()
+        _risk_budget = _cap * _risk / 100.0
+        _single_cap  = _cap * _pcap / 100.0
+        _ind_cap     = _cap * _icap / 100.0
+
+        # 1) 逐檔:風險反推投入(受單檔上限)
+        _rows = []
+        for _, r in _work.iterrows():
+            _price = r.get('現價')
+            if _price is None or pd.isna(_price) or _price <= 0:
+                continue
+            _atr = r.get('ATR%')
+            _stop_pct = (_atrm * _atr) if (_atr is not None and pd.notna(_atr) and _atr > 0) else _fb_stop
+            _stop_pct = max(float(_stop_pct), 0.5)
+            _invest = min(_risk_budget / (_stop_pct / 100.0), _single_cap)
+            _rows.append({"代號": str(r['代號']), "名稱": r.get('名稱', ''),
+                          "產業": (r.get('產業') or '其他'), "price": float(_price),
+                          "stop_pct": _stop_pct, "invest": _invest})
+
+        if not _rows:
+            st.warning("沒有可配置的標的(可能現價缺失,或都低於設定總分)。")
+        else:
+            # 2) 產業上限:超標的產業等比例縮減
+            _ind_tot = {}
+            for x in _rows:
+                _ind_tot[x["產業"]] = _ind_tot.get(x["產業"], 0) + x["invest"]
+            _over = {k: v for k, v in _ind_tot.items() if v > _ind_cap}
+            for x in _rows:
+                if x["產業"] in _over:
+                    x["invest"] *= _ind_cap / _ind_tot[x["產業"]]
+
+            # 3) 轉張數(台股 1 張 = 1000 股)+ 實際金額/風險
+            _out = []
+            for x in _rows:
+                _lots = int(x["invest"] // (x["price"] * 1000))
+                _actual = _lots * x["price"] * 1000
+                _out.append({**x, "lots": _lots, "actual": _actual,
+                             "risk_amt": _actual * x["stop_pct"] / 100.0,
+                             "stop_price": x["price"] * (1 - x["stop_pct"] / 100.0)})
+
+            _placed = [o for o in _out if o["lots"] >= 1]
+            _skipped = [o for o in _out if o["lots"] < 1]
+
+            # ── 摘要 ──
+            _tot_invest = sum(o["actual"] for o in _placed)
+            _tot_risk   = sum(o["risk_amt"] for o in _placed)
+            _m = st.columns(4)
+            _m[0].metric("建議檔數", f"{len(_placed)} 檔")
+            _m[1].metric("總投入", f"{_tot_invest:,.0f}", f"{_tot_invest/_cap*100:.0f}% 資金")
+            _m[2].metric("保留現金", f"{_cap - _tot_invest:,.0f}", f"{(_cap-_tot_invest)/_cap*100:.0f}%")
+            _m[3].metric("總風險暴露", f"{_tot_risk:,.0f}",
+                         f"全停損虧 {_tot_risk/_cap*100:.1f}%", delta_color="off")
+
+            if _placed:
+                _disp = pd.DataFrame([{
+                    "代號": o["代號"], "名稱": o["名稱"], "產業": o["產業"],
+                    "現價": f"{o['price']:,.2f}", "停損價": f"{o['stop_price']:,.2f}",
+                    "建議張數": o["lots"], "投入金額": f"{o['actual']:,.0f}",
+                    "佔資金%": f"{o['actual']/_cap*100:.1f}%",
+                    "該筆風險": f"{o['risk_amt']:,.0f}",
+                } for o in sorted(_placed, key=lambda z: z["actual"], reverse=True)])
+                st.dataframe(_disp, use_container_width=True, hide_index=True)
+
+            # 產業佔比 + 超標提示
+            _ind_final = {}
+            for o in _placed:
+                _ind_final[o["產業"]] = _ind_final.get(o["產業"], 0) + o["actual"]
+            if _ind_final:
+                _ind_line = " ｜ ".join(
+                    f"{k} {v/_cap*100:.0f}%" for k, v in
+                    sorted(_ind_final.items(), key=lambda z: z[1], reverse=True))
+                st.caption(f"🏭 產業佔比:{_ind_line}")
+                if _over:
+                    st.caption(f"⚠️ 已自動把超過 {_icap}% 上限的產業({', '.join(_over)})等比例縮減。")
+
+            if _skipped:
+                st.caption(
+                    f"ℹ️ {len(_skipped)} 檔因「風險預算買不到 1 張」未列入"
+                    f"(高價股或停損太寬):{', '.join(o['代號'] for o in _skipped[:8])}"
+                    + ("…" if len(_skipped) > 8 else "")
+                    + "。可調高單筆風險% 或單檔上限,或改用零股/個股期貨。"
+                )
+
+            st.caption(
+                "⚠️ 這是**風險基礎部位試算**(每檔虧到停損 ≈ 固定風險%),非投資建議。"
+                "實際下單請自行確認停損紀律;ATR 停損僅為機械式參考。"
+            )
 
 with _tab_trend:
     # ── 🔥 入選熱度榜(個股層級) ──
