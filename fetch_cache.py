@@ -1435,6 +1435,87 @@ fetch_taifex_stock_futures()
 
 
 # ==========================================
+# [4d-2] 個股期貨「逐檔保證金適用比例」(給 UI 自動帶入,免手動)
+# ==========================================
+# 來源:TAIFEX 股票期貨保證金 CSV(/cht/5/stockMarginingDown,Big5/cp950 編碼)。
+# 提供每檔的「原始/維持保證金適用比例 + 保證金所屬級距」——級距1=13.5%、級距2=16.2%、
+# 級距3=20.25%、特殊更高。原本 UI 對每檔都套固定 13.5%,只有級距1對得上;有了這份就 100% 對齊官網。
+# 變動很少(隨個股風險分級不定期調整)→ 與標的清單同步,固定每週六更新。
+# 非關鍵資料 → 任何失敗只墊舊檔 / 略過(隔離請求,不動全域熔斷器)。
+def fetch_taifex_stock_margin():
+    if not need_fetch("stock_margin"):
+        print("[stock_margin] 個股期貨保證金比例已有今日快取,略過"); return
+    if _should_skip_weekly("stock_margin"):
+        print("[stock_margin] 非更新時機,略過(比例變動少,固定每週六更新)"); return
+    print("[stock_margin] 抓取 TAIFEX 個股期貨保證金適用比例 CSV...")
+    try:
+        headers = random.choice(HTTP_HEADERS_POOL).copy()
+        resp = SESSION.get("https://www.taifex.com.tw/cht/5/stockMarginingDown",
+                           headers=headers, timeout=25, verify=False)
+        if resp.status_code != 200:
+            raise ValueError(f"HTTP {resp.status_code}")
+        # 官方 CSV 為 Big5(cp950);前幾行是標題/說明,真正欄位列含「原始保證金適用比例」
+        txt = resp.content.decode("cp950", errors="replace")
+        lines = txt.splitlines()
+        hdr_idx = next((i for i, l in enumerate(lines) if "原始保證金適用比例" in l), None)
+        if hdr_idx is None:
+            raise ValueError("找不到欄位標頭(TAIFEX 可能改版)")
+        df = pd.read_csv(StringIO("\n".join(lines[hdr_idx:])),
+                         engine="python", on_bad_lines="skip")
+        df.columns = [str(c).strip() for c in df.columns]
+
+        def find(*kws):
+            return next((c for c in df.columns if all(k in str(c) for k in kws)), None)
+
+        c_id    = find("標的證券代號") or find("標的", "代號")
+        c_name  = find("中文簡稱") or find("簡稱")
+        c_tier  = find("級距")
+        c_init  = find("原始", "比例")
+        c_maint = find("維持", "比例")
+        if not (c_id and c_init):
+            raise ValueError("欄位對應失敗(TAIFEX 可能改版)")
+
+        def _pct(v):
+            """'13.50%' → 13.5;無法解析回 None。"""
+            try:
+                return round(float(str(v).replace("%", "").replace(",", "").strip()), 4)
+            except (ValueError, TypeError):
+                return None
+
+        rows = []
+        for _, r in df.iterrows():
+            sid = str(r[c_id]).strip()
+            if not (sid.isdigit() and len(sid) == 4):
+                continue
+            init_rate = _pct(r[c_init])
+            # 保證金比例必為 1~100%;超出範圍 = 欄位錯位的雜訊(曾見 71000),跳過
+            if init_rate is None or not (1.0 <= init_rate <= 100.0):
+                continue
+            maint_rate = _pct(r[c_maint]) if c_maint else None
+            if maint_rate is not None and not (1.0 <= maint_rate <= 100.0):
+                maint_rate = None
+            rows.append({
+                "stock_id":   sid,
+                "name":       str(r[c_name]).strip() if c_name else "",
+                "tier":       str(r[c_tier]).strip() if c_tier else "",
+                "init_rate":  init_rate,
+                "maint_rate": maint_rate,
+            })
+        if not rows:
+            raise ValueError("無有效個股期貨保證金比例")
+        out = pd.DataFrame(rows).drop_duplicates(subset=["stock_id"], keep="last").reset_index(drop=True)
+        out.to_parquet(path_for("stock_margin"))
+        print(f"   -> 個股期貨保證金比例快取完成 ({len(out)} 檔)")
+        cleanup_old_cache("stock_margin")
+    except Exception as e:
+        print(f"   !!! 個股期貨保證金比例抓取失敗: {e}")
+        _fallback_prev_to_today("stock_margin")   # 墊舊檔,不影響主流程
+
+
+fetch_taifex_stock_margin()
+
+
+# ==========================================
 # [4e] 台指期保證金(大台/小台/微台,給「期貨保證金」分頁)
 # ==========================================
 # 來源:TAIFEX 指數類期貨保證金表(/cht/5/indexMarging)。金額由期交所依波動定期調整。

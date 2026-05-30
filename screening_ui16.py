@@ -982,8 +982,10 @@ _tab_trend, _tab_perf, _tab_bt, _tab_sent, _tab_margin, _tab_alloc = st.tabs([
 # ── 🧮 期貨保證金分頁(個股期貨) ──────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_stock_futures_map():
-    """讀 TAIFEX 個股期貨標的清單 → {stock_id: {"name", "mults": [乘數...]}}。
-    同一檔可能同時有標準型(2000)與小型(100)契約 → 收集所有乘數(升冪)。"""
+    """讀 TAIFEX 個股期貨標的清單 → {stock_id: {"name", "mults":[乘數...], "init_rate", "maint_rate", "tier"}}。
+    同一檔可能同時有標準型(2000)與小型(100)契約 → 收集所有乘數(升冪)。
+    另 merge 官方逐檔保證金適用比例(stock_margin 快取),供 UI 自動帶入正確比例;
+    無該快取時 init_rate/maint_rate/tier 為 None,UI 退回固定預設。"""
     try:
         files = sorted(CACHE_DIR.glob("stock_futures_*.parquet"))
         if not files:
@@ -994,11 +996,27 @@ def _load_stock_futures_map():
             sid = str(r["stock_id"])
             m = int(r.get("multiplier", 2000) or 2000)
             if sid not in out:
-                out[sid] = {"name": str(r.get("name", "")), "mults": []}
+                out[sid] = {"name": str(r.get("name", "")), "mults": [],
+                            "init_rate": None, "maint_rate": None, "tier": ""}
             if m not in out[sid]["mults"]:
                 out[sid]["mults"].append(m)
         for v in out.values():
             v["mults"].sort()
+        # merge 官方保證金比例(逐檔原始/維持/級距)
+        try:
+            mfiles = sorted(CACHE_DIR.glob("stock_margin_*.parquet"))
+            if mfiles:
+                df_m = pd.read_parquet(mfiles[-1])
+                for _, r in df_m.iterrows():
+                    sid = str(r["stock_id"])
+                    if sid in out:
+                        ir = r.get("init_rate")
+                        mr = r.get("maint_rate")
+                        out[sid]["init_rate"]  = float(ir) if pd.notna(ir) else None
+                        out[sid]["maint_rate"] = float(mr) if pd.notna(mr) else None
+                        out[sid]["tier"]       = str(r.get("tier", "") or "")
+        except Exception:
+            pass
         return out
     except Exception:
         return {}
@@ -1102,32 +1120,61 @@ with _tab_margin:
                     else:
                         _mult_in = int(_mults[0])
                         _p2.metric("契約乘數(股/口)", f"{_mult_in:,}")
+                    # 官方逐檔原始保證金比例(有 stock_margin 快取時自動帶入,否則退回 13.5)
+                    _off_init  = _info.get("init_rate")
+                    _off_maint = _info.get("maint_rate")
+                    _tier      = _info.get("tier") or ""
+                    _rate_default = float(_off_init) if _off_init else 13.5
+                    _rate_help = (
+                        f"已自動帶入 TAIFEX 官方比例({_tier}:{_off_init:.2f}%);可自行覆寫"
+                        if _off_init else
+                        "期交所依個股風險分級,常見 13.5% / 16.2% / 20.25%;"
+                        "(本檔暫無官方比例快取,使用預設 13.5%,請依該檔實際適用比例調整)"
+                    )
                     _rate_in = _p3.number_input(
-                        "原始保證金比例 %", min_value=1.0, max_value=100.0, value=13.5, step=0.05,
-                        key="_margin_rate",
-                        help="期交所依個股風險分級,常見 13.5% / 16.2% / 20.25%;請依該檔實際適用比例調整")
+                        "原始保證金比例 %", min_value=1.0, max_value=100.0,
+                        value=_rate_default, step=0.05,
+                        key=f"_margin_rate_{_sid_in}", help=_rate_help)
                     if _price_in > 0:
                         _contract_val = _price_in * _mult_in * _lots
                         _init_margin  = _contract_val * _rate_in / 100
-                        _maint_margin = _init_margin * 0.767
+                        # 維持保證金:使用者沒改原始比例 → 直接套官方維持比例;改過 → 用官方維持/原始的比值,
+                        # 都沒有官方資料才退回 ~0.767 估算
+                        if _off_maint and _off_init:
+                            if abs(_rate_in - _off_init) < 1e-6:
+                                _maint_margin = _contract_val * _off_maint / 100
+                            else:
+                                _maint_margin = _init_margin * (_off_maint / _off_init)
+                        else:
+                            _maint_margin = _init_margin * 0.767
                         _leverage     = 100 / _rate_in
                         st.divider()
                         st.markdown(f"#### {_sid_in} {_nm}　{_lots} 口 × {_mult_in:,} 股 @ {_price_in:,.2f}")
                         _r = st.columns(4)
                         _r[0].metric("契約總值", f"{_contract_val:,.0f}", help="= 買等量現股要花的錢(元)")
                         _r[1].metric("原始保證金", f"{_init_margin:,.0f}", help="進場需準備的保證金(元)")
-                        _r[2].metric("維持保證金", f"{_maint_margin:,.0f}",
-                                     help="低於此值會被追繳;約為原始的 ~77%(各風險級接近)")
+                        _maint_help = (f"低於此值會被追繳;官方維持比例 {_off_maint:.2f}%"
+                                       if _off_maint else "低於此值會被追繳;約為原始的 ~77%(各風險級接近)")
+                        _r[2].metric("維持保證金", f"{_maint_margin:,.0f}", help=_maint_help)
                         _r[3].metric("槓桿倍數", f"{_leverage:.1f} 倍", help="= 100 ÷ 保證金比例")
                         st.caption(
                             f"💡 用期貨只需 **{_init_margin:,.0f} 元**保證金,就能操作 **{_contract_val:,.0f} 元**的部位"
                             f"(買現股要全額)。槓桿 **{_leverage:.1f} 倍**是兩面刃——同步放大獲利與虧損,"
                             f"且跌破維持保證金會被**追繳**,沒補就強制平倉。"
                         )
-                        st.caption(
-                            "⚠️ 保證金比例依個股風險分級(13.5%/16.2%/20.25%…),期交所會定期調整。"
-                            "本頁**乘數**取自 TAIFEX 標的表,**比例為可調預設**,實際請以期交所/你的券商公告為準。"
-                        )
+                        if _off_init:
+                            st.caption(
+                                f"✅ 保證金比例已自動帶入 **TAIFEX 官方**逐檔資料"
+                                f"({_tier}:原始 {_off_init:.2f}% / 維持 {_off_maint:.2f}%)。"
+                                f"期交所會依波動不定期調整,本頁每週更新;"
+                                f"[查官網最新](https://www.taifex.com.tw/cht/5/stockMargining)。"
+                            )
+                        else:
+                            st.caption(
+                                "⚠️ 本檔暫無官方比例快取(跑過 `fetch_cache.py` 後即有),目前用預設 13.5%。"
+                                "保證金比例依個股風險分級,期交所定期調整,"
+                                "請以 [TAIFEX 官網](https://www.taifex.com.tw/cht/5/stockMargining)/你的券商公告為準。"
+                            )
 
     else:
         # ── 台指期(大/小/微台):保證金為期交所公告固定金額,契約值用加權指數 ──
@@ -1349,9 +1396,10 @@ with _tab_alloc:
             _fc = st.columns(2)
             _fb_stop = _fc[0].number_input("ATR 缺值時的預設停損 %", min_value=1.0, max_value=30.0,
                                            value=8.0, step=0.5, key="_alloc_fbstop_f")
-            _mrate = _fc[1].number_input("原始保證金比例 %", min_value=1.0, max_value=100.0, value=13.5,
-                                         step=0.05, key="_alloc_fut_rate",
-                                         help="期交所分級 13.5/16.2/20.25%,以實際適用比例為準")
+            _mrate = _fc[1].number_input("原始保證金比例 %(後備值)", min_value=1.0, max_value=100.0,
+                                         value=13.5, step=0.05, key="_alloc_fut_rate",
+                                         help="有官方比例的標的會自動套各自的官方比例(13.5/16.2/20.25%…);"
+                                              "此值僅用於『無官方比例快取』的標的當後備。")
             _sf_map = _load_stock_futures_map()
             _only_small = st.checkbox("只列有小型個股期貨的標的(100 股/口,小資金友善)",
                                       value=True, key="_alloc_only_small",
@@ -1374,12 +1422,15 @@ with _tab_alloc:
                         _mult = min(_mults)        # 優先用最小契約(小型 100)
                     _spec = "小型" if _mult == 100 else ("標準" if _mult == 2000 else f"{_mult}股")
                     _stop_pct = _stop_of(r)
+                    # 逐檔官方原始保證金比例;無官方資料才用使用者後備值 _mrate
+                    _row_rate = _sf_map[_sid].get("init_rate") or _mrate
                     _one_notional = _mult * float(_price)
-                    _one_margin   = _one_notional * _mrate / 100.0
+                    _one_margin   = _one_notional * _row_rate / 100.0
                     _one_risk     = _one_notional * _stop_pct / 100.0
                     _lots = int(_risk_budget // _one_risk) if _one_risk > 0 else 0
                     _fr.append({"代號": _sid, "名稱": r.get('名稱', ''), "產業": (r.get('產業') or '其他'),
                                 "price": float(_price), "stop_pct": _stop_pct, "spec": _spec, "mult": _mult,
+                                "rate": _row_rate,
                                 "one_notional": _one_notional, "one_margin": _one_margin,
                                 "one_risk": _one_risk, "lots": _lots})
                 if not _fr:
@@ -1406,12 +1457,16 @@ with _tab_alloc:
                     _fdisp = pd.DataFrame([{
                         "代號": x["代號"], "名稱": x["名稱"], "產業": x["產業"],
                         "契約": f"{x['spec']}({x['mult']:,})", "現價": f"{x['price']:,.2f}",
+                        "保證金%": f"{x['rate']:.2f}%",
                         "1口保證金": f"{x['one_margin']:,.0f}",
                         "1口曝險": f"{x['one_notional']:,.0f}",
                         "1口風險%": f"{x['one_risk']/_cap*100:.1f}%",
                         "建議口數": x["lots"],
                     } for x in sorted(_fr, key=lambda z: z["one_notional"])])
                     st.dataframe(_fdisp, use_container_width=True, hide_index=True)
+                    _n_off = sum(1 for x in _fr if _sf_map[x["代號"]].get("init_rate"))
+                    st.caption(f"📊「保證金%」逐檔取自 TAIFEX 官方({_n_off}/{len(_fr)} 檔有官方資料,"
+                               f"其餘用後備值 {_mrate:.2f}%)。")
                     _n0 = sum(1 for x in _fr if x["lots"] == 0)
                     if _only_small:
                         st.caption(
