@@ -1336,6 +1336,130 @@ def fetch_vix_daily():
 fetch_vix_daily()
 
 
+# ==========================================
+# [4d] 個股期貨標的清單 + 契約乘數(給 UI「期貨保證金」分頁)
+# ==========================================
+# 來源:TAIFEX 股票期貨/選擇權標的證券一覽(HTML 表)。只取「是股票期貨標的」的列,
+# 記錄 stock_id / 簡稱 / 標準型契約乘數(通常 2,000 股)。清單偶爾增減,每日抓一次即可。
+# 非關鍵資料 → 任何失敗只墊舊檔 / 略過,不影響主流程(用隔離請求,不動全域熔斷器)。
+def fetch_taifex_stock_futures():
+    if not need_fetch("stock_futures"):
+        print("[stock_futures] 個股期貨清單已有今日快取,略過"); return
+    print("[stock_futures] 抓取 TAIFEX 個股期貨標的清單...")
+    try:
+        headers = random.choice(HTTP_HEADERS_POOL).copy()
+        resp = SESSION.get("https://www.taifex.com.tw/cht/2/stockLists",
+                           headers=headers, timeout=25, verify=False)
+        if resp.status_code != 200:
+            raise ValueError(f"HTTP {resp.status_code}")
+        tables = pd.read_html(StringIO(resp.text))
+        df = next((t for t in tables
+                   if any("證券代號" in str(c) for c in t.columns)), None)
+        if df is None or df.empty:
+            raise ValueError("找不到標的證券表")
+
+        def find(*kws, exclude=()):
+            for c in df.columns:
+                cs = str(c)
+                if all(k in cs for k in kws) and not any(e in cs for e in exclude):
+                    return c
+            return None
+
+        c_id   = find("證券代號")
+        c_name = find("簡稱")
+        c_stf  = find("股票期貨", "標的", exclude=("商品",))   # 「是否為股票期貨標的」欄
+        c_mult = find("標準型") or find("股數")
+        if c_id is None or c_stf is None:
+            raise ValueError("欄位對應失敗(TAIFEX 可能改版)")
+
+        rows = []
+        for _, r in df.iterrows():
+            sid = str(r[c_id]).strip()
+            if not (sid.isdigit() and len(sid) == 4):
+                continue
+            if "●" not in str(r[c_stf]):     # 只留「是股票期貨標的」
+                continue
+            try:
+                mult = int(float(str(r[c_mult]).replace(",", ""))) if c_mult is not None else 2000
+            except (ValueError, TypeError):
+                mult = 2000
+            rows.append({"stock_id": sid,
+                         "name": str(r[c_name]).strip() if c_name else "",
+                         "multiplier": mult})
+        if not rows:
+            raise ValueError("無有效個股期貨標的")
+        out = pd.DataFrame(rows).drop_duplicates(subset=["stock_id"]).reset_index(drop=True)
+        out.to_parquet(path_for("stock_futures"))
+        print(f"   -> 個股期貨標的快取完成 ({len(out)} 檔)")
+        cleanup_old_cache("stock_futures")
+    except Exception as e:
+        print(f"   !!! 個股期貨清單抓取失敗: {e}")
+        _fallback_prev_to_today("stock_futures")   # 墊舊檔,不影響主流程
+
+
+fetch_taifex_stock_futures()
+
+
+# ==========================================
+# [4e] 台指期保證金(大台/小台/微台,給「期貨保證金」分頁)
+# ==========================================
+# 來源:TAIFEX 指數類期貨保證金表(/cht/5/indexMarging)。金額由期交所依波動定期調整。
+# 非關鍵 → 失敗只墊舊檔 / 略過(隔離請求)。
+def fetch_taifex_index_margin():
+    if not need_fetch("idx_margin"):
+        print("[idx_margin] 台指期保證金已有今日快取,略過"); return
+    print("[idx_margin] 抓取 TAIFEX 台指期保證金...")
+    try:
+        headers = random.choice(HTTP_HEADERS_POOL).copy()
+        resp = SESSION.get("https://www.taifex.com.tw/cht/5/indexMarging",
+                           headers=headers, timeout=25, verify=False)
+        if resp.status_code != 200:
+            raise ValueError(f"HTTP {resp.status_code}")
+        tables = pd.read_html(StringIO(resp.text))
+        df = next((t for t in tables if any("保證金" in str(c) for c in t.columns)), None)
+        if df is None or df.empty:
+            raise ValueError("找不到保證金表")
+
+        def find(*kws):
+            return next((c for c in df.columns if all(k in str(c) for k in kws)), None)
+
+        c_prod, c_init, c_maint = find("商品"), find("原始"), find("維持")
+        if not (c_prod and c_init):
+            raise ValueError("欄位對應失敗(TAIFEX 可能改版)")
+
+        # 商品名前綴 → 標準 key + 每點價值(元/點)
+        _want = [("臺股期貨", "大台", 200), ("小型臺指", "小台", 50), ("微型臺指", "微台", 10)]
+
+        def _n(r, c):
+            try:
+                return int(float(str(r[c]).replace(",", "")))
+            except (ValueError, TypeError):
+                return None
+
+        rows = []
+        for _, r in df.iterrows():
+            prod = str(r[c_prod]).strip()
+            if "客製化" in prod:               # 排除客製化小型臺指,避免與小台撞 key
+                continue
+            for kw, key, pv in _want:
+                if prod.startswith(kw):
+                    rows.append({"key": key, "product": prod, "point_value": pv,
+                                 "init_margin": _n(r, c_init),
+                                 "maint_margin": _n(r, c_maint) if c_maint else None})
+                    break
+        if not rows:
+            raise ValueError("找不到大/小/微台")
+        pd.DataFrame(rows).drop_duplicates(subset=["key"]).to_parquet(path_for("idx_margin"))
+        print(f"   -> 台指期保證金快取完成 ({len(rows)} 項)")
+        cleanup_old_cache("idx_margin")
+    except Exception as e:
+        print(f"   !!! 台指期保證金抓取失敗: {e}")
+        _fallback_prev_to_today("idx_margin")
+
+
+fetch_taifex_index_margin()
+
+
 # [5] 大戶
 fetch_tdcc_holders_latest()
 

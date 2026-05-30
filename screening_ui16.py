@@ -956,12 +956,169 @@ _rotation = _load_industry_rotation_cached()
 
 # ── 4 個分析區塊改用 Tabs 並排,省直向空間 ──
 # 「熱度榜 + 產業輪動」同屬「近期趨勢觀察」(個股層級 vs 產業層級),合併同頁。
-_tab_trend, _tab_perf, _tab_bt, _tab_sent = st.tabs([
+_tab_trend, _tab_perf, _tab_bt, _tab_sent, _tab_margin = st.tabs([
     f"🔥 熱度 & 輪動(近{HOT_WINDOW}日)",
     "📊 策略績效",
     "🔬 訊號回測",
     "🌡️ 大盤情緒",
+    "🧮 期貨保證金",
 ])
+
+# ── 🧮 期貨保證金分頁(個股期貨) ──────────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_stock_futures_map():
+    """讀 TAIFEX 個股期貨標的清單 → {stock_id: (簡稱, 契約乘數)}。"""
+    try:
+        files = sorted(CACHE_DIR.glob("stock_futures_*.parquet"))
+        if not files:
+            return {}
+        df_sf = pd.read_parquet(files[-1])
+        return {str(r["stock_id"]): (str(r.get("name", "")), int(r.get("multiplier", 2000)))
+                for _, r in df_sf.iterrows()}
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_latest_close_map():
+    """從 daily 快取建 {stock_id: 最新收盤},給保證金頁自動帶價。"""
+    try:
+        files = sorted(CACHE_DIR.glob("daily_*.parquet"))
+        if not files:
+            return {}
+        d = pd.read_parquet(files[-1], columns=["stock_id", "date", "close"])
+        d = d.sort_values("date").drop_duplicates("stock_id", keep="last")
+        return {str(r.stock_id): float(r.close) for r in d.itertuples() if pd.notna(r.close)}
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_idx_margin_map():
+    """讀 TAIFEX 台指期保證金 → {key: {product, pv, init, maint}}。"""
+    try:
+        files = sorted(CACHE_DIR.glob("idx_margin_*.parquet"))
+        if not files:
+            return {}
+        d = pd.read_parquet(files[-1])
+        out = {}
+        for _, r in d.iterrows():
+            out[str(r["key"])] = {
+                "product": str(r.get("product", "")),
+                "pv":   int(r.get("point_value", 0) or 0),
+                "init": int(r["init_margin"]) if pd.notna(r.get("init_margin")) else None,
+                "maint": int(r["maint_margin"]) if pd.notna(r.get("maint_margin")) else None,
+            }
+        return out
+    except Exception:
+        return {}
+
+with _tab_margin:
+    st.caption(
+        "算期貨的**保證金、槓桿、對應現股/指數本金**,評估「用期貨槓桿操作」要準備多少錢、槓桿多大。"
+        "資料來自期交所(TAIFEX)。"
+    )
+    _fmode = st.radio("類型", ["個股期貨", "台指期(大/小/微台)"], horizontal=True, key="_margin_mode")
+
+    if _fmode == "個股期貨":
+        _sf_map = _load_stock_futures_map()
+        if not _sf_map:
+            st.info("尚無個股期貨標的快取——需 `fetch_cache.py` 抓過 TAIFEX 一次後才有(部署後跑一次即可)。")
+        else:
+            _close_map = _load_latest_close_map()
+            st.caption(f"目前共 **{len(_sf_map)} 檔**有個股期貨可交易。")
+            _mc1, _mc2 = st.columns([2, 1])
+            _sid_in = _mc1.text_input("股票代號", value="", placeholder="例 2330",
+                                      key="_margin_sid").strip()
+            _lots = _mc2.number_input("口數", min_value=1, max_value=1000, value=1, step=1,
+                                      key="_margin_lots")
+            if _sid_in:
+                if _sid_in not in _sf_map:
+                    st.warning(f"⚠️ **{_sid_in} 沒有個股期貨**(不在 TAIFEX 標的清單,無法用期貨交易)。"
+                               f"目前只有約 {len(_sf_map)} 檔較活絡的股票有個股期貨。")
+                else:
+                    _nm, _mult_default = _sf_map[_sid_in]
+                    _auto_price = _close_map.get(_sid_in)
+                    _p1, _p2, _p3 = st.columns(3)
+                    _price_in = _p1.number_input(
+                        "期貨價格(≈股價)", min_value=0.0,
+                        value=round(_auto_price, 2) if _auto_price else 0.0, step=0.05,
+                        key=f"_margin_price_{_sid_in}",
+                        help="預設帶入最新收盤,可自行改成你的進場價")
+                    _mult_in = _p2.number_input(
+                        "契約乘數(股/口)", min_value=1, value=int(_mult_default), step=100,
+                        key=f"_margin_mult_{_sid_in}",
+                        help="標準型個股期貨 2,000 股/口;小型 100 股/口")
+                    _rate_in = _p3.number_input(
+                        "原始保證金比例 %", min_value=1.0, max_value=100.0, value=13.5, step=0.05,
+                        key="_margin_rate",
+                        help="期交所依個股風險分級,常見 13.5% / 16.2% / 20.25%;請依該檔實際適用比例調整")
+                    if _price_in > 0:
+                        _contract_val = _price_in * _mult_in * _lots
+                        _init_margin  = _contract_val * _rate_in / 100
+                        _maint_margin = _init_margin * 0.767
+                        _leverage     = 100 / _rate_in
+                        st.divider()
+                        st.markdown(f"#### {_sid_in} {_nm}　{_lots} 口 × {_mult_in:,} 股 @ {_price_in:,.2f}")
+                        _r = st.columns(4)
+                        _r[0].metric("契約總值", f"{_contract_val:,.0f}", help="= 買等量現股要花的錢(元)")
+                        _r[1].metric("原始保證金", f"{_init_margin:,.0f}", help="進場需準備的保證金(元)")
+                        _r[2].metric("維持保證金", f"{_maint_margin:,.0f}",
+                                     help="低於此值會被追繳;約為原始的 ~77%(各風險級接近)")
+                        _r[3].metric("槓桿倍數", f"{_leverage:.1f} 倍", help="= 100 ÷ 保證金比例")
+                        st.caption(
+                            f"💡 用期貨只需 **{_init_margin:,.0f} 元**保證金,就能操作 **{_contract_val:,.0f} 元**的部位"
+                            f"(買現股要全額)。槓桿 **{_leverage:.1f} 倍**是兩面刃——同步放大獲利與虧損,"
+                            f"且跌破維持保證金會被**追繳**,沒補就強制平倉。"
+                        )
+                        st.caption(
+                            "⚠️ 保證金比例依個股風險分級(13.5%/16.2%/20.25%…),期交所會定期調整。"
+                            "本頁**乘數**取自 TAIFEX 標的表,**比例為可調預設**,實際請以期交所/你的券商公告為準。"
+                        )
+
+    else:
+        # ── 台指期(大/小/微台):保證金為期交所公告固定金額,契約值用加權指數 ──
+        _idx = _load_idx_margin_map()
+        if not _idx:
+            st.info("尚無台指期保證金快取——需 `fetch_cache.py` 抓過 TAIFEX 一次後才有(部署後跑一次即可)。")
+        else:
+            _taiex = None
+            try:
+                _tw = _load_twii_cached()
+                if _tw is not None and not _tw.empty and "Close" in _tw.columns:
+                    _taiex = float(_tw["Close"].dropna().iloc[-1])
+            except Exception:
+                pass
+            _ic1, _ic2 = st.columns([2, 1])
+            _prod = _ic1.radio("商品", ["大台", "小台", "微台"], horizontal=True, key="_idx_prod")
+            _ilots = _ic2.number_input("口數", min_value=1, max_value=1000, value=1, step=1, key="_idx_lots")
+            _meta = _idx.get(_prod, {})
+            _pv = _meta.get("pv") or {"大台": 200, "小台": 50, "微台": 10}[_prod]
+            _ip1, _ip2 = st.columns(2)
+            _taiex_in = _ip1.number_input(
+                "加權指數", min_value=0.0, value=round(_taiex, 2) if _taiex else 0.0, step=1.0,
+                key="_idx_taiex", help="預設帶入最新加權指數(證交所官方)")
+            _init_def = _meta.get("init")
+            _init_in = _ip2.number_input(
+                "原始保證金(元/口)", min_value=0, value=int(_init_def) if _init_def else 0, step=1000,
+                key=f"_idx_init_{_prod}", help="取自期交所最新公告;會依波動定期調整")
+            if _taiex_in > 0 and _init_in > 0:
+                _cv = _taiex_in * _pv * _ilots
+                _tot_init = _init_in * _ilots
+                _maint = _meta.get("maint")
+                _tot_maint = (_maint * _ilots) if _maint else None
+                _lev = _cv / _tot_init
+                st.divider()
+                st.markdown(f"#### {_prod}({_meta.get('product','')})　{_ilots} 口 × {_pv} 元/點 @ 指數 {_taiex_in:,.0f}")
+                _r = st.columns(4)
+                _r[0].metric("契約總值", f"{_cv:,.0f}", help="= 加權指數 × 每點價值 × 口數(元)")
+                _r[1].metric("原始保證金", f"{_tot_init:,.0f}", help="進場需準備(期交所公告金額 × 口數)")
+                _r[2].metric("維持保證金", f"{_tot_maint:,.0f}" if _tot_maint else "—",
+                             help="低於此值會被追繳")
+                _r[3].metric("槓桿倍數", f"{_lev:.1f} 倍", help="= 契約總值 ÷ 原始保證金")
+                st.caption(
+                    f"💡 {_prod} 1 口保證金 **{_init_in:,.0f} 元**就能操作每口 **{_taiex_in*_pv:,.0f} 元**的指數部位,"
+                    f"槓桿約 **{_lev:.1f} 倍**——比個股期貨高很多,指數動 1% 對本金影響放大約 {_lev:.0f}%。務必嚴設停損。"
+                )
+                st.caption("⚠️ 保證金金額由期交所依波動定期調整,本頁取自 TAIFEX 最新快取;實際以期交所公告為準。")
 
 with _tab_trend:
     # ── 🔥 入選熱度榜(個股層級) ──
