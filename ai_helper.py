@@ -26,6 +26,10 @@ RETRY_429_WAIT  = 15   # 收到 429 等幾秒再 retry 同一支
 RETRY_429_TIMES = 1    # 同一支 429 最多 retry 次數 (1 = 等一次後再試一次)
 MAX_TOTAL_429   = 3    # 跨模型累計 429 上限,超過直接放棄(保護當日配額)
 
+# 503 重試設定(Service Unavailable 通常是平台短暫過載,等 3 秒再試大多會通)
+RETRY_503_WAIT  = 3    # 收到 503 等幾秒再 retry 同一支
+RETRY_503_TIMES = 1    # 同一支 503 最多 retry 次數
+
 # 模型清單(依優先序排列,前面失敗就試下一個)
 # ⚠️ 免費模型可用性會變動,部署前建議到 https://openrouter.ai/models?max_price=0 確認
 # ⚠️ 維護要點:
@@ -34,6 +38,9 @@ MAX_TOTAL_429   = 3    # 跨模型累計 429 上限,超過直接放棄(保護當
 #   3. 第一位放 openrouter/auto:free 讓平台自選當下可用免費模型
 AI_MODELS = [
     {"id": "openrouter/auto:free",                       "name": "Auto Free Router"},
+    {"id": "deepseek/deepseek-chat-v3-0324:free",        "name": "DeepSeek V3"},
+    {"id": "qwen/qwen-2.5-72b-instruct:free",            "name": "Qwen 2.5"},
+    {"id": "google/gemini-2.0-flash-exp:free",           "name": "Gemini 2.0"},
     {"id": "openai/gpt-oss-20b:free",                    "name": "GPT-OSS 20B"},
     {"id": "meta-llama/llama-3.3-70b-instruct:free",     "name": "Llama 3.3"},
 ]
@@ -60,6 +67,12 @@ def _is_rate_limit_error(exc) -> bool:
     """判斷 exception 是不是 429 rate limit。"""
     msg = str(exc).lower()
     return "429" in msg or "too many requests" in msg or "rate limit" in msg
+
+
+def _is_service_unavailable(exc) -> bool:
+    """判斷 exception 是不是 503 service unavailable(暫時性過載,值得 retry)。"""
+    msg = str(exc).lower()
+    return "503" in msg or "service unavailable" in msg
 
 
 def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, models: list = None):
@@ -94,6 +107,8 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
     }
 
     total_429 = 0   # 跨模型累計 429 數,達 MAX_TOTAL_429 直接放棄
+    # 同一支內最多嘗試次數 = max(429 retry, 503 retry) + 1(首次);實際每次失敗會依錯誤類型決定要不要再 retry
+    max_attempts = max(RETRY_429_TIMES, RETRY_503_TIMES) + 1
 
     for m in models:
         payload = {
@@ -102,8 +117,9 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
             "temperature": 0.3,
             "max_tokens": max_tokens,
         }
-        # 同一支最多嘗試 RETRY_429_TIMES + 1 次(首次 + N 次 retry)
-        for attempt in range(RETRY_429_TIMES + 1):
+        attempt_429 = 0
+        attempt_503 = 0
+        for _attempt in range(max_attempts):
             try:
                 resp = requests.post(
                     "https://openrouter.ai/api/v1/chat/completions",
@@ -122,7 +138,7 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
                         return m["name"], text
                 elif "error" in j:
                     print(f"   ⚠ {m['name']} 拒絕: {j['error'].get('message', '')[:120]}")
-                break   # 非 429 失敗 → 換下一支
+                break   # 非 429/503 失敗 → 換下一支
             except requests.exceptions.Timeout:
                 print(f"   ⚠ {m['name']} 逾時,換下一個")
                 break
@@ -132,12 +148,22 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
                     if total_429 >= MAX_TOTAL_429:
                         print(f"   ⛔ 累計 {total_429} 次 429,放棄以保護當日配額")
                         return None, None
-                    if attempt < RETRY_429_TIMES:
+                    if attempt_429 < RETRY_429_TIMES:
+                        attempt_429 += 1
                         print(f"   ⚠ {m['name']} 429 限速,等 {RETRY_429_WAIT}s 再 retry...")
                         time.sleep(RETRY_429_WAIT)
                         continue
                     else:
                         print(f"   ⚠ {m['name']} 429 retry 後仍失敗,換下一支")
+                        break
+                elif _is_service_unavailable(e):
+                    if attempt_503 < RETRY_503_TIMES:
+                        attempt_503 += 1
+                        print(f"   ⚠ {m['name']} 503 服務暫時不可用,等 {RETRY_503_WAIT}s 再 retry...")
+                        time.sleep(RETRY_503_WAIT)
+                        continue
+                    else:
+                        print(f"   ⚠ {m['name']} 503 retry 後仍失敗,換下一支")
                         break
                 else:
                     print(f"   ⚠ {m['name']} 失敗: {str(e)[:120]}")

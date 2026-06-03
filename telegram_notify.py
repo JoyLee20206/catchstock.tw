@@ -346,6 +346,19 @@ def main():
                     f"<i>「{html.escape(ai_text)}」</i>\n"
                     f"━━━━━━━━━━━━━━\n"
                 )
+            else:
+                # 全部 AI 模型失敗 → 模板化 fallback 點評(不洗版、訊息密度仍夠)
+                _fb_parts = [f"今日達標 {len(df)} 檔"]
+                if n_exit > 0:
+                    _fb_parts.append(f"退場 {n_exit} 檔")
+                if name_top:
+                    _fb_parts.append(f"冠軍 {sid_top} {name_top}(總分 {score_top}/10)")
+                fallback_text = "、".join(_fb_parts) + "。AI 點評暫時無法產生(免費 API 過載),完整訊號見下方清單。"
+                ai_comment = (
+                    f"📊 <b>盤後重點:</b>\n"
+                    f"<i>「{html.escape(fallback_text)}」</i>\n"
+                    f"━━━━━━━━━━━━━━\n"
+                )
 
         # ── 5b. 大盤情緒指標 ──────────────────────────────
         # 詳細區塊放在 AI 點評之後、個股清單之前(獨立區塊)
