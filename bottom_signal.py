@@ -417,9 +417,11 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     if vix_tw is None and vix_intraday is not None:
         # 月檔掛了,至少用分鐘檔湊出今日值(備援)
         vix_tw = pd.Series({vix_intraday["date"]: vix_intraday["last"]})
-        alerts.append("VIXTWN 月檔抓取失敗,改用分鐘檔備援(僅當日值,歷史比較項目會缺)")
+        alerts.append("台灣恐慌指數改用備用來源:只拿得到今天的值,"
+                      "需要跟前幾天比較的項目(續降、差距收斂等)會顯示「資料缺」。")
     if vix_tw is None:
-        alerts.append("🚨 VIXTWN 兩個來源都抓不到!閘門無法判定,請檢查期交所網站")
+        alerts.append("🚨 台灣恐慌指數(閘門)兩個來源都抓不到!今天無法判定分級,"
+                      "請晚點按「立即重抓」再試,持續失敗請檢查期交所網站是否改版。")
 
     print("📥 抓美股 VIX / 美債 / 美元(yfinance)…")
     us_vix = _yf_series("^VIX", period="30d")
@@ -431,12 +433,15 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     if twii is None:
         twii = _yf_series("^TWII", period="120d")
         if twii is not None:
-            alerts.append("加權 OHLC 改用 yfinance 備援(TWSE 失敗,留意缺日)")
+            alerts.append("大盤股價改用備用來源(Yahoo):證交所官方暫時抓不到,"
+                          "判讀照常,但備用來源偶爾缺一兩天資料,"
+                          "「未破前低」等比較前幾天的項目可能略有誤差。下次更新通常會自動恢復。")
     tsmc = fetch_stock_ohlc_twse("2330")
     if tsmc is None:
         tsmc = _yf_series("2330.TW", period="60d")
         if tsmc is not None:
-            alerts.append("2330 OHLC 改用 yfinance 備援(TWSE 失敗)")
+            alerts.append("台積電股價改用備用來源(Yahoo):證交所官方暫時抓不到,"
+                          "判讀照常,下次更新通常會自動恢復。")
 
     print("📥 抓期交所(台指期 / P/C)…")
     tx_close = fetch_tx_futures_close()

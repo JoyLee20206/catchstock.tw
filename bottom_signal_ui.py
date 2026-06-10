@@ -68,8 +68,11 @@ _CSS = """
     display:flex;flex-wrap:wrap;gap:4px 16px}
   .ctx b{color:var(--text);font-weight:600}
 
+  /* 兩欄並排(01+02 一排、03+04 一排…),窄螢幕自動退回單欄 */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+  @media (max-width:680px){.grid{grid-template-columns:1fr}}
   .cat{background:var(--surface);border:1px solid var(--border);border-radius:12px;
-    margin-bottom:12px;overflow:hidden}
+    margin-bottom:0;overflow:hidden}
   .cat-h{display:flex;align-items:baseline;gap:9px;padding:14px 14px 9px}
   .cat-n{font-family:var(--mono);font-size:13px;color:var(--faint);font-weight:600}
   .cat-t{font-size:17px;font-weight:700}
@@ -203,7 +206,7 @@ def _build_checklist_html(result: dict) -> str:
             f'<div class="items">{"".join(rows)}</div></div>')
     foot = ('<div class="foot">最重要的規則:只要「恐慌指數沒跌破 40」,判讀就會停在最恐慌那一格'
             '——其他再多打勾也一樣。這是幫你做判斷的框架,不是投資建議。</div>')
-    return _CSS + "".join(cards) + foot
+    return f'{_CSS}<div class="grid">{"".join(cards)}</div>{foot}'
 
 
 def _build_history_html(history: list) -> str:
@@ -282,10 +285,17 @@ def render_bottom_tab(cache_dir):
     # 歷史由排程(bottom_push)與「立即重抓」負責寫入;
     # 讀檔顯示時不寫——避免假日打開網頁把舊資料記成今天的紀錄。
 
-    # ── 檢查表卡片(自動判定的 19 項,唯讀) ──
+    # ── 檢查表卡片(自動判定的 19 項,唯讀,兩欄並排) ──
     auto_items = [it for it in result["items"] if not it["manual"]]
-    n_groups = len({it["group"] for it in auto_items})
-    est_h = len(auto_items) * 96 + n_groups * 72 + 70
+    group_sizes = []
+    for it in auto_items:           # 依出現順序數每組項數
+        if not group_sizes or it["group"] != group_sizes[-1][0]:
+            group_sizes.append([it["group"], 0])
+        group_sizes[-1][1] += 1
+    sizes = [n for _, n in group_sizes]
+    # 兩欄:每排高度取左右較高者(每項約 100px + 卡片標頭 75px)
+    est_h = sum(max(sizes[i:i + 2]) * 100 + 75
+                for i in range(0, len(sizes), 2)) + 90
     components.html(_build_checklist_html(result), height=min(est_h, 2500), scrolling=True)
 
     # ── 07 利空消息:真的能按的人工勾選(勾完分級立即重算) ──
