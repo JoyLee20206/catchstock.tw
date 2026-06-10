@@ -21,7 +21,8 @@ from pathlib import Path
 import requests
 
 from bottom_signal import (
-    run_all_checks, persist_bottom_history, format_bottom_for_tg,
+    run_all_checks, persist_bottom_history, persist_bottom_latest,
+    format_bottom_for_tg,
 )
 from market_sentiment import persist_fi_history
 
@@ -80,6 +81,9 @@ def main() -> int:
 
     # 寫入今日歷史(同日重跑覆蓋 → 21:30 完整版會蓋掉 16:10 初判)
     persist_bottom_history(CACHE_DIR, result)
+
+    # 存完整結果 → UI 直接讀檔秒開,不用現抓
+    persist_bottom_latest(CACHE_DIR, result)
 
     # 外資期貨淨額逐日累積(「空單回補」隔天才有比較基準)
     if result.get("fi_net_today") is not None:

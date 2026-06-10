@@ -65,6 +65,7 @@ _HEADERS = {
 
 HISTORY_FILE = "bottom_signal_history.json"
 MANUAL_FILE = "bottom_manual_flags.json"
+LATEST_FILE = "bottom_signal_latest.json"   # 排程算好的完整結果,UI 直接讀(秒開)
 _HISTORY_KEEP = 120
 
 
@@ -758,6 +759,33 @@ def save_manual_flags(cache_dir, flags: dict):
         f.write_text(json.dumps(flags, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:
         print(f"   ⚠ {MANUAL_FILE} 寫入失敗: {e}")
+
+
+def persist_bottom_latest(cache_dir, result: dict):
+    """存完整判讀結果(給 UI 直接讀,免重抓)。排程跑完呼叫。"""
+    if cache_dir is None or result is None:
+        return
+    f = Path(cache_dir) / LATEST_FILE
+    data = dict(result, generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception as e:
+        print(f"   ⚠ {LATEST_FILE} 寫入失敗: {e}")
+
+
+def load_bottom_latest(cache_dir) -> "dict | None":
+    """讀排程算好的完整結果;沒有或壞檔回 None(UI 退回現抓)。"""
+    if cache_dir is None:
+        return None
+    f = Path(cache_dir) / LATEST_FILE
+    if not f.exists():
+        return None
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) and data.get("items") else None
+    except Exception:
+        return None
 
 
 def load_bottom_history(cache_dir) -> list:

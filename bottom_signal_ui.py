@@ -12,15 +12,14 @@
 - 寫檔(歷史/人工勾選)在 cache 外執行,避免被擋
 - 抓取約需 1 分鐘 → 進分頁先按「開始判讀」,不拖慢整個 app 啟動
 """
-from datetime import datetime
-
 import streamlit as st
 import streamlit.components.v1 as components
 
 from bottom_signal import (
-    run_all_checks, apply_manual_flags, compute_level,
+    run_all_checks, apply_manual_flags,
     load_manual_flags, save_manual_flags,
     load_bottom_history, persist_bottom_history,
+    load_bottom_latest, persist_bottom_latest,
     format_bottom_for_tg, LEVELS, CORE_KEYS, EXPLAIN,
 )
 
@@ -225,41 +224,41 @@ def _build_history_html(history: list) -> str:
 # ══════════════════════════════════════════════════════════════════════
 # Streamlit 進入點
 # ══════════════════════════════════════════════════════════════════════
-@st.cache_data(ttl=1800, show_spinner=False)
-def _load_bottom_cached(_cache_dir_str: str):
-    """跑全部判讀(約 1 分鐘),快取 30 分鐘。回 (result, 抓取時間字串)。"""
-    from pathlib import Path
-    res = run_all_checks(cache_dir=Path(_cache_dir_str))
-    return res, datetime.now().strftime("%H:%M")
-
-
 def render_bottom_tab(cache_dir):
-    """止跌判讀分頁主體。在 screening_ui16 的 with _tab_bottom: 裡呼叫。"""
-    cache_dir_str = str(cache_dir)
+    """止跌判讀分頁主體。在 screening_ui16 的 with _tab_bottom: 裡呼叫。
 
+    速度設計:預設「只讀檔」——排程(bottom_push.py)算好的完整結果存在
+    bottom_signal_latest.json,打開網頁秒開、零網路請求。
+    只有使用者明確按「立即重抓」才現場抓一次(約 1 分鐘),抓完也存回檔,
+    所以每次點擊最多抓一次,不會因快取過期讓整個 app 卡住。
+    """
     st.markdown("##### 🛑 台股止跌判讀")
     st.caption("每天收盤後自動逐項勾稽 21 項訊號 · VIXTWN 跌破 40 是閘門 · 點各項「? 白話說明」看判讀理由")
     # 放大 checkbox 標籤字體(配合檢查表卡片的字級)
     st.markdown("<style>div[data-testid='stCheckbox'] label p{font-size:1.06rem}</style>",
                 unsafe_allow_html=True)
 
-    # 首次進來不自動抓(要 1 分鐘),按了才跑;之後 30 分鐘內都吃快取秒開
-    if "bottom_loaded" not in st.session_state:
-        st.session_state["bottom_loaded"] = False
-    if not st.session_state["bottom_loaded"]:
-        st.info("按下方按鈕開始今日判讀(需向期交所/證交所抓資料,約 1 分鐘)。")
-        if st.button("▶️ 開始判讀", type="primary"):
-            st.session_state["bottom_loaded"] = True
+    # 使用者按了「立即重抓」→ 這一輪現抓一次,存檔後旗標歸零
+    if st.session_state.pop("bs_live_fetch", False):
+        with st.spinner("抓取期交所 / 證交所 / 國際行情中…(約 1 分鐘)"):
+            result = run_all_checks(cache_dir=cache_dir)
+        persist_bottom_latest(cache_dir, result)
+        persist_bottom_history(cache_dir, result)
+    else:
+        result = load_bottom_latest(cache_dir)
+
+    if result is None:
+        # 還沒有排程算好的檔(第一次部署/本機第一次用)→ 給手動觸發鈕
+        st.info("尚無排程算好的結果。部署後排程每天 16:10 / 21:30 會自動算好;"
+                "現在也可以按下面的按鈕現場抓一次(約 1 分鐘)。")
+        if st.button("▶️ 立即判讀", type="primary"):
+            st.session_state["bs_live_fetch"] = True
             st.rerun()
-        # 還沒抓資料前,先給歷史色帶(讀本地檔,免抓)
         history = load_bottom_history(cache_dir)
         if history:
             st.markdown("###### 📜 分級歷史")
             components.html(_build_history_html(history), height=130, scrolling=False)
         return
-
-    with st.spinner("抓取期交所 / 證交所 / 國際行情中…(約 1 分鐘)"):
-        result, fetched_at = _load_bottom_cached(cache_dir_str)
 
     # 人工勾選(存檔在 cache 外,改了立即重算分級,不重抓)
     flags = load_manual_flags(cache_dir)
@@ -273,17 +272,15 @@ def render_bottom_tab(cache_dir):
 
     rc1, rc2 = st.columns([3, 1])
     with rc1:
-        st.caption(f"資料日 {result['asof']} · 本次抓取 {fetched_at} · 快取 30 分鐘")
+        st.caption(f"資料日 {result['asof']} · 算於 {result.get('generated_at', '?')}"
+                   "(排程每日 16:10 / 21:30 自動更新)")
     with rc2:
-        if st.button("🔄 重新抓取", help="清掉 30 分鐘快取,立刻重抓最新資料"):
-            _load_bottom_cached.clear()
+        if st.button("🔄 立即重抓", help="不等排程,現場抓最新資料重算一次(約 1 分鐘)"):
+            st.session_state["bs_live_fetch"] = True
             st.rerun()
 
-    # 寫入今日歷史(同日重跑覆蓋;放 cache 外,參考 sentiment 的做法)
-    try:
-        persist_bottom_history(cache_dir, result)
-    except Exception:
-        pass
+    # 歷史由排程(bottom_push)與「立即重抓」負責寫入;
+    # 讀檔顯示時不寫——避免假日打開網頁把舊資料記成今天的紀錄。
 
     # ── 檢查表卡片(自動判定的 19 項,唯讀) ──
     auto_items = [it for it in result["items"] if not it["manual"]]
