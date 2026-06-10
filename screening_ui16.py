@@ -1003,14 +1003,23 @@ _rotation = _load_industry_rotation_cached()
 
 # ── 4 個分析區塊改用 Tabs 並排,省直向空間 ──
 # 「熱度榜 + 產業輪動」同屬「近期趨勢觀察」(個股層級 vs 產業層級),合併同頁。
-_tab_trend, _tab_perf, _tab_bt, _tab_sent, _tab_margin, _tab_alloc = st.tabs([
+_tab_trend, _tab_perf, _tab_bt, _tab_sent, _tab_bottom, _tab_margin, _tab_alloc = st.tabs([
     f"🔥 熱度 & 輪動(近{HOT_WINDOW}日)",
     "📊 策略績效",
     "🔬 訊號回測",
     "🌡️ 大盤情緒",
+    "🛑 止跌判讀",
     "🧮 期貨保證金",
     "💰 資金配置",
 ])
+
+# ── 🛑 止跌判讀分頁(21 項訊號 × 四級分級,VIXTWN 為閘門) ─────────────────
+with _tab_bottom:
+    try:
+        from bottom_signal_ui import render_bottom_tab
+        render_bottom_tab(CACHE_DIR)
+    except Exception as _bs_err:
+        st.error(f"止跌判讀載入失敗:{_bs_err}")
 
 # ── 🧮 期貨保證金分頁(個股期貨) ──────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
