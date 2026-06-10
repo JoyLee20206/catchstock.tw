@@ -1,0 +1,50 @@
+# 止跌判讀每日推播
+# ⚠️ 此檔需放到 GitHub repo 的 .github/workflows/bottom_push.yaml 才會生效
+#   (與 daily_push.yaml 同一個資料夾)
+name: Bottom Signal Push
+
+on:
+  schedule:
+    # 分 時 日 月 星期(UTC)。週一到週五:
+    # UTC 08:10 = 台灣 16:10 → 盤後初判(現貨齊;期貨未平倉/P/C 可能還是昨天的)
+    # UTC 13:30 = 台灣 21:30 → 完整版(期交所盤後資料齊,覆蓋同日紀錄重推)
+    - cron: '10 8 * * 1-5'
+    - cron: '30 13 * * 1-5'
+  workflow_dispatch: # 允許在 GitHub 網頁上手動點擊測試
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  bottom-signal:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # 要把 cache 存回 repo,缺這行 push 必定失敗
+
+    steps:
+      - name: 取得程式碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+
+      - name: 執行止跌判讀 + Telegram 推播
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -u bottom_push.py
+
+      - name: 自動將快取存回 GitHub (網頁版歷史色帶自動更新)
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add cache/bottom_signal_history.json cache/bottom_signal_latest.json cache/fi_futures_history.json
+          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update bottom signal history"
+          git pull --rebase origin main || true
+          git push origin HEAD
