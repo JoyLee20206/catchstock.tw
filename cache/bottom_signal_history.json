@@ -1,0 +1,31 @@
+[
+  {
+    "date": "2026-06-10",
+    "level": 0,
+    "n_ok": 5,
+    "vixtwn": 43.91,
+    "items": {
+      "gate": false,
+      "vix_fall": false,
+      "vix_spread": false,
+      "vix_spike": false,
+      "px_no_low": true,
+      "px_higher_low": true,
+      "px_strong_k": false,
+      "px_hold": true,
+      "vol_spike_down": false,
+      "vol_shrink": false,
+      "vol_up": false,
+      "fut_basis": false,
+      "f_spot": false,
+      "fi_cover": null,
+      "pc_falloff": false,
+      "tsmc_no_low": true,
+      "tsmc_ma": false,
+      "us_10y": false,
+      "dxy_fall": true,
+      "news_dulled": false,
+      "news_resolved": false
+    }
+  }
+]
