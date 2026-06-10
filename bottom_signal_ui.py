@@ -45,70 +45,70 @@ _CSS = """
   .gauge{background:var(--surface);border:1px solid var(--border);border-radius:14px;
     padding:16px 16px 18px;margin-bottom:14px}
   .verdict{display:flex;align-items:center;gap:10px;margin-bottom:6px}
-  .vdot{width:11px;height:11px;border-radius:50%;flex:none;box-shadow:0 0 12px currentColor}
-  .vlabel{font-size:18px;font-weight:800}
-  .vnote{color:var(--muted);font-size:12.5px;margin:0 0 14px;padding-left:21px}
+  .vdot{width:12px;height:12px;border-radius:50%;flex:none;box-shadow:0 0 12px currentColor}
+  .vlabel{font-size:21px;font-weight:800}
+  .vnote{color:var(--muted);font-size:14px;margin:0 0 14px;padding-left:22px}
   .track{position:relative;height:12px;border-radius:99px;margin-top:18px;
     background:linear-gradient(90deg,var(--hot) 0%,var(--warm) 34%,var(--cool) 66%,var(--done) 100%);
     opacity:.85}
   .marker{position:absolute;top:50%;width:20px;height:20px;border-radius:50%;background:#fff;
     border:3px solid var(--bg);transform:translate(-50%,-50%);box-shadow:0 2px 8px rgba(0,0,0,.5)}
   .gatelock{position:absolute;top:-22px;left:28%;transform:translateX(-50%);font-size:13px}
-  .scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;
+  .scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11.5px;
     color:var(--faint);margin-top:9px;letter-spacing:.5px}
   .switches{display:flex;gap:7px;flex-wrap:wrap;margin-top:14px}
-  .chip{font-family:var(--mono);font-size:11px;padding:4px 9px;border-radius:99px;
+  .chip{font-family:var(--mono);font-size:12.5px;padding:5px 11px;border-radius:99px;
     border:1px solid var(--border);color:var(--faint);background:var(--surface2);
     display:flex;align-items:center;gap:5px}
   .chip.on{color:var(--cool);border-color:var(--cool)}
-  .chip .s{font-size:9px}
-  .count{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:12px}
+  .chip .s{font-size:10px}
+  .count{font-family:var(--mono);font-size:13px;color:var(--muted);margin-top:12px}
   .count b{color:var(--text)}
   .ctx{margin:0 0 14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;
-    padding:9px 12px;font-family:var(--mono);font-size:11.5px;color:var(--muted);
+    padding:10px 13px;font-family:var(--mono);font-size:13px;color:var(--muted);
     display:flex;flex-wrap:wrap;gap:4px 16px}
   .ctx b{color:var(--text);font-weight:600}
 
   .cat{background:var(--surface);border:1px solid var(--border);border-radius:12px;
     margin-bottom:12px;overflow:hidden}
-  .cat-h{display:flex;align-items:baseline;gap:9px;padding:13px 14px 9px}
-  .cat-n{font-family:var(--mono);font-size:12px;color:var(--faint);font-weight:600}
-  .cat-t{font-size:15px;font-weight:700}
-  .cat-tag{margin-left:auto;font-family:var(--mono);font-size:10px;letter-spacing:.5px;color:var(--warm);
-    border:1px solid rgba(245,181,68,.45);padding:2px 7px;border-radius:99px;align-self:center}
+  .cat-h{display:flex;align-items:baseline;gap:9px;padding:14px 14px 9px}
+  .cat-n{font-family:var(--mono);font-size:13px;color:var(--faint);font-weight:600}
+  .cat-t{font-size:17px;font-weight:700}
+  .cat-tag{margin-left:auto;font-family:var(--mono);font-size:11px;letter-spacing:.5px;color:var(--warm);
+    border:1px solid rgba(245,181,68,.45);padding:2px 8px;border-radius:99px;align-self:center}
   .items{padding:0 8px 8px}
-  .item{display:flex;gap:10px;align-items:flex-start;padding:10px 8px;border-radius:9px}
+  .item{display:flex;gap:10px;align-items:flex-start;padding:11px 8px;border-radius:9px}
   .item.core{background:linear-gradient(90deg,rgba(245,181,68,.09),transparent)}
   .item.gate{background:linear-gradient(90deg,rgba(255,107,74,.11),transparent)}
-  .box{flex:none;width:20px;height:20px;margin-top:1px;border:2px solid var(--faint);
-    border-radius:6px;display:grid;place-items:center;font-size:12px;line-height:1;color:#06231F}
+  .box{flex:none;width:22px;height:22px;margin-top:1px;border:2px solid var(--faint);
+    border-radius:6px;display:grid;place-items:center;font-size:14px;line-height:1;color:#06231F}
   .item.checked .box{background:var(--cool);border-color:var(--cool)}
   .item.na .box{border-style:dashed;color:var(--faint)}
   .ltext{flex:1;min-width:0}
-  .label{font-size:14.5px;line-height:1.5}
+  .label{font-size:16.5px;line-height:1.5}
   .item.checked .label{color:var(--muted)}
-  .val{display:block;font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:2px}
+  .val{display:block;font-family:var(--mono);font-size:13.5px;color:var(--faint);margin-top:3px}
   .item.checked .val{color:var(--cool)}
-  .badge{font-family:var(--mono);font-size:9.5px;margin-left:6px;padding:1px 6px;
+  .badge{font-family:var(--mono);font-size:11px;margin-left:6px;padding:1px 7px;
     border-radius:99px;white-space:nowrap}
   .badge.star{color:var(--star);border:1px solid rgba(245,181,68,.5)}
   .badge.gatebadge{color:var(--hot);border:1px solid rgba(255,107,74,.55)}
   .badge.manual{color:var(--done);border:1px solid rgba(63,157,255,.5)}
-  details{margin:0 8px 4px 39px}
-  details summary{cursor:pointer;list-style:none;font-family:var(--mono);font-size:11px;
+  details{margin:0 8px 5px 41px}
+  details summary{cursor:pointer;list-style:none;font-family:var(--mono);font-size:12.5px;
     color:var(--faint);user-select:none}
   details summary:hover{color:var(--cool)}
   details[open] summary{color:var(--cool)}
-  details .body{border-left:2px solid rgba(54,200,178,.55);padding:8px 0 8px 11px;
-    margin-top:6px;font-size:13px;line-height:1.65;color:var(--muted)}
+  details .body{border-left:2px solid rgba(54,200,178,.55);padding:8px 0 8px 12px;
+    margin-top:6px;font-size:14.5px;line-height:1.7;color:var(--muted)}
 
   .hist{display:flex;flex-wrap:wrap;gap:4px;padding:4px 2px}
-  .cell{width:16px;height:16px;border-radius:4px;flex:none}
-  .legend{display:flex;gap:14px;font-family:var(--mono);font-size:11px;color:var(--muted);
+  .cell{width:18px;height:18px;border-radius:4px;flex:none}
+  .legend{display:flex;gap:14px;font-family:var(--mono);font-size:12.5px;color:var(--muted);
     margin-top:10px;flex-wrap:wrap}
   .legend span{display:flex;align-items:center;gap:5px}
-  .dot{width:9px;height:9px;border-radius:3px;display:inline-block}
-  .foot{margin-top:8px;color:var(--faint);font-size:11.5px;line-height:1.7}
+  .dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .foot{margin-top:8px;color:var(--faint);font-size:13px;line-height:1.7}
 </style>
 """
 
@@ -156,9 +156,12 @@ def _build_gauge_html(result: dict) -> str:
 
 
 def _build_checklist_html(result: dict) -> str:
-    # 依 group 分組(維持原順序)
+    # 依 group 分組(維持原順序)。人工項不放這張唯讀卡
+    # ——改用下方「真的能按」的 st.checkbox 區塊,避免使用者點了沒反應。
     groups, order = {}, []
     for it in result["items"]:
+        if it["manual"]:
+            continue
         if it["group"] not in groups:
             groups[it["group"]] = []
             order.append(it["group"])
@@ -236,6 +239,9 @@ def render_bottom_tab(cache_dir):
 
     st.markdown("##### 🛑 台股止跌判讀")
     st.caption("每天收盤後自動逐項勾稽 21 項訊號 · VIXTWN 跌破 40 是閘門 · 點各項「? 白話說明」看判讀理由")
+    # 放大 checkbox 標籤字體(配合檢查表卡片的字級)
+    st.markdown("<style>div[data-testid='stCheckbox'] label p{font-size:1.06rem}</style>",
+                unsafe_allow_html=True)
 
     # 首次進來不自動抓(要 1 分鐘),按了才跑;之後 30 分鐘內都吃快取秒開
     if "bottom_loaded" not in st.session_state:
@@ -263,25 +269,15 @@ def render_bottom_tab(cache_dir):
     for a in result.get("alerts", []):
         st.warning(a)
 
-    components.html(_build_gauge_html(result), height=330, scrolling=False)
+    components.html(_build_gauge_html(result), height=345, scrolling=False)
 
-    # ── 人工勾選區(利空兩項) ──
-    mc1, mc2, mc3 = st.columns([1.2, 1.2, 1])
-    with mc1:
-        v1 = st.checkbox("📰 利空鈍化(壞消息出來但跌不動)", value=bool(flags.get("news_dulled")),
-                         help=EXPLAIN["news_dulled"])
-    with mc2:
-        v2 = st.checkbox("📰 利空解除(原因本身落幕)", value=bool(flags.get("news_resolved")),
-                         help=EXPLAIN["news_resolved"])
-    with mc3:
+    rc1, rc2 = st.columns([3, 1])
+    with rc1:
+        st.caption(f"資料日 {result['asof']} · 本次抓取 {fetched_at} · 快取 30 分鐘")
+    with rc2:
         if st.button("🔄 重新抓取", help="清掉 30 分鐘快取,立刻重抓最新資料"):
             _load_bottom_cached.clear()
             st.rerun()
-    if v1 != bool(flags.get("news_dulled")) or v2 != bool(flags.get("news_resolved")):
-        save_manual_flags(cache_dir, {"news_dulled": v1, "news_resolved": v2})
-        st.rerun()
-
-    st.caption(f"資料日 {result['asof']} · 本次抓取 {fetched_at} · 快取 30 分鐘")
 
     # 寫入今日歷史(同日重跑覆蓋;放 cache 外,參考 sentiment 的做法)
     try:
@@ -289,11 +285,33 @@ def render_bottom_tab(cache_dir):
     except Exception:
         pass
 
-    # ── 檢查表卡片 ──
-    n_items = len(result["items"])
-    n_groups = len({it["group"] for it in result["items"]})
-    est_h = n_items * 84 + n_groups * 64 + 60
-    components.html(_build_checklist_html(result), height=min(est_h, 2300), scrolling=True)
+    # ── 檢查表卡片(自動判定的 19 項,唯讀) ──
+    auto_items = [it for it in result["items"] if not it["manual"]]
+    n_groups = len({it["group"] for it in auto_items})
+    est_h = len(auto_items) * 96 + n_groups * 72 + 70
+    components.html(_build_checklist_html(result), height=min(est_h, 2500), scrolling=True)
+
+    # ── 07 利空消息:真的能按的人工勾選(勾完分級立即重算) ──
+    # 用 on_change 只在「使用者真的點了那一下」才寫檔;
+    # 不能用「widget 值 vs 檔案值」比對——多開視窗時舊視窗會把新勾選蓋掉。
+    def _save_flags_cb():
+        save_manual_flags(cache_dir, {
+            "news_dulled": bool(st.session_state.get("bs_news_dulled")),
+            "news_resolved": bool(st.session_state.get("bs_news_resolved")),
+        })
+
+    with st.container(border=True):
+        st.markdown("**07 利空消息(人工勾選)** ⭐ 核心")
+        st.checkbox("**利空鈍化** — 壞消息再出來,股價卻跌不動了",
+                    value=bool(flags.get("news_dulled")),
+                    key="bs_news_dulled", on_change=_save_flags_cb)
+        with st.expander("? 白話說明(利空鈍化)"):
+            st.write(EXPLAIN["news_dulled"])
+        st.checkbox("**利空解除** — 造成恐慌的原因本身落幕、明朗化",
+                    value=bool(flags.get("news_resolved")),
+                    key="bs_news_resolved", on_change=_save_flags_cb)
+        with st.expander("? 白話說明(利空解除)"):
+            st.write(EXPLAIN["news_resolved"])
 
     # ── 歷史色帶 ──
     st.markdown("###### 📜 分級歷史")

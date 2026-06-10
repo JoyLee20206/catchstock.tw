@@ -283,6 +283,82 @@ def fetch_foreign_spot_net(days: int = 6) -> "pd.Series | None":
     return pd.Series(rows).sort_index()
 
 
+def fetch_index_ohlc_twse(months: int = 5) -> "pd.DataFrame | None":
+    """加權指數每日 OHLC(TWSE MI_5MINS_HIST,逐月)。
+
+    為什麼不用 yfinance 當主來源:GHA 主機抓 ^TWII 常失敗,
+    且 yfinance 偶爾缺交易日(實測缺過 2026-06-09)。官方資料完整。
+    """
+    rows = []
+    today = datetime.now()
+    for k in range(months):
+        y, m = today.year, today.month - k
+        while m <= 0:
+            y, m = y - 1, m + 12
+        url = (f"https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST"
+               f"?date={y}{m:02d}01&response=json")
+        try:
+            j = _get(url).json()
+            if j.get("stat") == "OK" and j.get("data"):
+                for r in j["data"]:
+                    d = _roc_to_date(r[0])
+                    if d is None:
+                        continue
+                    try:
+                        rows.append({
+                            "date": d,
+                            "open":  float(str(r[1]).replace(",", "")),
+                            "high":  float(str(r[2]).replace(",", "")),
+                            "low":   float(str(r[3]).replace(",", "")),
+                            "close": float(str(r[4]).replace(",", "")),
+                        })
+                    except (ValueError, IndexError):
+                        continue
+            time.sleep(1.2)
+        except Exception as e:
+            print(f"   ⚠ MI_5MINS_HIST {y}{m:02d} 失敗: {str(e)[:80]}")
+    if not rows:
+        return None
+    return (pd.DataFrame(rows).drop_duplicates("date")
+            .set_index("date").sort_index())
+
+
+def fetch_stock_ohlc_twse(stock_no: str, months: int = 3) -> "pd.DataFrame | None":
+    """個股每日 OHLC(TWSE STOCK_DAY,逐月)。停牌日價格為 '--',自動略過。"""
+    rows = []
+    today = datetime.now()
+    for k in range(months):
+        y, m = today.year, today.month - k
+        while m <= 0:
+            y, m = y - 1, m + 12
+        url = (f"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY"
+               f"?date={y}{m:02d}01&stockNo={stock_no}&response=json")
+        try:
+            j = _get(url).json()
+            if j.get("stat") == "OK" and j.get("data"):
+                for r in j["data"]:
+                    d = _roc_to_date(r[0])
+                    if d is None:
+                        continue
+                    try:
+                        rows.append({
+                            "date": d,
+                            "open":  float(str(r[3]).replace(",", "")),
+                            "high":  float(str(r[4]).replace(",", "")),
+                            "low":   float(str(r[5]).replace(",", "")),
+                            "close": float(str(r[6]).replace(",", "")),
+                        })
+                    except (ValueError, IndexError):
+                        continue    # '--' 等非數字(停牌)略過
+            time.sleep(1.2)
+        except Exception as e:
+            print(f"   ⚠ STOCK_DAY {stock_no} {y}{m:02d} 失敗: {str(e)[:80]}")
+    if not rows:
+        return None
+    return (pd.DataFrame(rows).drop_duplicates("date")
+            .set_index("date").sort_index())
+
+
 def fetch_fi_futures_yesterday_today(cache_dir):
     """外資期貨淨未平倉:今日(現抓)+ 昨日(讀 fi_futures_history.json)。
 
@@ -344,12 +420,22 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     if vix_tw is None:
         alerts.append("🚨 VIXTWN 兩個來源都抓不到!閘門無法判定,請檢查期交所網站")
 
-    print("📥 抓美股 VIX / 加權 / 台積電 / 美債 / 美元…")
+    print("📥 抓美股 VIX / 美債 / 美元(yfinance)…")
     us_vix = _yf_series("^VIX", period="30d")
-    twii = _yf_series("^TWII", period="90d")
-    tsmc = _yf_series("2330.TW", period="60d")
     us10y = _yf_series("^TNX", period="15d")       # 美國 10 年期公債殖利率(%)
     dxy = _yf_series("DX-Y.NYB", period="15d")     # 美元指數 DXY
+
+    print("📥 抓加權 / 台積電 OHLC(TWSE 官方,yfinance 備援)…")
+    twii = fetch_index_ohlc_twse()
+    if twii is None:
+        twii = _yf_series("^TWII", period="120d")
+        if twii is not None:
+            alerts.append("加權 OHLC 改用 yfinance 備援(TWSE 失敗,留意缺日)")
+    tsmc = fetch_stock_ohlc_twse("2330")
+    if tsmc is None:
+        tsmc = _yf_series("2330.TW", period="60d")
+        if tsmc is not None:
+            alerts.append("2330 OHLC 改用 yfinance 備援(TWSE 失敗)")
 
     print("📥 抓期交所(台指期 / P/C)…")
     tx_close = fetch_tx_futures_close()
@@ -567,6 +653,7 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
         "alerts": alerts,
         "manual_flags": manual_flags,
         "vixtwn": float(vix_tw.iloc[-1]) if vix_tw is not None else None,
+        "fi_net_today": fi_today,    # 給排程腳本 persist_fi_history 用
     }
     result.update(compute_level(items))
     return result
