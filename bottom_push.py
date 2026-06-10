@@ -89,9 +89,7 @@ def main() -> int:
     if result.get("fi_net_today") is not None:
         persist_fi_history(CACHE_DIR, result["fi_net_today"])
 
-    msg = format_bottom_for_tg(result).replace(
-        "【台股止跌判讀", f"【台股止跌判讀·{label}")
-    send_telegram(msg)
+    send_telegram(format_bottom_for_tg(result, pass_label=label))
 
     print(f"✅ 完成:{result['level_icon']} {result['level_label']}"
           f"(成立 {result['n_ok']}/{len(result['items'])})")

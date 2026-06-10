@@ -257,6 +257,38 @@ def fetch_market_turnover(months: int = 2) -> "pd.DataFrame | None":
     return df
 
 
+def fetch_foreign_spot_net_from_cache(cache_dir, max_age_days: int = 4) -> "pd.Series | None":
+    """外資現貨買賣超(股數),從既有 institutional parquet 加總 — 零網路請求。
+
+    選股排程(fetch_cache.py)每天 15:30 已抓全市場逐檔三大法人(上市 T86 + 上櫃),
+    這裡直接按日加總外資 buy-sell。快取最新日期太舊(> max_age_days 天,
+    例如本機久未同步)回 None,讓呼叫端退回 BFI82U 現抓。
+    注意單位是「股」(非金額);本訊號比的是趨勢,單位不影響判定。
+    """
+    if cache_dir is None:
+        return None
+    try:
+        files = sorted(Path(cache_dir).glob("institutional_*.parquet"))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        df = df[df["name"] == "Foreign_Investor"]
+        if df.empty:
+            return None
+        net = (df["buy"] - df["sell"]).groupby(df["date"]).sum()
+        net.index = [datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+                     for d in net.index]
+        net = net.sort_index()
+        age = (datetime.now().date() - net.index[-1]).days
+        if age > max_age_days:
+            print(f"   ⚠ institutional 快取最新日 {net.index[-1]}(已 {age} 天),改現抓")
+            return None
+        return net
+    except Exception as e:
+        print(f"   ⚠ institutional 快取讀取失敗: {str(e)[:80]}")
+        return None
+
+
 def fetch_foreign_spot_net(days: int = 6) -> "pd.Series | None":
     """外資現貨買賣差額(元),近 N 個交易日(TWSE BFI82U 逐日)。"""
     rows = {}
@@ -830,31 +862,61 @@ def persist_bottom_history(cache_dir, result: dict):
 # ══════════════════════════════════════════════════════════════════════
 # 輸出格式
 # ══════════════════════════════════════════════════════════════════════
-def format_bottom_for_tg(result: dict) -> str:
-    """Telegram 推播格式(同規格 §4 範例)。"""
+def format_bottom_for_tg(result: dict, pass_label: str = "") -> str:
+    """Telegram 推播格式:分區塊、重點一行一項,手機好掃讀。"""
     ok_items = [it for it in result["items"] if it["ok"] is True]
     no_items = [it for it in result["items"] if it["ok"] is False]
     na_items = [it for it in result["items"] if it["ok"] is None]
+    total = len(result["items"])
     d = {it["key"]: it for it in result["items"]}
     gate = d["gate"]
+    sep = "━━━━━━━━━━━━━━"
 
-    lines = [
-        f"【台股止跌判讀 {result['asof']}】",
-        f"分級:{result['level_label']} {result['level_icon']}",
-        f"✅ 已成立({len(ok_items)}):" + "、".join(it["name"] for it in ok_items)
-        if ok_items else "✅ 已成立(0)",
-        f"⬜ 未成立({len(no_items)}):" + "、".join(it["name"] for it in no_items)
-        if no_items else "⬜ 未成立(0)",
-    ]
+    title = f"{result['level_icon']} 台股止跌判讀"
+    if pass_label:
+        title += f"・{pass_label}"
+
+    lines = [title, f"📅 {result['asof']} 收盤", sep]
+
+    # ── 分級 + 閘門(最重要,放最前面) ──
+    lines.append(f"分級:{result['level_label']} {result['level_icon']}")
+    vix = result.get("vixtwn")
+    vix_txt = f"{vix:.1f}" if vix is not None else "—"
+    if gate["ok"] is True:
+        lines.append(f"🔑 閘門:VIXTWN {vix_txt} ✅ 已開")
+    elif gate["ok"] is False:
+        lines.append(f"🔑 閘門:VIXTWN {vix_txt} ❌ 未開(需跌破 40)")
+        lines.append("　└ 閘門未開,分級壓在最恐慌")
+    else:
+        lines.append(f"🔑 閘門:VIXTWN {vix_txt} ❓ 無法判定")
+
+    # ── 已成立(一行一項,這是「目前有的好訊號」) ──
+    lines.append(sep)
+    lines.append(f"✅ 已成立 {len(ok_items)}/{total}")
+    if ok_items:
+        lines += [f"　• {it['name']}" for it in ok_items]
+    else:
+        lines.append("　(暫無)")
+
+    # ── 資料缺 / 待人工確認(需要注意的,單獨列) ──
+    notes = []
     if na_items:
-        lines.append(f"❓ 資料缺({len(na_items)}):" +
+        notes.append(f"❓ 資料暫缺 {len(na_items)} 項:" +
                      "、".join(it["name"] for it in na_items))
-    lines.append(f"🔑 閘門:VIXTWN {gate['value']} "
-                 f"{'✓ 已開' if gate['ok'] else '✗ 未開'}")
-    if not result["manual_flags"].get("news_dulled") and result["level"] >= 2:
-        lines.append("⚠️ 快轉綠燈:請至 UI 確認「利空鈍化」是否勾選")
+    if result["level"] >= 2 and not result["manual_flags"].get("news_dulled"):
+        notes.append("⚠️ 即將轉綠燈,請到網頁確認是否勾選「利空鈍化」")
     for a in result["alerts"]:
-        lines.append(f"⚠️ {a}")
+        notes.append(f"⚠️ {a}")
+    if notes:
+        lines.append(sep)
+        lines += notes
+
+    # ── 未成立(還沒出現的訊號,壓在最後、用頓號收合) ──
+    lines.append(sep)
+    lines.append(f"⬜ 未成立 {len(no_items)} 項")
+    if no_items:
+        lines.append("　" + "、".join(it["name"] for it in no_items))
+
     return "\n".join(lines)
 
 
