@@ -38,6 +38,14 @@ _CSS = """
     --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
     --cjk:"PingFang TC","Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif;
   }
+  /* 跟著系統/瀏覽器的深淺色設定自動切換 */
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#F4F6FA; --surface:#FFFFFF; --surface2:#EDF1F6; --border:#D8DEE8;
+      --text:#1C2430; --muted:#5A6576; --faint:#97A1B1;
+      --hot:#E04E2E; --warm:#C98A14; --cool:#0FA38D; --done:#2476D8; --star:#C98A14;
+    }
+  }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font-family:var(--cjk);
     -webkit-font-smoothing:antialiased;line-height:1.55;padding:6px 4px}
