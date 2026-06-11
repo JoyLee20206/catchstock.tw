@@ -96,6 +96,7 @@ _CSS = """
   .badge.star{color:var(--star);border:1px solid rgba(245,181,68,.5)}
   .badge.gatebadge{color:var(--hot);border:1px solid rgba(255,107,74,.55)}
   .badge.manual{color:var(--done);border:1px solid rgba(63,157,255,.5)}
+  .badge.obs{color:var(--faint);border:1px solid var(--border)}
   details{margin:0 8px 5px 41px}
   details summary{cursor:pointer;list-style:none;font-family:var(--mono);font-size:12.5px;
     color:var(--faint);user-select:none}
@@ -125,7 +126,7 @@ def _build_gauge_html(result: dict) -> str:
     note = LEVELS[lv].get("note", "")
     d = {it["key"]: it for it in result["items"]}
     gate_on = d["gate"]["ok"] is True
-    n_total = len(result["items"])
+    n_total = sum(1 for it in result["items"] if not it.get("observe"))
     n_core_on = sum(1 for k in CORE_KEYS if d.get(k, {}).get("ok") is True)
 
     chips = "".join(
@@ -192,6 +193,8 @@ def _build_checklist_html(result: dict) -> str:
                      '<span class="badge star">★ 核心</span>' if it["key"] in CORE_KEYS else "")
             if it["manual"]:
                 badge += '<span class="badge manual">人工</span>'
+            if it.get("observe"):
+                badge += '<span class="badge obs">觀察·不計分</span>'
             val = "" if it["manual"] else f'<span class="val">{_esc(it["value"])}</span>'
             rows.append(
                 f'<div class="{cls}"><span class="box">{mark}</span>'
@@ -236,7 +239,7 @@ def render_bottom_tab(cache_dir):
     所以每次點擊最多抓一次,不會因快取過期讓整個 app 卡住。
     """
     st.markdown("##### 🛑 台股止跌判讀")
-    st.caption("每天收盤後自動逐項勾稽 21 項訊號 · VIXTWN 跌破 40 是閘門 · 點各項「? 白話說明」看判讀理由")
+    st.caption("每天收盤後自動逐項勾稽 25 項訊號(21 計分 + 4 觀察)· VIXTWN 跌破 40 是閘門 · 點各項「? 白話說明」看判讀理由")
     # 放大 checkbox 標籤字體(配合檢查表卡片的字級)
     st.markdown("<style>div[data-testid='stCheckbox'] label p{font-size:1.06rem}</style>",
                 unsafe_allow_html=True)
@@ -308,7 +311,7 @@ def render_bottom_tab(cache_dir):
         })
 
     with st.container(border=True):
-        st.markdown("**07 利空消息(人工勾選)** ⭐ 核心")
+        st.markdown("**08 利空消息(人工勾選)** ⭐ 核心")
         st.checkbox("**利空鈍化** — 壞消息再出來,股價卻跌不動了",
                     value=bool(flags.get("news_dulled")),
                     key="bs_news_dulled", on_change=_save_flags_cb)

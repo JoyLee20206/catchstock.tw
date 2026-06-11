@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""台股止跌自動判讀(19 項檢查 × 四級分級)
+"""台股止跌自動判讀(計分 21 項 + 觀察 4 項 × 四級分級)
 
 依據《止跌自動判讀_資料來源對照.md》規格實作:
-- 17 項自動判定 + 2 項人工勾選(利空鈍化 / 利空解除)
+- 19 項自動判定 + 2 項人工勾選(利空鈍化 / 利空解除)
+- 另有 4 項觀察項(融資減幅、漲跌家數、台幣、費半):照判定照顯示,
+  暫不計入 n_ok 與分級;驗證有效後把 observe=True 拿掉即轉正式
 - 分級:高度恐慌 🔴 → 剛降溫 🟡 → 在打底 🟠 → 止跌確認 🟢
 - 閘門:VIXTWN(台指選擇權波動率指數)跌破 40;閘門未開一律「高度恐慌」
 
@@ -55,8 +57,9 @@ CFG = {
     "pc_extreme_days":   10,     # 15 P/C 近 N 日極端
     "pc_extreme_ratio":  0.95,   # 15 昨日 ≥ 近 N 日最高 × 此比例 才算「曾觸極端」
     "tsmc_ma":           5,      # 17 台積站上 MA N
-    "intl_days":         2,      # 18/19 美債殖利率/美元指數 與 N 日前比
-    "level3_min_ok":     11,     # 止跌確認:總成立數門檻(全 21 項)
+    "intl_days":         2,      # 18/19 美債殖利率/美元指數/台幣 與 N 日前比
+    "breadth_extreme":   0.70,   # 廣度:跌家佔比 ≥ 此值算「極端」
+    "level3_min_ok":     11,     # 止跌確認:總成立數門檻(計分 21 項;觀察項不計)
 }
 
 _HEADERS = {
@@ -316,6 +319,73 @@ def fetch_foreign_spot_net(days: int = 6) -> "pd.Series | None":
     return pd.Series(rows).sort_index()
 
 
+def fetch_margin_balance(days: int = 7) -> "pd.Series | None":
+    """全市場融資餘額(仟元),近 N 個交易日(TWSE MI_MARGN 信用交易統計,逐日)。
+
+    取「融資金額(仟元)」列的『今日餘額』。官方註明隔日修正後的『前日餘額』
+    才是最終值,但本訊號比的是減幅趨勢,逐日用同一欄位即可。
+    """
+    rows = {}
+    d = datetime.now()
+    tried = 0
+    while len(rows) < days and tried < days * 3:
+        if d.weekday() < 5:
+            url = (f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN"
+                   f"?date={d.strftime('%Y%m%d')}&selectType=MS&response=json")
+            try:
+                j = _get(url).json()
+                if j.get("stat") == "OK":
+                    for t in j.get("tables") or []:
+                        for row in t.get("data") or []:
+                            if "融資金額" in str(row[0]):
+                                rows[d.date()] = float(str(row[5]).replace(",", ""))
+                time.sleep(1.2)
+            except Exception as e:
+                print(f"   ⚠ MI_MARGN {d:%Y%m%d} 失敗: {str(e)[:80]}")
+            tried += 1
+        d -= timedelta(days=1)
+    if not rows:
+        return None
+    return pd.Series(rows).sort_index()
+
+
+def fetch_market_breadth(days: int = 4) -> "pd.DataFrame | None":
+    """上市股票漲跌家數(TWSE MI_INDEX 大盤統計,逐日)。
+
+    取「漲跌證券數合計」表的『股票』欄(排除權證/ETF 等),
+    回 DataFrame(date → up/down),'259(14)' 只取括號前的家數。
+    """
+    rows = {}
+    d = datetime.now()
+    tried = 0
+    while len(rows) < days and tried < days * 3:
+        if d.weekday() < 5:
+            url = (f"https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX"
+                   f"?date={d.strftime('%Y%m%d')}&type=MS&response=json")
+            try:
+                j = _get(url).json()
+                up = down = None
+                for t in j.get("tables") or []:
+                    if "漲跌" not in str(t.get("title", "")):
+                        continue
+                    for row in t.get("data") or []:
+                        n = str(row[-1]).split("(")[0].replace(",", "")
+                        if str(row[0]).startswith("上漲"):
+                            up = int(n)
+                        elif str(row[0]).startswith("下跌"):
+                            down = int(n)
+                if up is not None and down is not None:
+                    rows[d.date()] = {"up": up, "down": down}
+                time.sleep(1.2)
+            except Exception as e:
+                print(f"   ⚠ MI_INDEX {d:%Y%m%d} 失敗: {str(e)[:80]}")
+            tried += 1
+        d -= timedelta(days=1)
+    if not rows:
+        return None
+    return pd.DataFrame(rows).T.sort_index()
+
+
 def fetch_index_ohlc_twse(months: int = 5) -> "pd.DataFrame | None":
     """加權指數每日 OHLC(TWSE MI_5MINS_HIST,逐月)。
 
@@ -419,9 +489,11 @@ def fetch_fi_futures_yesterday_today(cache_dir):
 # ══════════════════════════════════════════════════════════════════════
 # 判定核心
 # ══════════════════════════════════════════════════════════════════════
-def _item(key, group, name, ok, value=""):
+def _item(key, group, name, ok, value="", observe=False):
+    # observe=True:照判定照顯示,但不計入 n_ok 與分級——新指標先跑一段
+    # 觀察期,確認在歷史底部有領先性後再轉正式計分(改這裡即可)
     return {"key": key, "group": group, "name": name, "ok": ok,
-            "value": str(value), "manual": False}
+            "value": str(value), "manual": False, "observe": observe}
 
 
 def _find_pivot_lows(lows: pd.Series, window: int) -> list:
@@ -455,10 +527,12 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
         alerts.append("🚨 台灣恐慌指數(閘門)兩個來源都抓不到!今天無法判定分級,"
                       "請晚點按「立即重抓」再試,持續失敗請檢查期交所網站是否改版。")
 
-    print("📥 抓美股 VIX / 美債 / 美元(yfinance)…")
+    print("📥 抓美股 VIX / 美債 / 美元 / 台幣 / 費半(yfinance)…")
     us_vix = _yf_series("^VIX", period="30d")
     us10y = _yf_series("^TNX", period="15d")       # 美國 10 年期公債殖利率(%)
     dxy = _yf_series("DX-Y.NYB", period="15d")     # 美元指數 DXY
+    twd = _yf_series("TWD=X", period="15d")        # 美元兌台幣(升=台幣貶)
+    sox = _yf_series("^SOX", period="60d")         # 費城半導體指數
 
     print("📥 抓加權 / 台積電 OHLC(TWSE 官方,yfinance 備援)…")
     twii = fetch_index_ohlc_twse()
@@ -482,6 +556,10 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     print("📥 抓證交所(成交金額 / 外資現貨)…")
     turnover = fetch_market_turnover()
     f_spot = fetch_foreign_spot_net()
+
+    print("📥 抓證交所(融資餘額 / 漲跌家數)…")
+    margin = fetch_margin_balance(days=c["fs_avg_days"] + 2)
+    breadth = fetch_market_breadth()
 
     print("📥 抓外資期貨…")
     fi_today, fi_yest = fetch_fi_futures_yesterday_today(cache_dir)
@@ -605,8 +683,32 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
                       ("vol_up", "帶量上漲")]:
             items.append(_item(k, g, nm, None, "資料缺"))
 
-    # ── 04 期貨與大戶 ─────────────────────────────────────────
-    g = "04 期貨與大戶"
+    # ── 04 信用與廣度(觀察期:照判定、暫不計分) ──────────────
+    g = "04 信用與廣度"
+    if margin is not None and len(margin) >= 3:
+        chg = margin.diff().dropna()          # 仟元;負值 = 融資減(斷頭/退場)
+        today_chg = float(chg.iloc[-1])
+        past = chg.iloc[:-1]
+        avg_drop = float((-past[past < 0]).mean()) if (past < 0).any() else 0.0
+        ok = (today_chg >= 0) or (avg_drop > 0 and -today_chg < avg_drop)
+        items.append(_item("margin_calm", g, "融資減幅收斂", ok,
+                           f"今 {today_chg / 1e5:+,.0f} 億 / 近日均減 {avg_drop / 1e5:,.0f} 億",
+                           observe=True))
+    else:
+        items.append(_item("margin_calm", g, "融資減幅收斂", None, "資料缺", observe=True))
+
+    if breadth is not None and len(breadth) >= 2:
+        ratio = (breadth["down"] / (breadth["up"] + breadth["down"])).dropna()
+        today_r, yest_r = float(ratio.iloc[-1]), float(ratio.iloc[-2])
+        ok = (yest_r >= c["breadth_extreme"]) and (today_r < yest_r)
+        items.append(_item("breadth_falloff", g, "跌家比從極端回落", ok,
+                           f"跌家比 {yest_r:.0%} → {today_r:.0%}", observe=True))
+    else:
+        items.append(_item("breadth_falloff", g, "跌家比從極端回落", None, "資料缺",
+                           observe=True))
+
+    # ── 05 期貨與大戶 ─────────────────────────────────────────
+    g = "05 期貨與大戶"
     if tx_close is not None and turnover is not None:
         tw_close = turnover["taiex"]
         basis = (tx_close - tw_close).dropna()
@@ -651,8 +753,8 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     else:
         items.append(_item("pc_falloff", g, "P/C比從極端回落", None, "資料缺"))
 
-    # ── 05 權值龍頭 台積電 ───────────────────────────────────
-    g = "05 台積電"
+    # ── 06 權值龍頭 台積電 ───────────────────────────────────
+    g = "06 台積電"
     if tsmc is not None and len(tsmc) >= max(n + 1, c["tsmc_ma"] + 1):
         t_low = float(tsmc["low"].iloc[-1])
         t_min = float(tsmc["low"].iloc[-(n + 1):-1].min())
@@ -667,8 +769,8 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
         items.append(_item("tsmc_no_low", g, "台積止穩不破低", None, "資料缺"))
         items.append(_item("tsmc_ma", g, f"台積翻紅站MA{c['tsmc_ma']}", None, "資料缺"))
 
-    # ── 06 國際資金(輔助:風險偏好回溫的旁證,只加分不擋分級) ──
-    g = "06 國際資金(輔助)"
+    # ── 07 國際資金(輔助:風險偏好回溫的旁證,只加分不擋分級) ──
+    g = "07 國際資金(輔助)"
     nd = c["intl_days"]
     if us10y is not None and len(us10y) >= nd + 1:
         y_now = float(us10y["close"].iloc[-1])
@@ -686,8 +788,25 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     else:
         items.append(_item("dxy_fall", g, "美元指數回落", None, "資料缺"))
 
-    # ── 07 利空消息(人工勾選) ───────────────────────────────
-    g = "07 利空消息"
+    if twd is not None and len(twd) >= nd + 1:
+        t_now = float(twd["close"].iloc[-1])
+        t_ago = float(twd["close"].iloc[-(nd + 1)])
+        items.append(_item("twd_stable", g, "台幣止貶回升", t_now < t_ago,
+                           f"USDTWD {t_ago:.2f} → {t_now:.2f}", observe=True))
+    else:
+        items.append(_item("twd_stable", g, "台幣止貶回升", None, "資料缺", observe=True))
+
+    n = c["no_low_days"]
+    if sox is not None and len(sox) >= n + 1:
+        s_low = float(sox["low"].iloc[-1])
+        s_min = float(sox["low"].iloc[-(n + 1):-1].min())
+        items.append(_item("sox_no_low", g, "費半未破前低", s_low >= s_min,
+                           f"今低 {s_low:,.0f} / 前{n}日低 {s_min:,.0f}", observe=True))
+    else:
+        items.append(_item("sox_no_low", g, "費半未破前低", None, "資料缺", observe=True))
+
+    # ── 08 利空消息(人工勾選) ───────────────────────────────
+    g = "08 利空消息"
     for k, nm in [("news_dulled", "利空鈍化"), ("news_resolved", "利空解除")]:
         it = _item(k, g, nm, bool(manual_flags.get(k)), "人工勾選")
         it["manual"] = True
@@ -742,6 +861,10 @@ EXPLAIN = {
     "tsmc_ma": "比「止穩」再進一步:台積電由黑翻紅、站回 5 日線這種短期均線,代表龍頭真的轉強,指數比較有機會跟著往上。",
     "us_10y": "恐慌時資金會躲進美國公債避險(殖利率被壓低)。當殖利率回升,代表資金敢離開避風港、回去買股票了——風險偏好回溫的旁證。注意:若大跌主因是美國升息或通膨,這項方向會相反,僅供輔助參考。",
     "dxy_fall": "恐慌時資金搶買美元避險(美元指數走高)。當美元指數回落,代表資金開始流出美元、回流亞洲市場,台幣比較有撐、外資也比較願意回來。輔助參考用。",
+    "margin_calm": "融資是散戶借錢買的股票,大跌時會被券商強制賣出(斷頭),造成「跌→斷頭→更跌」的惡性循環。當融資餘額連日大減後「減幅明顯縮小」甚至翻增,代表該斷頭的都斷完了、浮額洗乾淨,賣壓的一大來源消失。目前為觀察項,暫不計分。",
+    "breadth_falloff": "指數有時靠台積電一檔撐住,但中小型股還在崩——那是「假止跌」。看全市場上漲/下跌家數最誠實:當下跌家數佔比衝到七成以上的極端後開始回落,代表跌勢不再全面擴散、市場內部正在止穩。目前為觀察項,暫不計分。",
+    "twd_stable": "外資撤離台股前會先把台幣換回美元,所以台幣貶值常「領先」外資賣超出現;反過來,台幣止貶回升,常是外資資金回流的最早訊號。比美元指數更貼台灣——美元全球走強不一定代表台幣特別弱。目前為觀察項,暫不計分。",
+    "sox_no_low": "台股的產業結構跟費城半導體指數(SOX)高度連動,連動性遠高於美股大盤。費半止穩不破低,代表「台股本業」的景氣恐慌在退;反之若費半也開始破低,要小心台灣的利空已外溢成全球半導體的事。目前為觀察項,暫不計分。",
     "news_dulled": "判斷利空退燒的徵兆:同樣的壞消息再出來,股價卻不太跌了——市場開始無感,代表利空被消化得差不多。這項電腦判斷不可靠,請自行判斷後勾選。",
     "news_resolved": "比「市場無感」更直接:造成恐慌的原因本身有了結果、講清楚了、或者解除了。根源消失,股價最容易快速回神。請自行判斷後勾選。",
 }
@@ -750,7 +873,8 @@ EXPLAIN = {
 def compute_level(items) -> dict:
     """照規格 §4:閘門 → 打底 → 確認。回 {level, level_label, level_icon, n_ok}。"""
     d = {it["key"]: it for it in items}
-    n_ok = sum(1 for it in items if it["ok"] is True)
+    # 觀察項(observe=True)不計分:等累積足夠歷史驗證後再轉正式
+    n_ok = sum(1 for it in items if it["ok"] is True and not it.get("observe"))
 
     def _ok(key):
         return d.get(key, {}).get("ok") is True
@@ -874,10 +998,12 @@ def persist_bottom_history(cache_dir, result: dict):
 # ══════════════════════════════════════════════════════════════════════
 def format_bottom_for_tg(result: dict, pass_label: str = "") -> str:
     """Telegram 推播格式:分區塊、重點一行一項,手機好掃讀。"""
-    ok_items = [it for it in result["items"] if it["ok"] is True]
-    no_items = [it for it in result["items"] if it["ok"] is False]
-    na_items = [it for it in result["items"] if it["ok"] is None]
-    total = len(result["items"])
+    counted = [it for it in result["items"] if not it.get("observe")]
+    obs_items = [it for it in result["items"] if it.get("observe")]
+    ok_items = [it for it in counted if it["ok"] is True]
+    no_items = [it for it in counted if it["ok"] is False]
+    na_items = [it for it in counted if it["ok"] is None]
+    total = len(counted)
     d = {it["key"]: it for it in result["items"]}
     gate = d["gate"]
     sep = "━━━━━━━━━━━━━━"
@@ -927,6 +1053,14 @@ def format_bottom_for_tg(result: dict, pass_label: str = "") -> str:
     if no_items:
         lines.append("　" + "、".join(it["name"] for it in no_items))
 
+    # ── 觀察項(新指標試跑,不計分) ──
+    if obs_items:
+        lines.append(sep)
+        lines.append("👀 觀察中(暫不計分)")
+        for it in obs_items:
+            mark = "✅" if it["ok"] is True else ("❓" if it["ok"] is None else "⬜")
+            lines.append(f"　{mark} {it['name']}")
+
     return "\n".join(lines)
 
 
@@ -935,8 +1069,9 @@ def print_report(result: dict):
     print()
     print("=" * 56)
     print(f"  台股止跌判讀  {result['asof']}")
+    n_counted = sum(1 for it in result["items"] if not it.get("observe"))
     print(f"  分級:{result['level_icon']} {result['level_label']}"
-          f"(成立 {result['n_ok']}/{len(result['items'])})")
+          f"(成立 {result['n_ok']}/{n_counted})")
     print("=" * 56)
     cur_group = None
     for it in result["items"]:
@@ -944,7 +1079,7 @@ def print_report(result: dict):
             cur_group = it["group"]
             print(f"\n── {cur_group} " + "─" * (40 - len(cur_group)))
         mark = "✅" if it["ok"] is True else ("⬜" if it["ok"] is False else "❓")
-        tag = "(人工)" if it["manual"] else ""
+        tag = "(人工)" if it["manual"] else ("(觀察)" if it.get("observe") else "")
         print(f"  {mark} {it['name']:<14}{tag} {it['value']}")
     for a in result["alerts"]:
         print(f"\n⚠️  {a}")
