@@ -3794,6 +3794,15 @@ with col_list:
     elif len(df) == 0: st.error("❌ 沒有標的達標")
     else:
         st.subheader(f"📋 結果({len(df)} 檔)")
+        # 籌碼信心分級概覽(欄位由 screening0515 產生;舊結果無此欄時跳過,避免 KeyError)
+        if "籌碼信心" in df.columns:
+            _hi  = int((df["籌碼信心"] == "🔥 高信心").sum())
+            _mid = int((df["籌碼信心"] == "⭐ 中信心").sum())
+            _cc1, _cc2, _cc3 = st.columns(3)
+            _cc1.metric("🔥 高信心", f"{_hi} 檔",
+                        help="大戶↑ 且 散戶↓ 共振 — 訊號歸因中 edge 最高的籌碼組合,優先看")
+            _cc2.metric("⭐ 中信心", f"{_mid} 檔", help="大戶↑ 或 散戶↓ 其一成立")
+            _cc3.metric("一般", f"{len(df) - _hi - _mid} 檔")
         score_min, score_max = int(df['總分'].min()), int(df['總分'].max())
         industries = sorted([i for i in df['產業'].dropna().unique() if i])
         if score_min != score_max:
