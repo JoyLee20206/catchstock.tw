@@ -3818,7 +3818,18 @@ with col_list:
             st.caption(f"📊 達標股皆為 **{score_min} 分**(同分,免用分數篩選)")
             selected_industries = st.multiselect("產業篩選", industries, default=industries)
 
+        # 🔥 只看高信心:籌碼共振(大戶↑+散戶↓)。欄位存在才顯示;預設 False 避免下方 NameError。
+        _only_hi = False
+        if "籌碼信心" in df.columns:
+            _only_hi = st.checkbox(
+                "🔥 只看高信心(大戶↑+散戶↓ 共振)",
+                value=False, key="_only_hi",
+                help="只留籌碼共振的股 — 訊號歸因中 edge 最高的組合;當『優先觀察』,不代表自動買進。",
+            )
+
         filtered = df[(df['總分'] >= score_threshold) & (df['產業'].isin(selected_industries))].copy()
+        if _only_hi and "籌碼信心" in filtered.columns:
+            filtered = filtered[filtered["籌碼信心"] == "🔥 高信心"]
 
         # 🚦 乖離煞車:標出離均線過遠(追高風險)的標的,可一鍵排除(#3 過熱/估值煞車的清單版)
         _daily_files = sorted(CACHE_DIR.glob("daily_*.parquet"))
