@@ -518,12 +518,22 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
         if len(spread) >= c["spread_avg_days"] + 1:
             today_sp = float(spread.iloc[-1])
             avg_sp = float(spread.iloc[-(c["spread_avg_days"] + 1):-1].mean())
-            items.append(_item("vix_spread", g, "與美VIX差距收斂", today_sp < avg_sp,
-                               f"差 {today_sp:.1f} / 5日均 {avg_sp:.1f}"))
+            narrowed = today_sp < avg_sp
+            # 收斂必須來自「VIXTWN 自己在降」;若是美 VIX 上升造成的,
+            # 是全球的平靜往台灣的恐慌靠(本地利空外溢),要當警訊不能算利多
+            vixtwn_falling = float(vix_tw.iloc[-1]) < float(vix_tw.iloc[-2])
+            val = f"差 {today_sp:.1f} / 5日均 {avg_sp:.1f}"
+            if narrowed and not vixtwn_falling:
+                val += "(美VIX升所致,不算)"
+                alerts.append("台美恐慌差距縮小,但是「美股 VIX 上升」造成的,"
+                              "不是台灣恐慌在退——這不是止跌好訊號,"
+                              "反而要留意本地利空開始外溢到全球的可能。")
+            items.append(_item("vix_spread", g, "差距收斂且VIXTWN降",
+                               narrowed and vixtwn_falling, val))
         else:
-            items.append(_item("vix_spread", g, "與美VIX差距收斂", None, "重疊日不足"))
+            items.append(_item("vix_spread", g, "差距收斂且VIXTWN降", None, "重疊日不足"))
     else:
-        items.append(_item("vix_spread", g, "與美VIX差距收斂", None, "資料缺"))
+        items.append(_item("vix_spread", g, "差距收斂且VIXTWN降", None, "資料缺"))
 
     if vix_tw is not None and vix_intraday is not None and len(vix_tw) >= c["spike_high_days"]:
         hi = vix_intraday["high"]
@@ -715,7 +725,7 @@ CORE_KEYS = ["vix_fall", "tsmc_no_low", "news_dulled"]
 EXPLAIN = {
     "gate": "VIXTWN 就是市場的「怕不怕」溫度計,愈高代表大家愈恐慌。要等它從高點明確往下掉、跌破 40,才代表大家開始沒那麼怕了。這是判斷止跌最重要的一關——沒過這關,股價就算盤中拉高也先當作只是反彈。",
     "vix_fall": "光跌破 40 還不夠,要看它能不能一路退到 38、35,而且不再彈回 40 以上。持續降溫,才代表恐慌真的在退,不是假摔一下又衝回去。",
-    "vix_spread": "美股也有一個恐慌指數(VIX)。台股自己飆高、美股很平靜,代表是「台灣自己的事」在嚇人。當兩邊差距開始縮小,就是台灣本地的驚慌在消退。",
+    "vix_spread": "美股也有一個恐慌指數(VIX)。台股自己飆高、美股很平靜,代表是「台灣自己的事」在嚇人。當兩邊差距開始縮小,就是台灣本地的驚慌在消退。但要小心收斂的「方向」:必須是台灣的恐慌(VIXTWN)自己在降才算數;如果差距是因為「美股 VIX 上升」才縮小,那是全球的平靜往台灣的恐慌靠——不但不是好訊號,反而要警惕本地利空開始外溢,系統會另外發告警提醒。",
     "vix_spike": "見底常有個「最後一跳」:大家恐慌到極點、指數爆衝一根,接著突然急殺回落。這種「衝高後快速崩下來」通常代表恐慌一次宣洩完,是見底的典型樣子。",
     "px_no_low": "下跌要停,第一步就是「不再創新低」。今天的低點如果守在前波低點之上,代表賣壓開始撐得住了。",
     "px_higher_low": "跌勢的特徵是「低點愈來愈低」。當這次回檔的低點比上次還高(一底比一底高),就是趨勢可能要轉向的第一個結構訊號。",
