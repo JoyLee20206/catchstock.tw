@@ -48,6 +48,8 @@ CFG = {
     "spike_drop_pct":    8.0,    # 04 收盤較當日高回落 > X%
     "no_low_days":       10,     # 05/16 未破前 N 日低
     "pivot_window":      3,      # 06 轉折低偵測視窗
+    "pivot_max_age":     30,     # 06 前一轉折低點距今 ≤ N 個交易日才比較
+                                 #    (避免拿上一波大跌的谷底證明這一波「低點墊高」)
     "hold_days":         2,      # 08 連 N 天守住
     "vol_avg_days":      20,     # 09 均量天數
     "vol_spike_mult":    1.5,    # 09 爆量倍數
@@ -282,6 +284,87 @@ def fetch_market_turnover(months: int = 2) -> "pd.DataFrame | None":
         return None
     df = pd.DataFrame(frames).drop_duplicates("date").set_index("date").sort_index()
     return df
+
+
+def fetch_margin_balance_from_cache(cache_dir, max_age_days: int = 4) -> "pd.Series | None":
+    """全市場融資餘額(張),從選股排程的 margin parquet 加總 — 零網路請求。
+
+    fetch_cache.py 每天已抓全市場逐檔融資餘額(上市+上櫃)。
+    單位是「張」,與證交所統計表的「仟元」不同;本訊號只比減幅趨勢,
+    單位不影響判定,但顯示時要帶對單位(呼叫端處理)。
+    快取太舊(> max_age_days 天)回 None,讓呼叫端退回現抓。
+    """
+    if cache_dir is None:
+        return None
+    try:
+        files = sorted(Path(cache_dir).glob("margin_*.parquet"))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        bal = df.groupby("date")["MarginPurchaseTodayBalance"].sum().astype(float)
+        bal.index = [datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+                     for d in bal.index]
+        bal = bal.sort_index()
+        age = (datetime.now().date() - bal.index[-1]).days
+        if age > max_age_days:
+            print(f"   ⚠ margin 快取最新日 {bal.index[-1]}(已 {age} 天),改現抓")
+            return None
+        return bal
+    except Exception as e:
+        print(f"   ⚠ margin 快取讀取失敗: {str(e)[:80]}")
+        return None
+
+
+def fetch_breadth_from_cache(cache_dir, days: int = 6,
+                             max_age_days: int = 4) -> "pd.DataFrame | None":
+    """全市場漲跌家數,從選股排程的 daily 價量 parquet 計算 — 零網路請求。
+
+    逐檔收盤價跟前一日比,數出上漲/下跌家數。涵蓋上市+上櫃,
+    比證交所統計表(僅上市)更全市場;本訊號比的是佔比變化,定義差異不影響。
+    """
+    if cache_dir is None:
+        return None
+    try:
+        files = sorted(Path(cache_dir).glob("daily_*.parquet"))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1], columns=["stock_id", "date", "close"])
+        dates = sorted(df["date"].unique())[-(days + 1):]
+        df = df[df["date"].isin(dates)]
+        piv = df.pivot_table(index="date", columns="stock_id",
+                             values="close").sort_index()
+        chg = piv.diff().iloc[1:]
+        out = pd.DataFrame({"up": (chg > 0).sum(axis=1),
+                            "down": (chg < 0).sum(axis=1)})
+        out.index = [datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+                     for d in out.index]
+        age = (datetime.now().date() - out.index[-1]).days
+        if age > max_age_days:
+            print(f"   ⚠ daily 快取最新日 {out.index[-1]}(已 {age} 天),改現抓")
+            return None
+        return out
+    except Exception as e:
+        print(f"   ⚠ daily 快取讀取失敗: {str(e)[:80]}")
+        return None
+
+
+def fetch_us_vix_from_cache(cache_dir, max_age_days: int = 6) -> "pd.DataFrame | None":
+    """美股 VIX 備援:選股排程的 vix parquet(yfinance 現抓失敗時用)。"""
+    if cache_dir is None:
+        return None
+    try:
+        files = sorted(Path(cache_dir).glob("vix_*.parquet"))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        df.columns = [str(c).lower() for c in df.columns]
+        df = df.set_index(pd.to_datetime(df["date"])).sort_index()
+        if (datetime.now() - df.index[-1]).days > max_age_days:
+            return None
+        return df[["close"]].dropna()
+    except Exception as e:
+        print(f"   ⚠ vix 快取讀取失敗: {str(e)[:80]}")
+        return None
 
 
 def fetch_market_turnover_openapi() -> "pd.DataFrame | None":
@@ -578,6 +661,8 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
 
     print("📥 抓美股 VIX / 美債 / 美元 / 台幣 / 費半(yfinance)…")
     us_vix = _yf_series("^VIX", period="30d")
+    if us_vix is None:
+        us_vix = fetch_us_vix_from_cache(cache_dir)
     us10y = _yf_series("^TNX", period="15d")       # 美國 10 年期公債殖利率(%)
     dxy = _yf_series("DX-Y.NYB", period="15d")     # 美元指數 DXY
     twd = _yf_series("TWD=X", period="15d")        # 美元兌台幣(升=台幣貶)
@@ -615,9 +700,15 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     if f_spot is None:
         f_spot = fetch_foreign_spot_net()
 
-    print("📥 抓證交所(融資餘額 / 漲跌家數)…")
-    margin = fetch_margin_balance(days=c["fs_avg_days"] + 2)
-    breadth = fetch_market_breadth()
+    print("📥 抓融資餘額 / 漲跌家數(快取優先,證交所備援)…")
+    margin = fetch_margin_balance_from_cache(cache_dir)
+    margin_div, margin_unit = 1e4, "萬張"          # 快取單位:張
+    if margin is None:
+        margin = fetch_margin_balance(days=c["fs_avg_days"] + 2)
+        margin_div, margin_unit = 1e5, "億"        # 統計表單位:仟元
+    breadth = fetch_breadth_from_cache(cache_dir)
+    if breadth is None:
+        breadth = fetch_market_breadth()
 
     print("📥 抓外資期貨…")
     fi_today, fi_yest = fetch_fi_futures_yesterday_today(cache_dir)
@@ -691,11 +782,17 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
         items.append(_item("px_no_low", g, "未破前低", today_low >= prior_min,
                            f"今低 {today_low:,.0f} / 前{n}日低 {prior_min:,.0f}"))
 
-        pivots = _find_pivot_lows(twii["low"].tail(60), c["pivot_window"])
+        lows60 = twii["low"].tail(60)
+        pivots = _find_pivot_lows(lows60, c["pivot_window"])
         if len(pivots) >= 2:
-            (_, p1), (_, p2) = pivots[-2], pivots[-1]
-            items.append(_item("px_higher_low", g, "低點墊高", p2 > p1,
-                               f"前低 {p1:,.0f} → 新低 {p2:,.0f}"))
+            (d1, p1), (_, p2) = pivots[-2], pivots[-1]
+            age = len(lows60.loc[d1:]) - 1   # 前一轉折距今的交易日數
+            if age > c["pivot_max_age"]:
+                items.append(_item("px_higher_low", g, "低點墊高", None,
+                                   f"前轉折 {d1:%m/%d}(距今 {age} 日)屬上一波段,不比較"))
+            else:
+                items.append(_item("px_higher_low", g, "低點墊高", p2 > p1,
+                                   f"前低 {p1:,.0f} → 新低 {p2:,.0f}"))
         else:
             items.append(_item("px_higher_low", g, "低點墊高", None, "轉折點不足"))
 
@@ -750,7 +847,8 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
         avg_drop = float((-past[past < 0]).mean()) if (past < 0).any() else 0.0
         ok = (today_chg >= 0) or (avg_drop > 0 and -today_chg < avg_drop)
         items.append(_item("margin_calm", g, "融資減幅收斂", ok,
-                           f"今 {today_chg / 1e5:+,.0f} 億 / 近日均減 {avg_drop / 1e5:,.0f} 億",
+                           f"今 {today_chg / margin_div:+,.1f} {margin_unit}"
+                           f" / 近日均減 {avg_drop / margin_div:,.1f} {margin_unit}",
                            observe=True))
     else:
         items.append(_item("margin_calm", g, "融資減幅收斂", None, "資料缺", observe=True))
@@ -905,7 +1003,7 @@ EXPLAIN = {
     "vix_spread": "美股也有一個恐慌指數(VIX)。台股自己飆高、美股很平靜,代表是「台灣自己的事」在嚇人。當兩邊差距開始縮小,就是台灣本地的驚慌在消退。但要小心收斂的「方向」:必須是台灣的恐慌(VIXTWN)自己在降才算數;如果差距是因為「美股 VIX 上升」才縮小,那是全球的平靜往台灣的恐慌靠——不但不是好訊號,反而要警惕本地利空開始外溢,系統會另外發告警提醒。",
     "vix_spike": "見底常有個「最後一跳」:大家恐慌到極點、指數爆衝一根,接著突然急殺回落。這種「衝高後快速崩下來」通常代表恐慌一次宣洩完,是見底的典型樣子。",
     "px_no_low": "下跌要停,第一步就是「不再創新低」。今天的低點如果守在前波低點之上,代表賣壓開始撐得住了。",
-    "px_higher_low": "跌勢的特徵是「低點愈來愈低」。當這次回檔的低點比上次還高(一底比一底高),就是趨勢可能要轉向的第一個結構訊號。",
+    "px_higher_low": "跌勢的特徵是「低點愈來愈低」。當這次回檔的低點比上次還高(一底比一底高),就是趨勢可能要轉向的第一個結構訊號。注意:比較的兩個低點必須是「同一波下跌」裡的——前一個低點若是一個多月前、上一波段的谷底,拿來比沒有意義,這時會顯示「不比較」,等這波自己的轉折低點出現再判定。",
     "px_strong_k": "像「長下影線」或「把前一天跌幅吃回去」的大紅K,代表盤中殺低後被買盤強力拉回。重點是收盤要守住——盤中拉高、尾盤又被殺回去的不算數。",
     "px_hold": "一根紅K可能只是反彈逃命。要連著幾天都站得住、不再破低,才能比較放心說「跌勢真的停了」,而不是曇花一現。",
     "vol_spike_down": "成交量爆出來的大跌,常代表想賣的人一次砍光、恐慌賣壓宣洩完。賣的人都賣完了,後面就比較沒有賣壓。",
