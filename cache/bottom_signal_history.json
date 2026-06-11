@@ -31,14 +31,14 @@
   {
     "date": "2026-06-11",
     "level": 0,
-    "n_ok": 6,
+    "n_ok": 5,
     "vixtwn": 43.58,
     "items": {
       "gate": false,
       "vix_fall": false,
       "vix_spread": false,
       "vix_spike": false,
-      "px_no_low": true,
+      "px_no_low": false,
       "px_higher_low": null,
       "px_strong_k": false,
       "px_hold": true,
@@ -55,7 +55,7 @@
       "tsmc_ma": false,
       "us_10y": false,
       "dxy_fall": true,
-      "twd_stable": true,
+      "twd_stable": false,
       "sox_no_low": true,
       "news_dulled": false,
       "news_resolved": false
