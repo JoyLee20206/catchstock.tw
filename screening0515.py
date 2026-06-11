@@ -898,6 +898,15 @@ def run_screening(
         l         = large_sig.get(sid, 0)            # 大戶上升 (1 分)
         sd        = small_decrease_sig.get(sid, 0)   # 散戶下降 (1 分,獨立計分)
         chip_sync = int(l == 1 and sd == 1)          # 籌碼共振 (僅供排序,不計分)
+        # 籌碼信心分級 (方案 C:把最有 edge 的大戶↑/散戶↓ 當「分級標籤」而非「篩選門票」,
+        # 完全不影響誰入選,只標出值得優先看的股。依訊號歸因:大戶↑ edge +6%、散戶↓ +3%。
+        # 累積一段時間後可用 sig 欄回測「高信心 vs 一般」前進報酬,證實有效再升級為硬門票。)
+        if chip_sync:
+            chip_tier = "🔥 高信心"      # 大戶↑ 且 散戶↓ 共振
+        elif l == 1 or sd == 1:
+            chip_tier = "⭐ 中信心"      # 大戶↑ 或 散戶↓ 其一
+        else:
+            chip_tier = "一般"
 
         tech = tech_sig.get(sid, 0)
         kd   = kd_sig.get(sid, 0)
@@ -914,6 +923,7 @@ def run_screening(
 
         results.append({
             "代號": sid, "名稱": name_map.get(sid, ""), "總分": score,
+            "籌碼信心": chip_tier,    # 方案 C 分級標籤 (🔥高信心=共振 / ⭐中信心=其一 / 一般);不影響入選
             # 法人三大訊號
             "投信買超": it['flag'], "外資買超": fi['flag'], "投信+外資雙買": it_fi_dual,
             # 券相關
@@ -976,6 +986,9 @@ def run_screening(
         rs_count        = (df["RS優於大盤"] == 1).sum()
         dual_count      = (df["投信+外資雙買"] == 1).sum()
         print(f"   · 籌碼共振 (大戶↑+散戶↓) : {chip_sync_count} 檔")
+        high_conf = int((df["籌碼信心"] == "🔥 高信心").sum())
+        mid_conf  = int((df["籌碼信心"] == "⭐ 中信心").sum())
+        print(f"   · 籌碼信心分級           : 🔥高信心 {high_conf} / ⭐中信心 {mid_conf} / 一般 {len(df) - high_conf - mid_conf}")
         print(f"   · 投信+外資雙買超         : {dual_count} 檔")
         print(f"   · RS 優於大盤             : {rs_count} 檔")
         print(f"📍 報表已產出:{os.path.abspath(out)}")
