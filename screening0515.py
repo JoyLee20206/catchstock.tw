@@ -16,10 +16,11 @@ CACHE_DIR = Path("cache")
 #   1. 投信買超       2. 外資買超          3. 投信+外資雙買超
 #   4. 券相關合併     5. 400張大戶上升     6. 散戶下降
 #   7. 技術面三合一   8. KD 低檔金叉       9. 月營收達標
-#   10. RS vs 大盤
+#   10. RS vs 大盤 (僅多頭計分;空頭時記 0 — 見動態門檻調整)
 #
 # 動態門檻調整:
-#   - 大盤跌破季線 → PASS_SCORE 自動 +1 (空頭從嚴)
+#   - 大盤跌破季線 → PASS_SCORE 自動 +1 (空頭從嚴);且 RS 訊號不計分
+#     (歸因顯示做頭往下時追強勢 edge 為負,故空頭關閉 RS,只靠籌碼/基本面)
 #   - 大盤 ^TWII 抓取失敗 → PASS_SCORE 自動 -1 (RS 訊號失效補償)
 #
 # 籌碼共振 (大戶↑+散戶↓):「不再額外計分」,但作為排序優先序
@@ -768,7 +769,10 @@ def run_screening(
                     twii_change  = (twii_end / twii_start - 1) * 100
                     rs_diff = stock_change - twii_change
                     rs_diff_map[sid] = round(rs_diff, 2)
-                    rs_sig[sid] = int(rs_diff > 0)
+                    # RS 看大盤臉色:多頭(站上季線)才獎勵相對強勢;空頭時 RS 不計分。
+                    # 依據訊號歸因回測:做頭往下時「過去最強的股」反而摔最重(RS edge 為負),
+                    # 此時追強勢等於專挑會反轉的名字。多頭趨勢中強者恆強,RS 仍有效,故僅按 regime 開關。
+                    rs_sig[sid] = int(rs_diff > 0) if market_bullish else 0
 
     # --- 訊號 9: 月營收 — 優先 YoY,YoY 不可行時降級 MoM ---
     # MoM 春節過濾:依據「MoM 序列的目標月份」逐股判斷,而非執行月。

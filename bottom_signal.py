@@ -803,12 +803,18 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
         items.append(_item("px_strong_k", g, "強K守收盤", strong,
                            f"收 {cl:,.0f}({'紅' if cl > o else '黑'}K,下影 {(cl - l) / rng:.0%})"))
 
+        # 守住點改用「最近一個轉折低」(與「低點墊高」共用 pivots),而非整段最低點。
+        # 舊作法 base_low = 前 (hd+n)~hd 天的 min,行情回升時會鎖到很久以前的老低,
+        # 讓「守住」幾乎恆成立、失去鑑別力(現價已高出老低近 10% 也算守住)。
         hd = c["hold_days"]
-        base_low = float(twii["low"].iloc[-(hd + n):-hd].min())
-        seg = twii.iloc[-hd:]
-        held = bool((seg["low"] > base_low).all() and (seg["close"] > base_low).all())
-        items.append(_item("px_hold", g, f"連{hd}天守住", held,
-                           f"守 {base_low:,.0f}"))
+        if pivots:
+            piv_date, pivot_low = pivots[-1]   # 最近一個轉折低
+            seg = twii.iloc[-hd:]
+            held = bool((seg["low"] > pivot_low).all() and (seg["close"] > pivot_low).all())
+            items.append(_item("px_hold", g, f"連{hd}天守住", held,
+                               f"守 {pivot_low:,.0f}(最近轉折低 {piv_date:%m/%d})"))
+        else:
+            items.append(_item("px_hold", g, f"連{hd}天守住", None, "轉折點不足"))
     else:
         for k, nm in [("px_no_low", "未破前低"), ("px_higher_low", "低點墊高"),
                       ("px_strong_k", "強K守收盤"), ("px_hold", f"連{c['hold_days']}天守住")]:
