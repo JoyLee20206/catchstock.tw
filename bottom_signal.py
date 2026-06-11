@@ -87,6 +87,32 @@ def _post(url, data, **kw):
     return requests.post(url, data=data, **kw)
 
 
+def _twse_json(url, retries: int = 3) -> "dict | None":
+    """證交所 rwd JSON,含節流與重試。失敗回 None,不丟例外。
+
+    TWSE 有流量限制:同 IP 請求太密會被暫時封鎖,回空白頁
+    (JSON 解析變成 'Expecting value' 錯誤),排程主機上特別常見。
+    策略:每次請求後固定睡 1.2 秒(不論成敗);失敗再等 5/15 秒重試,
+    讓封鎖有時間解除。
+    """
+    waits = [5, 15]
+    hdrs = dict(_HEADERS, Accept="application/json",
+                Referer="https://www.twse.com.tw/")
+    for attempt in range(retries):
+        try:
+            r = _get(url, headers=hdrs)
+            j = r.json() if r.status_code == 200 else None
+        except Exception:
+            j = None
+        time.sleep(1.2)
+        if j is not None:
+            return j
+        if attempt < retries - 1:
+            time.sleep(waits[min(attempt, len(waits) - 1)])
+    print(f"   ⚠ TWSE 重試 {retries} 次仍失敗: {url[:90]}")
+    return None
+
+
 def _yf_series(ticker: str, period: str = "60d", max_retries: int = 2):
     """yfinance OHLC,回單層欄位 DataFrame(open/high/low/close)或 None。"""
     import yfinance as yf
@@ -237,9 +263,8 @@ def fetch_market_turnover(months: int = 2) -> "pd.DataFrame | None":
         url = (f"https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK"
                f"?date={y}{m:02d}01&response=json")
         try:
-            r = _get(url)
-            j = r.json()
-            if j.get("stat") != "OK" or not j.get("data"):
+            j = _twse_json(url)
+            if j is None or j.get("stat") != "OK" or not j.get("data"):
                 continue
             for row in j["data"]:
                 d = _roc_to_date(row[0])
@@ -251,7 +276,6 @@ def fetch_market_turnover(months: int = 2) -> "pd.DataFrame | None":
                     "taiex": float(str(row[4]).replace(",", "")),       # 收盤指數
                     "change": float(str(row[5]).replace(",", "")),      # 漲跌點數
                 })
-            time.sleep(1.2)   # TWSE 有流量限制,放慢
         except Exception as e:
             print(f"   ⚠ FMTQIK {y}{m:02d} 失敗: {str(e)[:80]}")
     if not frames:
@@ -302,14 +326,13 @@ def fetch_foreign_spot_net(days: int = 6) -> "pd.Series | None":
             url = (f"https://www.twse.com.tw/rwd/zh/fund/BFI82U"
                    f"?dayDate={d.strftime('%Y%m%d')}&type=day&response=json")
             try:
-                j = _get(url).json()
+                j = _twse_json(url) or {}
                 if j.get("stat") == "OK" and j.get("data"):
                     net = 0.0
                     for row in j["data"]:
                         if "外資" in str(row[0]):
                             net += float(str(row[3]).replace(",", ""))
                     rows[d.date()] = net
-                time.sleep(1.2)
             except Exception as e:
                 print(f"   ⚠ BFI82U {d:%Y%m%d} 失敗: {str(e)[:80]}")
             tried += 1
@@ -333,13 +356,12 @@ def fetch_margin_balance(days: int = 7) -> "pd.Series | None":
             url = (f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN"
                    f"?date={d.strftime('%Y%m%d')}&selectType=MS&response=json")
             try:
-                j = _get(url).json()
+                j = _twse_json(url) or {}
                 if j.get("stat") == "OK":
                     for t in j.get("tables") or []:
                         for row in t.get("data") or []:
                             if "融資金額" in str(row[0]):
                                 rows[d.date()] = float(str(row[5]).replace(",", ""))
-                time.sleep(1.2)
             except Exception as e:
                 print(f"   ⚠ MI_MARGN {d:%Y%m%d} 失敗: {str(e)[:80]}")
             tried += 1
@@ -363,7 +385,7 @@ def fetch_market_breadth(days: int = 4) -> "pd.DataFrame | None":
             url = (f"https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX"
                    f"?date={d.strftime('%Y%m%d')}&type=MS&response=json")
             try:
-                j = _get(url).json()
+                j = _twse_json(url) or {}
                 up = down = None
                 for t in j.get("tables") or []:
                     if "漲跌" not in str(t.get("title", "")):
@@ -376,7 +398,6 @@ def fetch_market_breadth(days: int = 4) -> "pd.DataFrame | None":
                             down = int(n)
                 if up is not None and down is not None:
                     rows[d.date()] = {"up": up, "down": down}
-                time.sleep(1.2)
             except Exception as e:
                 print(f"   ⚠ MI_INDEX {d:%Y%m%d} 失敗: {str(e)[:80]}")
             tried += 1
@@ -401,7 +422,7 @@ def fetch_index_ohlc_twse(months: int = 5) -> "pd.DataFrame | None":
         url = (f"https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST"
                f"?date={y}{m:02d}01&response=json")
         try:
-            j = _get(url).json()
+            j = _twse_json(url) or {}
             if j.get("stat") == "OK" and j.get("data"):
                 for r in j["data"]:
                     d = _roc_to_date(r[0])
@@ -417,7 +438,6 @@ def fetch_index_ohlc_twse(months: int = 5) -> "pd.DataFrame | None":
                         })
                     except (ValueError, IndexError):
                         continue
-            time.sleep(1.2)
         except Exception as e:
             print(f"   ⚠ MI_5MINS_HIST {y}{m:02d} 失敗: {str(e)[:80]}")
     if not rows:
@@ -437,7 +457,7 @@ def fetch_stock_ohlc_twse(stock_no: str, months: int = 3) -> "pd.DataFrame | Non
         url = (f"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY"
                f"?date={y}{m:02d}01&stockNo={stock_no}&response=json")
         try:
-            j = _get(url).json()
+            j = _twse_json(url) or {}
             if j.get("stat") == "OK" and j.get("data"):
                 for r in j["data"]:
                     d = _roc_to_date(r[0])
@@ -453,7 +473,6 @@ def fetch_stock_ohlc_twse(stock_no: str, months: int = 3) -> "pd.DataFrame | Non
                         })
                     except (ValueError, IndexError):
                         continue    # '--' 等非數字(停牌)略過
-            time.sleep(1.2)
         except Exception as e:
             print(f"   ⚠ STOCK_DAY {stock_no} {y}{m:02d} 失敗: {str(e)[:80]}")
     if not rows:
