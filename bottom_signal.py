@@ -284,6 +284,36 @@ def fetch_market_turnover(months: int = 2) -> "pd.DataFrame | None":
     return df
 
 
+def fetch_market_turnover_openapi() -> "pd.DataFrame | None":
+    """成交金額備援:證交所開放資料(openapi.twse.com.tw)。
+
+    與主站(www.twse.com.tw/rwd)是不同服務,主站封鎖排程主機 IP 時
+    這裡通常仍可用。限制:只提供「本月」逐日資料,月初樣本少,
+    需要 20 日均量的「爆量下跌」會顯示資料缺,其餘比昨日的項目照常。
+    """
+    try:
+        r = _get("https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK",
+                 headers=dict(_HEADERS, accept="application/json"))
+        if r.status_code != 200:
+            return None
+        rows = []
+        for row in r.json():
+            d = _roc_to_date(str(row.get("Date", "")))
+            if d is None:
+                continue
+            rows.append({"date": d,
+                         "value": float(row["TradeValue"]),
+                         "taiex": float(row["TAIEX"]),
+                         "change": float(row["Change"])})
+        if not rows:
+            return None
+        return (pd.DataFrame(rows).drop_duplicates("date")
+                .set_index("date").sort_index())
+    except Exception as e:
+        print(f"   ⚠ openapi FMTQIK 失敗: {str(e)[:80]}")
+        return None
+
+
 def fetch_foreign_spot_net_from_cache(cache_dir, max_age_days: int = 4) -> "pd.Series | None":
     """外資現貨買賣超(股數),從既有 institutional parquet 加總 — 零網路請求。
 
@@ -574,7 +604,16 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
 
     print("📥 抓證交所(成交金額 / 外資現貨)…")
     turnover = fetch_market_turnover()
-    f_spot = fetch_foreign_spot_net()
+    if turnover is None:
+        turnover = fetch_market_turnover_openapi()
+        if turnover is not None:
+            alerts.append("成交金額改用備用來源(證交所開放資料):"
+                          "只有本月資料,月初時需要 20 日均量的項目會顯示資料缺,"
+                          "其餘照常。")
+    # 外資現貨:優先用選股排程已抓好的快取(零網路請求),沒有才現抓
+    f_spot = fetch_foreign_spot_net_from_cache(cache_dir)
+    if f_spot is None:
+        f_spot = fetch_foreign_spot_net()
 
     print("📥 抓證交所(融資餘額 / 漲跌家數)…")
     margin = fetch_margin_balance(days=c["fs_avg_days"] + 2)
