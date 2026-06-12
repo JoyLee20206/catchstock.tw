@@ -1826,682 +1826,687 @@ with _tab_perf:
         if not overall:
             st.info("資料尚不足以計算績效,建議累積更多天數的選股紀錄後再來看。")
         else:
-            # ── 📅 持有天數比較(找最佳出場時機) ──
-            # 同一批 picks 在不同持有期的表現並排,看「抱幾天最划算」。
-            # 全部持有期都顯示;尚無資料(pick 還沒活夠天數)者標「累積中」。
-            _all_periods = (3, 5, 10, 20)
-            if True:
-                st.markdown("**📅 不同持有天數比較(同一批選股,抱幾天最划算?)**")
-                _cmp_rows = []
-                _best_n, _best_exp = None, None       # 淨期望值最高
-                _best_dn, _best_daily = None, None     # 日均報酬最高(效率)
-                _has_pending = False
-                for n in _all_periods:
-                    # 該持有期還沒有任何 pick 活夠天數 → 累積中
-                    if f"n_{n}d" not in overall:
-                        _has_pending = True
-                        _need = max(1, n - _hist_days)   # 約還需幾天(以歷史天數粗估)
+            # ── 樣本狀態一次性橫幅:「樣本不足」提醒集中在此,下方各表不再逐一重複 ──
+            if _hist_days < 30:
+                st.warning(
+                    f"⚠️ **目前僅累積 {_hist_days} 天選股歷史**(未滿 30 天、尚未經歷完整多空循環),"
+                    f"以下所有統計都可能被短期噪音主導——先看方向、別當結論。"
+                )
+
+            # ── 二層分頁:9 個區塊分成 3 組,免長捲動 ──
+            _sub_overview, _sub_validate, _sub_detail = st.tabs([
+                "📅 總覽", "🧪 深入驗證", "📋 個股與樣本明細"
+            ])
+
+            with _sub_overview:
+                # ── 📅 持有天數比較(找最佳出場時機) ──
+                # 同一批 picks 在不同持有期的表現並排,看「抱幾天最划算」。
+                # 全部持有期都顯示;尚無資料(pick 還沒活夠天數)者標「累積中」。
+                _all_periods = (3, 5, 10, 20)
+                if True:
+                    st.markdown("**📅 不同持有天數比較(同一批選股,抱幾天最划算?)**")
+                    _cmp_rows = []
+                    _best_n, _best_exp = None, None       # 淨期望值最高
+                    _best_dn, _best_daily = None, None     # 日均報酬最高(效率)
+                    _has_pending = False
+                    for n in _all_periods:
+                        # 該持有期還沒有任何 pick 活夠天數 → 累積中
+                        if f"n_{n}d" not in overall:
+                            _has_pending = True
+                            _need = max(1, n - _hist_days)   # 約還需幾天(以歷史天數粗估)
+                            _cmp_rows.append({
+                                "持有天數": f"{n} 日",
+                                "樣本數":  0,
+                                "勝率":    "⏳ 累積中",
+                                "平均報酬": f"約還需 {_need} 天",
+                                "淨期望值": "—",
+                                "日均報酬": "—",
+                                "損益比":  "—",
+                            })
+                            continue
+                        _exp = overall.get(f"net_expectancy_{n}d")
+                        _pf  = overall.get(f"profit_factor_{n}d")
+                        _pf_str = "∞" if _pf == float("inf") else (f"{_pf:.2f}" if _pf is not None else "—")
+                        if _exp is not None and (_best_exp is None or _exp > _best_exp):
+                            _best_exp, _best_n = _exp, n
+                        # 日均報酬 = 淨期望值 ÷ 持有天數(讓不同持有期能公平比較效率)
+                        _daily = _exp / n if _exp is not None else None
+                        if _daily is not None and (_best_daily is None or _daily > _best_daily):
+                            _best_daily, _best_dn = _daily, n
                         _cmp_rows.append({
                             "持有天數": f"{n} 日",
-                            "樣本數":  0,
-                            "勝率":    "⏳ 累積中",
-                            "平均報酬": f"約還需 {_need} 天",
-                            "淨期望值": "—",
-                            "日均報酬": "—",
-                            "損益比":  "—",
+                            "樣本數":  overall.get(f"n_{n}d", 0),
+                            "勝率":    f"{overall.get(f'win_rate_{n}d', 0)*100:.0f}%",
+                            "平均報酬": f"{overall.get(f'avg_return_{n}d', 0):+.2f}%",
+                            "淨期望值": f"{_exp:+.2f}%" if _exp is not None else "—",
+                            "日均報酬": f"{_daily:+.2f}%" if _daily is not None else "—",
+                            "損益比":  _pf_str,
                         })
-                        continue
-                    _exp = overall.get(f"net_expectancy_{n}d")
-                    _pf  = overall.get(f"profit_factor_{n}d")
-                    _pf_str = "∞" if _pf == float("inf") else (f"{_pf:.2f}" if _pf is not None else "—")
-                    if _exp is not None and (_best_exp is None or _exp > _best_exp):
-                        _best_exp, _best_n = _exp, n
-                    # 日均報酬 = 淨期望值 ÷ 持有天數(讓不同持有期能公平比較效率)
-                    _daily = _exp / n if _exp is not None else None
-                    if _daily is not None and (_best_daily is None or _daily > _best_daily):
-                        _best_daily, _best_dn = _daily, n
-                    _cmp_rows.append({
-                        "持有天數": f"{n} 日",
-                        "樣本數":  overall.get(f"n_{n}d", 0),
-                        "勝率":    f"{overall.get(f'win_rate_{n}d', 0)*100:.0f}%",
-                        "平均報酬": f"{overall.get(f'avg_return_{n}d', 0):+.2f}%",
-                        "淨期望值": f"{_exp:+.2f}%" if _exp is not None else "—",
-                        "日均報酬": f"{_daily:+.2f}%" if _daily is not None else "—",
-                        "損益比":  _pf_str,
-                    })
-                st.dataframe(pd.DataFrame(_cmp_rows), use_container_width=True, hide_index=True)
-                if _has_pending:
-                    st.caption("⏳ 標「累積中」的持有期,是因為最早入選的 pick 還沒滿該天數;歷史累積足夠後會自動補上。")
-                if _best_n is not None:
-                    _eff_note = ""
-                    if _best_dn is not None and _best_dn != _best_n:
-                        _eff_note = (
-                            f" 但若看**日均報酬**(效率),**持有 {_best_dn} 日最高({_best_daily:+.2f}%/日)**——"
-                            f"同一段時間內短打可以做更多趟,整體可能更賺。"
+                    st.dataframe(pd.DataFrame(_cmp_rows), use_container_width=True, hide_index=True)
+                    if _has_pending:
+                        st.caption("⏳ 標「累積中」的持有期,是因為最早入選的 pick 還沒滿該天數;歷史累積足夠後會自動補上。")
+                    if _best_n is not None:
+                        _eff_note = ""
+                        if _best_dn is not None and _best_dn != _best_n:
+                            _eff_note = (
+                                f" 但若看**日均報酬**(效率),**持有 {_best_dn} 日最高({_best_daily:+.2f}%/日)**——"
+                                f"同一段時間內短打可以做更多趟,整體可能更賺。"
+                            )
+                        st.caption(
+                            f"💡 以**淨期望值**(扣成本後每筆落袋)來看,**持有 {_best_n} 日最高({_best_exp:+.2f}%)**。"
+                            f"{_eff_note}"
+                            f" 提醒:抱越久樣本越少(最近的 pick 還沒滿天數),數字穩定度較低。"
                         )
-                    st.caption(
-                        f"💡 以**淨期望值**(扣成本後每筆落袋)來看,**持有 {_best_n} 日最高({_best_exp:+.2f}%)**。"
-                        f"{_eff_note}"
-                        f" 提醒:抱越久樣本越少(最近的 pick 還沒滿天數),數字穩定度較低。"
-                    )
+                    st.divider()
+
+                # 各持有期詳細指標(收進 expander,預設收起;標題即帶關鍵數字)
+                # 風險指標(回檔/夏普/波動)用「每入選日平均報酬」序列算,點數 = risk_n。
+                # 點數太少時,這幾項會出現「回檔 0.00% / 夏普飆到兩位數」這種小樣本假象
+                # (全多頭、重疊窗口、年化係數放大),故 < RISK_MIN_N 時不顯示精確值,改標「樣本不足」。
+                RISK_MIN_N = 20
+                st.markdown("**📂 各持有期詳細指標**(點開看賺賠結構與風險面)")
+                for n_days in (3, 5, 10, 20):
+                    key_n = f"n_{n_days}d"
+                    if key_n not in overall:
+                        continue
+                    # 標題摘要:收合狀態也能一眼看到重點
+                    _wr  = overall.get(f"win_rate_{n_days}d", 0) * 100
+                    _exp = overall.get(f"net_expectancy_{n_days}d", 0)
+                    _shp = overall.get(f"sharpe_{n_days}d", 0)
+                    _risk_n_hdr = overall.get(f"risk_n_{n_days}d", 0)
+                    _shp_str = f"{_shp:.2f}" if _risk_n_hdr >= RISK_MIN_N else "—"
+                    _label = (f"入選後 {n_days} 日　勝率 {_wr:.0f}% ｜ 淨期望值 {_exp:+.2f}% "
+                              f"｜ 夏普 {_shp_str} ｜ 樣本 {overall[key_n]} 筆")
+                    with st.expander(_label, expanded=False):
+                        # 第一排:報酬
+                        m_cols = st.columns(4)
+                        m_cols[0].metric("樣本", f"{overall[key_n]} 筆")
+                        m_cols[1].metric("勝率", f"{overall[f'win_rate_{n_days}d']*100:.0f}%")
+                        avg_ret = overall[f"avg_return_{n_days}d"]
+                        m_cols[2].metric("平均報酬", f"{avg_ret:+.2f}%",
+                                         delta_color="normal" if avg_ret >= 0 else "inverse")
+                        med_ret = overall.get(f"median_return_{n_days}d", 0)
+                        m_cols[3].metric("中位數", f"{med_ret:+.2f}%")
+
+                        # 第二排:損益面(輸的時候輸多少、期望值正不正)
+                        if f"profit_factor_{n_days}d" in overall:
+                            m2 = st.columns(4)
+                            avg_gain = overall.get(f"avg_gain_{n_days}d", 0)
+                            avg_loss = overall.get(f"avg_loss_{n_days}d", 0)
+                            pf       = overall[f"profit_factor_{n_days}d"]
+                            m2[0].metric("勝局平均獲利", f"{avg_gain:+.2f}%", delta_color="off")
+                            m2[1].metric("敗局平均虧損", f"{avg_loss:+.2f}%", delta_color="off")
+                            pf_str = "∞" if pf == float("inf") else f"{pf:.2f}"
+                            m2[2].metric("損益比", pf_str,
+                                         help="總獲利 ÷ 總虧損。>1.5 算有效,>2 不錯")
+                            m2[3].metric("淨期望值", f"{_exp:+.2f}%",
+                                         delta_color="normal" if _exp >= 0 else "inverse",
+                                         help="平均報酬扣掉來回交易成本(約 0.5%)後,每筆實際落袋。需 >0 才真正划算")
+
+                        # 第三排:風險面(最大回檔、夏普值、波動、最差單筆)
+                        # 風險指標以「每入選日平均報酬」序列計算(非逐筆),避免重疊窗口灌水。
+                        # 點數 < RISK_MIN_N 時整排隱藏(整排「樣本不足」只是佔版面),
+                        # 僅留最差單筆(逐筆口徑,小樣本也有效)+ 一行說明;樣本夠了自動出現。
+                        if f"sharpe_{n_days}d" in overall:
+                            mdd = overall.get(f"mdd_{n_days}d", 0)
+                            std = overall.get(f"std_{n_days}d", 0)
+                            risk_n = overall.get(f"risk_n_{n_days}d", 0)
+                            min_ret = overall.get(f"min_return_{n_days}d")
+                            if risk_n >= RISK_MIN_N:
+                                m3 = st.columns(4)
+                                m3[0].metric("最大回檔", f"{mdd:.2f}%",
+                                             delta_color="off",
+                                             help="以每入選日平均報酬串成的資金曲線,從高點到低點最大跌幅。越接近 0 越穩")
+                                m3[1].metric("夏普值", f"{_shp:.2f}",
+                                             delta_color="off",
+                                             help="風險調整後報酬(年化)。>1 不錯,>2 很好,>3 極佳")
+                                m3[2].metric("報酬波動(標準差)", f"{std:.2f}%",
+                                             delta_color="off",
+                                             help="每日平均報酬的起伏程度,越大代表越不穩定")
+                                if min_ret is not None:
+                                    m3[3].metric("最差單筆", f"{min_ret:+.2f}%", delta_color="off",
+                                                 help="這個持有期裡,賠最多的那一筆(逐筆,非每日平均)")
+                                st.caption(
+                                    f"⚖️ 回檔/夏普/波動以**每入選日平均報酬**計算(共 {risk_n} 個交易日),"
+                                    f"已避開「逐筆+重疊窗口」的灌水,口徑與「vs 大盤」走勢圖一致。"
+                                )
+                            else:
+                                if min_ret is not None:
+                                    st.columns(4)[0].metric(
+                                        "最差單筆", f"{min_ret:+.2f}%", delta_color="off",
+                                        help="這個持有期裡,賠最多的那一筆(逐筆口徑,小樣本也有效)")
+                                st.caption(
+                                    f"📐 風險指標(回檔/夏普/波動)需 ≥ {RISK_MIN_N} 個入選日才有意義;"
+                                    f"目前 {risk_n} 天,樣本足夠後會自動顯示。"
+                                )
+
+                # ── 📊 系統 picks vs 大盤 後續報酬對照 ─────────────────────────
+                # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。
+                # 每個點 = 該入選日所有 picks 的「5 日後平均報酬」vs 同期 ^TWII。
+                # 刻意不做複利(重疊的 5 日窗口複利累加會把報酬灌水),純比點報酬。
                 st.divider()
+                st.markdown("**📊 跟著系統走 vs 直接買大盤(每點 = 當日入選股的 5 日後平均報酬)**")
+                _eq = None
+                _eq_error = None
+                try:
+                    _eq = compute_equity_curve(load_history(), CACHE_DIR, hold_days=5)
+                except Exception as _e:
+                    _eq_error = str(_e)
+                    print(f"⚠ equity curve 計算失敗: {_e}")
 
-            # 各持有期詳細指標(收進 expander,預設收起;標題即帶關鍵數字)
-            # 風險指標(回檔/夏普/波動)用「每入選日平均報酬」序列算,點數 = risk_n。
-            # 點數太少時,這幾項會出現「回檔 0.00% / 夏普飆到兩位數」這種小樣本假象
-            # (全多頭、重疊窗口、年化係數放大),故 < RISK_MIN_N 時不顯示精確值,改標「樣本不足」。
-            RISK_MIN_N = 20
-            st.markdown("**📂 各持有期詳細指標**(點開看賺賠結構與風險面)")
-            for n_days in (3, 5, 10, 20):
-                key_n = f"n_{n_days}d"
-                if key_n not in overall:
-                    continue
-                # 標題摘要:收合狀態也能一眼看到重點
-                _wr  = overall.get(f"win_rate_{n_days}d", 0) * 100
-                _exp = overall.get(f"net_expectancy_{n_days}d", 0)
-                _shp = overall.get(f"sharpe_{n_days}d", 0)
-                _risk_n_hdr = overall.get(f"risk_n_{n_days}d", 0)
-                _shp_str = f"{_shp:.2f}" if _risk_n_hdr >= RISK_MIN_N else "—"
-                _label = (f"入選後 {n_days} 日　勝率 {_wr:.0f}% ｜ 淨期望值 {_exp:+.2f}% "
-                          f"｜ 夏普 {_shp_str} ｜ 樣本 {overall[key_n]} 筆")
-                with st.expander(_label, expanded=False):
-                    # 第一排:報酬
-                    m_cols = st.columns(4)
-                    m_cols[0].metric("樣本", f"{overall[key_n]} 筆")
-                    m_cols[1].metric("勝率", f"{overall[f'win_rate_{n_days}d']*100:.0f}%")
-                    avg_ret = overall[f"avg_return_{n_days}d"]
-                    m_cols[2].metric("平均報酬", f"{avg_ret:+.2f}%",
-                                     delta_color="normal" if avg_ret >= 0 else "inverse")
-                    med_ret = overall.get(f"median_return_{n_days}d", 0)
-                    m_cols[3].metric("中位數", f"{med_ret:+.2f}%")
-
-                    # 第二排:損益面(輸的時候輸多少、期望值正不正)
-                    if f"profit_factor_{n_days}d" in overall:
-                        m2 = st.columns(4)
-                        avg_gain = overall.get(f"avg_gain_{n_days}d", 0)
-                        avg_loss = overall.get(f"avg_loss_{n_days}d", 0)
-                        pf       = overall[f"profit_factor_{n_days}d"]
-                        m2[0].metric("勝局平均獲利", f"{avg_gain:+.2f}%", delta_color="off")
-                        m2[1].metric("敗局平均虧損", f"{avg_loss:+.2f}%", delta_color="off")
-                        pf_str = "∞" if pf == float("inf") else f"{pf:.2f}"
-                        m2[2].metric("損益比", pf_str,
-                                     help="總獲利 ÷ 總虧損。>1.5 算有效,>2 不錯")
-                        m2[3].metric("淨期望值", f"{_exp:+.2f}%",
-                                     delta_color="normal" if _exp >= 0 else "inverse",
-                                     help="平均報酬扣掉來回交易成本(約 0.5%)後,每筆實際落袋。需 >0 才真正划算")
-
-                    # 第三排:風險面(最大回檔、夏普值、波動、最差單筆)
-                    # 風險指標以「每入選日平均報酬」序列計算(非逐筆),避免重疊窗口灌水。
-                    if f"sharpe_{n_days}d" in overall:
-                        m3 = st.columns(4)
-                        mdd = overall.get(f"mdd_{n_days}d", 0)
-                        std = overall.get(f"std_{n_days}d", 0)
-                        risk_n = overall.get(f"risk_n_{n_days}d", 0)
-                        _enough = risk_n >= RISK_MIN_N   # 風險序列點數足夠才顯示精確值
-                        _na = "樣本不足"
-                        m3[0].metric("最大回檔", f"{mdd:.2f}%" if _enough else _na,
-                                     delta_color="off",
-                                     help="以每入選日平均報酬串成的資金曲線,從高點到低點最大跌幅。越接近 0 越穩"
-                                          "(點數太少時全多頭易出現假性 0%,故暫不顯示)")
-                        m3[1].metric("夏普值", f"{_shp:.2f}" if _enough else _na,
-                                     delta_color="off",
-                                     help="風險調整後報酬(年化)。>1 不錯,>2 很好,>3 極佳"
-                                          "(點數太少時年化係數會把數字灌大到失真,故暫不顯示)")
-                        m3[2].metric("報酬波動(標準差)", f"{std:.2f}%" if _enough else _na,
-                                     delta_color="off",
-                                     help="每日平均報酬的起伏程度,越大代表越不穩定")
-                        min_ret = overall.get(f"min_return_{n_days}d")
-                        if min_ret is not None:
-                            m3[3].metric("最差單筆", f"{min_ret:+.2f}%", delta_color="off",
-                                         help="這個持有期裡,賠最多的那一筆(逐筆,非每日平均)")
-                        if _enough:
-                            st.caption(
-                                f"⚖️ 風險指標(回檔/夏普/波動)以**每入選日平均報酬**計算"
-                                f"(共 {risk_n} 個交易日),已避開「逐筆+重疊窗口」的灌水,"
-                                f"口徑與上方「vs 大盤」走勢圖一致。"
-                                f"　註:持有期越長、可用天數/筆數越少(最近的 pick 還沒滿天數),"
-                                f"故各持有期的「天數」「筆數」本來就會不同。"
-                            )
-                        else:
-                            st.caption(
-                                f"⚠️ 風險指標需 ≥ {RISK_MIN_N} 個入選日才顯示;目前僅 **{risk_n} 天**。"
-                                f"樣本太少時會出現「回檔假性 0% / 夏普被年化灌大」的失真"
-                                f"(尤其全在多頭時),故暫標「樣本不足」,先看勝率/淨期望值/損益比即可。"
-                                f"　註:持有期越長、可用天數/筆數越少(最近的 pick 還沒滿天數),"
-                                f"故各持有期的「天數」「筆數」本來就會不同。"
-                            )
-
-            # ── 📊 系統 picks vs 大盤 後續報酬對照 ─────────────────────────
-            # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。
-            # 每個點 = 該入選日所有 picks 的「5 日後平均報酬」vs 同期 ^TWII。
-            # 刻意不做複利(重疊的 5 日窗口複利累加會把報酬灌水),純比點報酬。
-            st.divider()
-            st.markdown("**📊 跟著系統走 vs 直接買大盤(每點 = 當日入選股的 5 日後平均報酬)**")
-            _eq = None
-            _eq_error = None
-            try:
-                _eq = compute_equity_curve(load_history(), CACHE_DIR, hold_days=5)
-            except Exception as _e:
-                _eq_error = str(_e)
-                print(f"⚠ equity curve 計算失敗: {_e}")
-
-            # ── 三種狀態的明確提示 ──
-            if _eq_error:
-                st.error(f"❌ 累積曲線計算錯誤: {_eq_error}")
-            elif _eq is None:
-                st.info(
-                    "📊 累積績效曲線**資料不足**: 需要至少 8 個交易日的歷史,"
-                    "且 daily 快取要能對齊每個 pick 的日期。"
-                    "(每筆 pick 都要算進場後 5 個交易日,所以最近 5 天的 pick 都還沒算完)"
-                )
-            elif _eq["n_days"] < 3:
-                st.info(
-                    f"📊 績效對照**累積中**: 目前只有 **{_eq['n_days']} 個有效資料點**,"
-                    f"需要 ≥ 3 個才畫得出有意義的對照。"
-                    f"持續累積中,**再過 {max(3 - _eq['n_days'], 1)} 個交易日**會自動出現。"
-                )
-            else:
-                # 4 卡統計
-                _avg_pick = _eq["avg_pick"]
-                _avg_twii = _eq["avg_twii"]
-                _alpha = _eq["alpha"]
-                _win_days = _eq["win_days"]
-                _hd = _eq["hold_days"]
-                _ec_cols = st.columns(4)
-                _ec_cols[0].metric(f"系統平均 {_hd} 日報酬", f"{_avg_pick:+.2f}%",
-                                    delta_color="off")
-                _ec_cols[1].metric(f"大盤平均 {_hd} 日報酬", f"{_avg_twii:+.2f}%",
-                                    delta_color="off")
-                _ec_cols[2].metric("Alpha (系統-大盤)",
-                                    f"{_alpha:+.2f} %",
-                                    delta_color="off")
-                _ec_cols[3].metric(f"系統贏大盤天數",
-                                    f"{_win_days} / {_eq['n_days']} 日",
-                                    delta_color="off")
-
-                # plotly 雙線圖(每點代表「該入選日的 N 日後報酬」)
-                _fig_eq = go.Figure()
-                _fig_eq.add_trace(go.Scatter(
-                    x=_eq["dates"], y=_eq["pick_returns"],
-                    mode="lines+markers",
-                    line=dict(color="#dc2626", width=2.5),
-                    marker=dict(size=6),
-                    name=f"系統 picks(平均 {_avg_pick:+.2f}%)",
-                    hovertemplate=f"<b>%{{x}}</b><br>系統 {_hd} 日報酬:%{{y:+.2f}}%<extra></extra>",
-                ))
-                _fig_eq.add_trace(go.Scatter(
-                    x=_eq["dates"], y=_eq["twii_returns"],
-                    mode="lines+markers",
-                    line=dict(color="#6b7280", width=1.8, dash="dot"),
-                    marker=dict(size=5),
-                    name=f"大盤 加權指數(平均 {_avg_twii:+.2f}%)",
-                    hovertemplate=f"<b>%{{x}}</b><br>大盤 {_hd} 日報酬:%{{y:+.2f}}%<extra></extra>",
-                ))
-                # 0% 基準線
-                _fig_eq.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5,
-                                  annotation_text="0%", annotation_position="left")
-                _fig_eq.update_layout(
-                    height=320, margin=dict(l=10, r=10, t=20, b=20),
-                    yaxis=dict(title=f"{_hd} 日後報酬 (%)", zeroline=True),
-                    xaxis=dict(title=""),
-                    plot_bgcolor="rgba(0,0,0,0.03)",
-                    hovermode="x unified",
-                    legend=dict(orientation="h", yanchor="top", y=-0.1),
-                )
-                st.plotly_chart(_fig_eq, use_container_width=True)
-                st.caption(
-                    f"每個點代表「該日入選的 picks 在 {_hd} 個交易日後的平均報酬」。"
-                    f"線在 0% 上方表示賺、下方虧。"
-                )
-
-                # 文字結論 + 樣本不足警語
-                if _eq["n_days"] < 30:
-                    st.warning(
-                        f"⚠️ **樣本只有 {_eq['n_days']} 天,統計不可靠**。"
-                        f"短期(< 30 天)很容易被市場噪音主導,**至少累積到 30 天**再下結論。"
-                        f"目前的 alpha({_alpha:+.2f}%)可能只是運氣。"
+                # ── 三種狀態的明確提示 ──
+                if _eq_error:
+                    st.error(f"❌ 累積曲線計算錯誤: {_eq_error}")
+                elif _eq is None:
+                    st.info(
+                        "📊 累積績效曲線**資料不足**: 需要至少 8 個交易日的歷史,"
+                        "且 daily 快取要能對齊每個 pick 的日期。"
+                        "(每筆 pick 都要算進場後 5 個交易日,所以最近 5 天的 pick 都還沒算完)"
                     )
-                elif _alpha > 0.5:
-                    st.success(
-                        f"✅ **系統平均贏大盤 {_alpha:+.2f}% / {_hd} 日**"
-                        f"(系統 {_avg_pick:+.2f}% vs 大盤 {_avg_twii:+.2f}%),"
-                        f"勝日 {_win_days}/{_eq['n_days']}。樣本 {_eq['n_days']} 天,可信度逐步提升中。"
-                    )
-                elif _alpha < -0.5:
-                    st.warning(
-                        f"⚠️ **系統平均輸大盤 {abs(_alpha):.2f}% / {_hd} 日**"
-                        f"(系統 {_avg_pick:+.2f}% vs 大盤 {_avg_twii:+.2f}%),"
-                        f"勝日 {_win_days}/{_eq['n_days']}。考慮調整訊號組合。"
+                elif _eq["n_days"] < 3:
+                    st.info(
+                        f"📊 績效對照**累積中**: 目前只有 **{_eq['n_days']} 個有效資料點**,"
+                        f"需要 ≥ 3 個才畫得出有意義的對照。"
+                        f"持續累積中,**再過 {max(3 - _eq['n_days'], 1)} 個交易日**會自動出現。"
                     )
                 else:
-                    st.info(
-                        f"系統表現與大盤接近(Alpha {_alpha:+.2f}%),勝日 {_win_days}/{_eq['n_days']}。"
-                        f"沒有明顯超額,可能就跟大盤連動。"
+                    # 4 卡統計
+                    _avg_pick = _eq["avg_pick"]
+                    _avg_twii = _eq["avg_twii"]
+                    _alpha = _eq["alpha"]
+                    _win_days = _eq["win_days"]
+                    _hd = _eq["hold_days"]
+                    _ec_cols = st.columns(4)
+                    _ec_cols[0].metric(f"系統平均 {_hd} 日報酬", f"{_avg_pick:+.2f}%",
+                                        delta_color="off")
+                    _ec_cols[1].metric(f"大盤平均 {_hd} 日報酬", f"{_avg_twii:+.2f}%",
+                                        delta_color="off")
+                    _ec_cols[2].metric("Alpha (系統-大盤)",
+                                        f"{_alpha:+.2f} %",
+                                        delta_color="off")
+                    _ec_cols[3].metric(f"系統贏大盤天數",
+                                        f"{_win_days} / {_eq['n_days']} 日",
+                                        delta_color="off")
+
+                    # plotly 雙線圖(每點代表「該入選日的 N 日後報酬」)
+                    _fig_eq = go.Figure()
+                    _fig_eq.add_trace(go.Scatter(
+                        x=_eq["dates"], y=_eq["pick_returns"],
+                        mode="lines+markers",
+                        line=dict(color="#dc2626", width=2.5),
+                        marker=dict(size=6),
+                        name=f"系統 picks(平均 {_avg_pick:+.2f}%)",
+                        hovertemplate=f"<b>%{{x}}</b><br>系統 {_hd} 日報酬:%{{y:+.2f}}%<extra></extra>",
+                    ))
+                    _fig_eq.add_trace(go.Scatter(
+                        x=_eq["dates"], y=_eq["twii_returns"],
+                        mode="lines+markers",
+                        line=dict(color="#6b7280", width=1.8, dash="dot"),
+                        marker=dict(size=5),
+                        name=f"大盤 加權指數(平均 {_avg_twii:+.2f}%)",
+                        hovertemplate=f"<b>%{{x}}</b><br>大盤 {_hd} 日報酬:%{{y:+.2f}}%<extra></extra>",
+                    ))
+                    # 0% 基準線
+                    _fig_eq.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5,
+                                      annotation_text="0%", annotation_position="left")
+                    _fig_eq.update_layout(
+                        height=320, margin=dict(l=10, r=10, t=20, b=20),
+                        yaxis=dict(title=f"{_hd} 日後報酬 (%)", zeroline=True),
+                        xaxis=dict(title=""),
+                        plot_bgcolor="rgba(0,0,0,0.03)",
+                        hovermode="x unified",
+                        legend=dict(orientation="h", yanchor="top", y=-0.1),
+                    )
+                    st.plotly_chart(_fig_eq, use_container_width=True)
+                    st.caption(
+                        f"每個點代表「該日入選的 picks 在 {_hd} 個交易日後的平均報酬」。"
+                        f"線在 0% 上方表示賺、下方虧。"
                     )
 
-            # ── 🧪 大盤濾網實證(只在多頭/空頭進場,淨期望值會更好嗎?) ──
-            st.divider()
-            st.markdown("**🧪 大盤濾網實證(只在特定大盤狀態進場,績效會更好嗎?)**")
-            _mf = _load_market_filter_cached(hold_days=5)
-            if _mf.get("error"):
-                st.info(f"📊 {_mf['error']}")
-            else:
-                _mf_rows = []
-                for _sc in _mf["scenarios"]:
-                    _st = _sc["stat"]
-                    if _st:
-                        _mf_rows.append({
-                            "進場條件": _sc["name"],
-                            "樣本": _st["n"],
-                            "勝率": f"{_st['win_rate']*100:.0f}%",
-                            "平均報酬": f"{_st['avg']:+.2f}%",
-                            "淨期望值": f"{_st['net_exp']:+.2f}%",
+                    # 文字結論(樣本不足的總提醒已集中在頁首橫幅,這裡只標狀態)
+                    if _eq["n_days"] < 30:
+                        st.caption(
+                            f"📊 樣本 {_eq['n_days']} 天(未滿 30 天,見頁首提醒)——"
+                            f"alpha {_alpha:+.2f}% 先看方向,別當結論。"
+                        )
+                    elif _alpha > 0.5:
+                        st.success(
+                            f"✅ **系統平均贏大盤 {_alpha:+.2f}% / {_hd} 日**"
+                            f"(系統 {_avg_pick:+.2f}% vs 大盤 {_avg_twii:+.2f}%),"
+                            f"勝日 {_win_days}/{_eq['n_days']}。樣本 {_eq['n_days']} 天,可信度逐步提升中。"
+                        )
+                    elif _alpha < -0.5:
+                        st.warning(
+                            f"⚠️ **系統平均輸大盤 {abs(_alpha):.2f}% / {_hd} 日**"
+                            f"(系統 {_avg_pick:+.2f}% vs 大盤 {_avg_twii:+.2f}%),"
+                            f"勝日 {_win_days}/{_eq['n_days']}。考慮調整訊號組合。"
+                        )
+                    else:
+                        st.info(
+                            f"系統表現與大盤接近(Alpha {_alpha:+.2f}%),勝日 {_win_days}/{_eq['n_days']}。"
+                            f"沒有明顯超額,可能就跟大盤連動。"
+                        )
+
+
+            with _sub_validate:
+                # ── 🧪 大盤濾網實證(只在多頭/空頭進場,淨期望值會更好嗎?) ──
+                st.markdown("**🧪 大盤濾網實證(只在特定大盤狀態進場,績效會更好嗎?)**")
+                _mf = _load_market_filter_cached(hold_days=5)
+                if _mf.get("error"):
+                    st.info(f"📊 {_mf['error']}")
+                else:
+                    _mf_rows = []
+                    for _sc in _mf["scenarios"]:
+                        _st = _sc["stat"]
+                        if _st:
+                            _mf_rows.append({
+                                "進場條件": _sc["name"],
+                                "樣本": _st["n"],
+                                "勝率": f"{_st['win_rate']*100:.0f}%",
+                                "平均報酬": f"{_st['avg']:+.2f}%",
+                                "淨期望值": f"{_st['net_exp']:+.2f}%",
+                            })
+                        else:
+                            _mf_rows.append({"進場條件": _sc["name"], "樣本": 0,
+                                             "勝率": "—", "平均報酬": "—", "淨期望值": "—"})
+                    st.dataframe(pd.DataFrame(_mf_rows), use_container_width=True, hide_index=True)
+
+                    # 自動解讀:先處理「單一 regime、無對照」的退化情況,再比較淨期望值差
+                    _base = _mf["scenarios"][0]["stat"]
+                    _bull = _mf["scenarios"][1]["stat"]
+                    _bear = _mf["scenarios"][2]["stat"]
+                    _bull_n = _bull["n"] if _bull else 0
+                    _bear_n = _bear["n"] if _bear else 0
+                    if _base and (_bear_n == 0 or _bull_n == 0):
+                        # 整段期間只有單一大盤狀態 → 沒有對照組,無法評估濾網
+                        _which = "多頭(站上季線)" if _bear_n == 0 else "空頭(跌破季線)"
+                        _other = "空頭" if _bear_n == 0 else "多頭"
+                        st.caption(
+                            f"💡 這段期間大盤**幾乎全程處於{_which}**,{_other}樣本為 0——"
+                            f"所以「只在多頭」那列才會跟「全部進場」一模一樣(同一批股票)。"
+                            f"**目前沒有對照組,無法評估大盤濾網是否有效**;"
+                            f"要等大盤經歷一次狀態切換(跌破/站回季線)、雙邊都有樣本後才看得出來。"
+                        )
+                    elif _base and _bull and _bull_n >= 5:
+                        _gain = _bull["net_exp"] - _base["net_exp"]
+                        if _gain > 0.3:
+                            st.caption(
+                                f"💡 **只在多頭進場淨期望值高出基準 {_gain:+.2f}%**"
+                                f"(多頭 {_bull['net_exp']:+.2f}% vs 全部 {_base['net_exp']:+.2f}%)——"
+                                f"大盤濾網看起來有幫助,空頭時可考慮減碼或暫停。"
+                            )
+                        elif _gain < -0.3:
+                            st.caption(
+                                f"💡 多頭濾網反而較差({_gain:+.2f}%),代表這套選股在空頭也能打——"
+                                f"不必特別用大盤狀態過濾。"
+                            )
+                        else:
+                            st.caption(
+                                f"💡 多頭/全部進場差異不大({_gain:+.2f}%),大盤濾網目前看不出明顯效果。"
+                            )
+
+                    # 溫度濾網(若情緒歷史足夠)
+                    _tb = _mf.get("temp_block")
+                    if _tb and _tb.get("warm") and _tb.get("cool"):
+                        st.caption(
+                            f"🌡️ 溫度濾網(限有溫度紀錄的 {_tb['n_temp']} 筆):"
+                            f"溫度≥50 淨期望 {_tb['warm']['net_exp']:+.2f}%(n={_tb['warm']['n']}) "
+                            f"vs 溫度<50 {_tb['cool']['net_exp']:+.2f}%(n={_tb['cool']['n']})。"
+                        )
+
+                    if (_mf.get("n_total") or 0) < 50:
+                        st.caption(
+                            f"📊 樣本 {_mf.get('n_total', 0)} 筆、分組後更少——需累積跨多空資料後才可信。"
+                        )
+
+                # 分數區間表
+                by_score = perf.get("by_score", {})
+                if by_score:
+                    st.divider()
+                    st.markdown("**各分數區間 5 日勝率**")
+                    st.caption(
+                        "🔥 8 分 = 頂級(9~10 分需全部條件同時成立、幾乎不可能,故實務上 8 分即最高)"
+                        "｜ ✅ 7 分 = 合格 ｜ ⚠️ 6 分 = 邊緣(僅大盤資料缺時出現)。"
+                        "　註:每次入選算一筆(同檔不同天分開計),故筆數比明細表的檔數多是正常的。"
+                    )
+                    # 分數 → 標籤對映
+                    def _score_label(score: int) -> str:
+                        if score >= 8:
+                            return f"🔥 頂級({score} 分)"
+                        elif score == 7:
+                            return f"✅ 合格({score} 分)"
+                        elif score == 6:
+                            return f"⚠️ 邊緣({score} 分)"
+                        else:
+                            return f"{score} 分"
+
+                    rows = []
+                    for score in sorted(by_score.keys(), reverse=True):
+                        s = by_score[score]
+                        _pf = s.get("profit_factor_5d")
+                        if _pf is None:
+                            _pf_str = "—"
+                        elif _pf == float("inf"):
+                            _pf_str = "∞"
+                        else:
+                            _pf_str = f"{_pf:.2f}"
+                        rows.append({
+                            "分級": _score_label(score),
+                            "樣本數": s.get("n_5d", 0),
+                            "勝率":   f"{s.get('win_rate_5d', 0)*100:.0f}%" if "win_rate_5d" in s else "—",
+                            "平均報酬": f"{s.get('avg_return_5d', 0):+.2f}%" if "avg_return_5d" in s else "—",
+                            "敗局均虧": f"{s.get('avg_loss_5d', 0):+.2f}%" if "avg_loss_5d" in s else "—",
+                            "損益比": _pf_str,
                         })
-                    else:
-                        _mf_rows.append({"進場條件": _sc["name"], "樣本": 0,
-                                         "勝率": "—", "平均報酬": "—", "淨期望值": "—"})
-                st.dataframe(pd.DataFrame(_mf_rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-                # 自動解讀:先處理「單一 regime、無對照」的退化情況,再比較淨期望值差
-                _base = _mf["scenarios"][0]["stat"]
-                _bull = _mf["scenarios"][1]["stat"]
-                _bear = _mf["scenarios"][2]["stat"]
-                _bull_n = _bull["n"] if _bull else 0
-                _bear_n = _bear["n"] if _bear else 0
-                if _base and (_bear_n == 0 or _bull_n == 0):
-                    # 整段期間只有單一大盤狀態 → 沒有對照組,無法評估濾網
-                    _which = "多頭(站上季線)" if _bear_n == 0 else "空頭(跌破季線)"
-                    _other = "空頭" if _bear_n == 0 else "多頭"
-                    st.caption(
-                        f"💡 這段期間大盤**幾乎全程處於{_which}**,{_other}樣本為 0——"
-                        f"所以「只在多頭」那列才會跟「全部進場」一模一樣(同一批股票)。"
-                        f"**目前沒有對照組,無法評估大盤濾網是否有效**;"
-                        f"要等大盤經歷一次狀態切換(跌破/站回季線)、雙邊都有樣本後才看得出來。"
-                    )
-                elif _base and _bull and _bull_n >= 5:
-                    _gain = _bull["net_exp"] - _base["net_exp"]
-                    if _gain > 0.3:
-                        st.caption(
-                            f"💡 **只在多頭進場淨期望值高出基準 {_gain:+.2f}%**"
-                            f"(多頭 {_bull['net_exp']:+.2f}% vs 全部 {_base['net_exp']:+.2f}%)——"
-                            f"大盤濾網看起來有幫助,空頭時可考慮減碼或暫停。"
-                        )
-                    elif _gain < -0.3:
-                        st.caption(
-                            f"💡 多頭濾網反而較差({_gain:+.2f}%),代表這套選股在空頭也能打——"
-                            f"不必特別用大盤狀態過濾。"
-                        )
-                    else:
-                        st.caption(
-                            f"💡 多頭/全部進場差異不大({_gain:+.2f}%),大盤濾網目前看不出明顯效果。"
-                        )
-
-                # 溫度濾網(若情緒歷史足夠)
-                _tb = _mf.get("temp_block")
-                if _tb and _tb.get("warm") and _tb.get("cool"):
-                    st.caption(
-                        f"🌡️ 溫度濾網(限有溫度紀錄的 {_tb['n_temp']} 筆):"
-                        f"溫度≥50 淨期望 {_tb['warm']['net_exp']:+.2f}%(n={_tb['warm']['n']}) "
-                        f"vs 溫度<50 {_tb['cool']['net_exp']:+.2f}%(n={_tb['cool']['n']})。"
-                    )
-
-                if (_mf.get("n_total") or 0) < 50:
-                    st.warning(
-                        f"⚠️ 總樣本僅 {_mf.get('n_total', 0)} 筆,且多頭/空頭分組後更少,"
-                        f"結論極不穩。需累積跨多空的資料後才可信。"
-                    )
-
-            # 分數區間表
-            by_score = perf.get("by_score", {})
-            if by_score:
+                # ── 🔬 訊號歸因分析(10 個計分細項各自帶來多少報酬?) ──
                 st.divider()
-                st.markdown("**各分數區間 5 日勝率**")
-                st.caption(
-                    "⚠️ **為什麼這裡的「筆數」比下方明細的「檔數」多?**\n\n"
-                    "這裡每一次入選都算一筆——同一檔股票在不同天入選會分開計算;"
-                    "下方明細表則是「同一檔只留最新一次」。所以筆數比檔數多是正常的。\n\n"
-                    "💡 **分數怎麼看**:🔥 8 分 = 頂級 ｜ ✅ 7 分 = 合格 ｜ ⚠️ 6 分 = 邊緣(只在大盤資料抓不到時才出現)。\n\n"
-                    "系統滿分雖是 10 分,但 9~10 分要「法人雙買 + 大戶散戶同步 + RS 強 + 月營收成長」"
-                    "**全部同時成立**,幾乎不可能,所以**實務上 8 分就是最高等級**。"
-                )
-                # 分數 → 標籤對映
-                def _score_label(score: int) -> str:
-                    if score >= 8:
-                        return f"🔥 頂級({score} 分)"
-                    elif score == 7:
-                        return f"✅ 合格({score} 分)"
-                    elif score == 6:
-                        return f"⚠️ 邊緣({score} 分)"
-                    else:
-                        return f"{score} 分"
-
-                rows = []
-                for score in sorted(by_score.keys(), reverse=True):
-                    s = by_score[score]
-                    _pf = s.get("profit_factor_5d")
-                    if _pf is None:
-                        _pf_str = "—"
-                    elif _pf == float("inf"):
-                        _pf_str = "∞"
-                    else:
-                        _pf_str = f"{_pf:.2f}"
-                    rows.append({
-                        "分級": _score_label(score),
-                        "樣本數": s.get("n_5d", 0),
-                        "勝率":   f"{s.get('win_rate_5d', 0)*100:.0f}%" if "win_rate_5d" in s else "—",
-                        "平均報酬": f"{s.get('avg_return_5d', 0):+.2f}%" if "avg_return_5d" in s else "—",
-                        "敗局均虧": f"{s.get('avg_loss_5d', 0):+.2f}%" if "avg_loss_5d" in s else "—",
-                        "損益比": _pf_str,
-                    })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-            # ── 🔬 訊號歸因分析(10 個計分細項各自帶來多少報酬?) ──
-            st.divider()
-            st.markdown("**🔬 訊號歸因分析(哪個計分條件真的有效?)**")
-            _SIG_DISPLAY = {
-                "投信": "投信買超", "外資": "外資買超", "雙買": "投信+外資雙買",
-                "券": "券相關(資減券增/軋空)", "大戶": "400張大戶上升", "散戶": "散戶下降",
-                "技術": "技術面三合一", "KD": "KD低檔金叉", "營收": "月營收達標",
-                "RS": "RS優於大盤",
-            }
-            _attr = _load_signal_attribution_cached(hold_days=5)
-            if _attr.get("error"):
-                st.info(f"📊 {_attr['error']}")
-            elif _attr.get("n_eval", 0) == 0:
-                st.info(
-                    f"⏳ **訊號歸因累積中**:目前 **0 筆**含訊號細項的樣本。\n\n"
-                    f"訊號細項(`sig`)是近期才開始記錄的——舊歷史沒存,無法回溯。"
-                    f"從現在起每日推播會逐筆記錄 10 個計分條件,"
-                    f"**累積到約 30+ 筆(滿 5 交易日)後這裡會自動跑出分析**:"
-                    f"屆時可看出法人/大戶/RS/營收等條件,哪個真的帶來報酬、哪個其實沒差。"
-                )
-            else:
-                st.caption(
-                    "每個計分條件「有觸發 vs 沒觸發」時,後續 5 日報酬的差異(edge)。"
-                    "edge 為正 = 該訊號確實加值;接近 0 或負 = 可能沒幫助甚至拖累,值得檢討權重。"
-                )
-                _ar_rows = []
-                for _s in sorted(_attr["per_signal"],
-                                 key=lambda x: (x["edge"] is not None, x["edge"] or 0),
-                                 reverse=True):
-                    _on, _off, _edge = _s["on"], _s["off"], _s["edge"]
-                    _ar_rows.append({
-                        "計分條件": _SIG_DISPLAY.get(_s["key"], _s["key"]),
-                        "觸發樣本": _on["n"] if _on else 0,
-                        "觸發平均報酬": f"{_on['avg']:+.2f}%" if _on else "—",
-                        "未觸發平均報酬": f"{_off['avg']:+.2f}%" if _off else "—",
-                        "edge(差)": f"{_edge:+.2f}%" if _edge is not None else "—",
-                    })
-                st.dataframe(pd.DataFrame(_ar_rows), use_container_width=True, hide_index=True)
-                if _attr["n_eval"] < 30:
-                    st.warning(
-                        f"⚠️ 僅 {_attr['n_eval']} 筆含細項樣本,且訊號彼此相關(多數 pick 同時觸發多個),"
-                        f"edge 此時極不穩、別據此改權重。建議累積 ≥ 30 筆、最好上百筆再下結論。"
+                st.markdown("**🔬 訊號歸因分析(哪個計分條件真的有效?)**")
+                _SIG_DISPLAY = {
+                    "投信": "投信買超", "外資": "外資買超", "雙買": "投信+外資雙買",
+                    "券": "券相關(資減券增/軋空)", "大戶": "400張大戶上升", "散戶": "散戶下降",
+                    "技術": "技術面三合一", "KD": "KD低檔金叉", "營收": "月營收達標",
+                    "RS": "RS優於大盤",
+                }
+                _attr = _load_signal_attribution_cached(hold_days=5)
+                if _attr.get("error"):
+                    st.info(f"📊 {_attr['error']}")
+                elif _attr.get("n_eval", 0) == 0:
+                    st.info(
+                        f"⏳ **訊號歸因累積中**:目前 **0 筆**含訊號細項的樣本。\n\n"
+                        f"訊號細項(`sig`)是近期才開始記錄的——舊歷史沒存,無法回溯。"
+                        f"從現在起每日推播會逐筆記錄 10 個計分條件,"
+                        f"**累積到約 30+ 筆(滿 5 交易日)後這裡會自動跑出分析**:"
+                        f"屆時可看出法人/大戶/RS/營收等條件,哪個真的帶來報酬、哪個其實沒差。"
                     )
-
-            # ── 🚪 出場規則回測(何時賣最賺?) ──
-            st.divider()
-            st.markdown("**🚪 出場規則回測(固定持有 vs 停損/停利/移動停損,哪種最賺?)**")
-            _ex = _load_exit_rules_cached(max_hold=10)
-            if _ex.get("error"):
-                st.info(f"📊 {_ex['error']}")
-            else:
-                st.caption(
-                    f"對每筆已滿 {_ex['max_hold']} 個交易日的 pick,模擬不同出場方式的實現報酬。"
-                    f"「日均報酬」= 淨期望值 ÷ 平均持有天數,比效率用(早出場可多做幾趟)。"
-                )
-                _best_net = max((s["net_exp"] for s in _ex["strategies"]), default=None)
-                _best_daily = max((s["daily"] for s in _ex["strategies"]), default=None)
-                _ex_rows = []
-                for _s in _ex["strategies"]:
-                    _flag_net   = " 🏆" if _s["net_exp"] == _best_net else ""
-                    _flag_daily = " ⚡" if _s["daily"] == _best_daily else ""
-                    _ex_rows.append({
-                        "出場策略": _s["name"],
-                        "勝率": f"{_s['win_rate']*100:.0f}%",
-                        "平均報酬": f"{_s['avg']:+.2f}%",
-                        "淨期望值": f"{_s['net_exp']:+.2f}%{_flag_net}",
-                        "平均持有": f"{_s['avg_days']:.1f} 日",
-                        "最差單筆": f"{_s['worst']:+.2f}%",
-                        "日均報酬": f"{_s['daily']:+.3f}%{_flag_daily}",
-                    })
-                st.dataframe(pd.DataFrame(_ex_rows), use_container_width=True, hide_index=True)
-                st.caption("🏆 = 淨期望值最高(單筆賺最多)　⚡ = 日均報酬最高(效率最高)")
-                if _ex["n"] < 30:
-                    st.warning(
-                        f"⚠️ 僅 {_ex['n']} 筆滿 {_ex['max_hold']} 日的樣本,結論不穩;"
-                        f"且全在多頭期間,停損的價值在空頭才會凸顯。累積更多、跨多空後再採用。"
+                else:
+                    st.caption(
+                        "每個計分條件「有觸發 vs 沒觸發」時,後續 5 日報酬的差異(edge)。"
+                        "edge 為正 = 該訊號確實加值;接近 0 或負 = 可能沒幫助甚至拖累,值得檢討權重。"
                     )
-
-            # ── 📌 個股層級績效(系統選的『哪些股票』真的賺/賠?) ──
-            st.divider()
-            st.markdown("**📌 個股層級績效(系統選的『哪些股票』真的賺/賠?)**")
-            _psc1, _psc2 = st.columns([1, 1])
-            _ps_hold = _psc1.selectbox("持有天數", [3, 5, 10, 20], index=1, key="_perstock_hold")
-            _ps_min = _psc2.number_input("只看入選 ≥ N 次", min_value=1, max_value=50, value=1,
-                                         step=1, key="_perstock_min",
-                                         help="過濾只入選 1~2 次的雜訊;次數多又穩賺才是系統的常勝股")
-            _ps = _load_per_stock_perf_cached(hold_days=_ps_hold)
-            _ps = [r for r in _ps if r["n"] >= _ps_min]
-            if not _ps:
-                st.info("📊 尚無足夠樣本(需有 pick 已滿持有天數,或放寬「入選 ≥ N 次」)。")
-            else:
-                _ps_rows = [{
-                    "代號":      r["sid"],
-                    "名稱":      ui_name_map.get(r["sid"], ""),
-                    "入選次數":  r["n"],
-                    "勝率%":     round(r["win_rate"] * 100, 0),
-                    f"平均{_ps_hold}日報酬%": round(r["avg"], 2),
-                    "最佳%":     round(r["best"], 2),
-                    "最差%":     round(r["worst"], 2),
-                    "平均分":    round(r["avg_score"], 1) if r["avg_score"] is not None else None,
-                    "最近入選":  r["last_date"],
-                } for r in _ps]
-                st.dataframe(pd.DataFrame(_ps_rows), use_container_width=True, hide_index=True)
-                st.caption(
-                    f"依「平均 {_ps_hold} 日報酬」高→低排序,共 {len(_ps)} 檔(已滿天數)。"
-                    "點欄位標題可改排序;**入選次數多又穩賺**=系統的常勝股,**常賠**的可加進選股表的「排除過熱」或自行避開。"
-                    "進場口徑同其他回測(訊號日隔日開盤 + 0.1% 滑價);樣本少時僅看方向。"
-                )
-
-            # ── 進行中觀察樣本(剛入選還沒滿 5 個交易日,目前浮動報酬) ──
-            samples = perf.get("samples", [])
-
-            def _dedup_keep_latest(rows: list) -> list:
-                """同 sid 只留 date 最大那筆(分流去重 = 模式 B)。
-                rows 內每筆需含 'sid' 與 'date' 欄。
-                """
-                latest = {}
-                for r in rows:
-                    sid_k = str(r.get("sid", ""))
-                    r_date = r.get("date", "")     # 防呆:缺欄位給空字串(排序時會被後來的取代)
-                    if not sid_k:
-                        continue
-                    cur = latest.get(sid_k)
-                    if cur is None or r_date > cur.get("date", ""):
-                        latest[sid_k] = r
-                return list(latest.values())
-
-            pending_raw = [s for s in samples if s.get("return_5d") is None]
-            pending = _dedup_keep_latest(pending_raw)   # 同檔股票只留最新一筆進行中
-            if pending:
-                # 從 daily parquet 抓最新 close 算「目前浮動報酬」
-                @st.cache_data(ttl=300, show_spinner=False)
-                def _load_latest_close_for_pending():
-                    """回傳 {sid: (latest_date_str, latest_close)} 給進行中樣本算浮動報酬。"""
-                    try:
-                        files = sorted(CACHE_DIR.glob('daily_*.parquet'))
-                        if not files:
-                            return {}, None
-                        df = pd.read_parquet(files[-1], columns=['stock_id', 'date', 'close'])
-                        df['date'] = pd.to_datetime(df['date'])
-                        df['stock_id'] = df['stock_id'].astype(str)
-                        latest_date = df['date'].max()
-                        latest_rows = (
-                            df[df['date'] == latest_date]
-                              .drop_duplicates(subset='stock_id', keep='last')
-                              .set_index('stock_id')['close']
+                    _ar_rows = []
+                    for _s in sorted(_attr["per_signal"],
+                                     key=lambda x: (x["edge"] is not None, x["edge"] or 0),
+                                     reverse=True):
+                        _on, _off, _edge = _s["on"], _s["off"], _s["edge"]
+                        _ar_rows.append({
+                            "計分條件": _SIG_DISPLAY.get(_s["key"], _s["key"]),
+                            "觸發樣本": _on["n"] if _on else 0,
+                            "觸發平均報酬": f"{_on['avg']:+.2f}%" if _on else "—",
+                            "未觸發平均報酬": f"{_off['avg']:+.2f}%" if _off else "—",
+                            "edge(差)": f"{_edge:+.2f}%" if _edge is not None else "—",
+                        })
+                    st.dataframe(pd.DataFrame(_ar_rows), use_container_width=True, hide_index=True)
+                    if _attr["n_eval"] < 30:
+                        st.caption(
+                            f"📊 樣本 {_attr['n_eval']} 筆,且訊號彼此相關(多數 pick 同時觸發多個)——"
+                            f"edge 僅供方向參考,別據此改權重。"
                         )
-                        return latest_rows.to_dict(), latest_date.strftime('%Y-%m-%d')
-                    except Exception as e:
-                        print(f"進行中樣本 close 抓取失敗: {e}")
-                        return {}, None
 
-                latest_close_map, latest_date_str = _load_latest_close_for_pending()
-
+                # ── 🚪 出場規則回測(何時賣最賺?) ──
                 st.divider()
-                _today_naive = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
-                _dedup_note = ""
-                if len(pending_raw) > len(pending):
-                    _dedup_note = f"(原 {len(pending_raw)} 筆,同檔已去重)"
-                st.markdown(f"**⏳ 進行中觀察樣本(共 {len(pending)} 檔{_dedup_note})**")
-                st.caption(
-                    f"剛入選還沒成熟的樣本,**同檔股票只保留最新一次**,目前浮動報酬以最新收盤價計算"
-                    f"(快取日期:{latest_date_str or 'N/A'})。**不列入勝率統計**,僅供觀察。"
-                )
+                st.markdown("**🚪 出場規則回測(固定持有 vs 停損/停利/移動停損,哪種最賺?)**")
+                _ex = _load_exit_rules_cached(max_hold=10)
+                if _ex.get("error"):
+                    st.info(f"📊 {_ex['error']}")
+                else:
+                    st.caption(
+                        f"對每筆已滿 {_ex['max_hold']} 個交易日的 pick,模擬不同出場方式的實現報酬。"
+                        f"「日均報酬」= 淨期望值 ÷ 平均持有天數,比效率用(早出場可多做幾趟)。"
+                    )
+                    _best_net = max((s["net_exp"] for s in _ex["strategies"]), default=None)
+                    _best_daily = max((s["daily"] for s in _ex["strategies"]), default=None)
+                    _ex_rows = []
+                    for _s in _ex["strategies"]:
+                        _flag_net   = " 🏆" if _s["net_exp"] == _best_net else ""
+                        _flag_daily = " ⚡" if _s["daily"] == _best_daily else ""
+                        _ex_rows.append({
+                            "出場策略": _s["name"],
+                            "勝率": f"{_s['win_rate']*100:.0f}%",
+                            "平均報酬": f"{_s['avg']:+.2f}%",
+                            "淨期望值": f"{_s['net_exp']:+.2f}%{_flag_net}",
+                            "平均持有": f"{_s['avg_days']:.1f} 日",
+                            "最差單筆": f"{_s['worst']:+.2f}%",
+                            "日均報酬": f"{_s['daily']:+.3f}%{_flag_daily}",
+                        })
+                    st.dataframe(pd.DataFrame(_ex_rows), use_container_width=True, hide_index=True)
+                    st.caption("🏆 = 淨期望值最高(單筆賺最多)　⚡ = 日均報酬最高(效率最高)")
+                    if _ex["n"] < 30:
+                        st.caption(
+                            f"📊 樣本 {_ex['n']} 筆——且停損的價值要到空頭才會凸顯,累積跨多空後再採用。"
+                        )
 
-                pending_rows = []
-                pending_floats = []  # 蒐集浮動報酬給統計用
-                for s in sorted(pending, key=lambda x: x["date"], reverse=True):
-                    sid_str = str(s["sid"])
-                    entry_date_str = s["date"]
-                    score = s.get("score")
-                    entry_close = s.get("entry_close")  # v2 schema 有,v1 沒
 
-                    # v1 entry 可能沒 entry_close → 從 daily parquet 找入選日的 close
-                    if entry_close is None:
+            with _sub_detail:
+                # ── 📌 個股層級績效(系統選的『哪些股票』真的賺/賠?) ──
+                st.markdown("**📌 個股層級績效(系統選的『哪些股票』真的賺/賠?)**")
+                _psc1, _psc2 = st.columns([1, 1])
+                _ps_hold = _psc1.selectbox("持有天數", [3, 5, 10, 20], index=1, key="_perstock_hold")
+                _ps_min = _psc2.number_input("只看入選 ≥ N 次", min_value=1, max_value=50, value=1,
+                                             step=1, key="_perstock_min",
+                                             help="過濾只入選 1~2 次的雜訊;次數多又穩賺才是系統的常勝股")
+                _ps = _load_per_stock_perf_cached(hold_days=_ps_hold)
+                _ps = [r for r in _ps if r["n"] >= _ps_min]
+                if not _ps:
+                    st.info("📊 尚無足夠樣本(需有 pick 已滿持有天數,或放寬「入選 ≥ N 次」)。")
+                else:
+                    _ps_rows = [{
+                        "代號":      r["sid"],
+                        "名稱":      ui_name_map.get(r["sid"], ""),
+                        "入選次數":  r["n"],
+                        "勝率%":     round(r["win_rate"] * 100, 0),
+                        f"平均{_ps_hold}日報酬%": round(r["avg"], 2),
+                        "最佳%":     round(r["best"], 2),
+                        "最差%":     round(r["worst"], 2),
+                        "平均分":    round(r["avg_score"], 1) if r["avg_score"] is not None else None,
+                        "最近入選":  r["last_date"],
+                    } for r in _ps]
+                    st.dataframe(pd.DataFrame(_ps_rows), use_container_width=True, hide_index=True)
+                    st.caption(
+                        f"依「平均 {_ps_hold} 日報酬」高→低排序,共 {len(_ps)} 檔(已滿天數)。"
+                        "點欄位標題可改排序;**入選次數多又穩賺**=系統的常勝股,**常賠**的可加進選股表的「排除過熱」或自行避開。"
+                        "進場口徑同其他回測(訊號日隔日開盤 + 0.1% 滑價);樣本少時僅看方向。"
+                    )
+
+                # ── 進行中觀察樣本(剛入選還沒滿 5 個交易日,目前浮動報酬) ──
+                samples = perf.get("samples", [])
+
+                def _dedup_keep_latest(rows: list) -> list:
+                    """同 sid 只留 date 最大那筆(分流去重 = 模式 B)。
+                    rows 內每筆需含 'sid' 與 'date' 欄。
+                    """
+                    latest = {}
+                    for r in rows:
+                        sid_k = str(r.get("sid", ""))
+                        r_date = r.get("date", "")     # 防呆:缺欄位給空字串(排序時會被後來的取代)
+                        if not sid_k:
+                            continue
+                        cur = latest.get(sid_k)
+                        if cur is None or r_date > cur.get("date", ""):
+                            latest[sid_k] = r
+                    return list(latest.values())
+
+                pending_raw = [s for s in samples if s.get("return_5d") is None]
+                pending = _dedup_keep_latest(pending_raw)   # 同檔股票只留最新一筆進行中
+                if pending:
+                    # 從 daily parquet 抓最新 close 算「目前浮動報酬」
+                    @st.cache_data(ttl=300, show_spinner=False)
+                    def _load_latest_close_for_pending():
+                        """回傳 {sid: (latest_date_str, latest_close)} 給進行中樣本算浮動報酬。"""
                         try:
-                            ed = pd.Timestamp(entry_date_str)
                             files = sorted(CACHE_DIR.glob('daily_*.parquet'))
-                            if files:
-                                # 用 ad-hoc 查詢,效能不重要因為 pending 通常 < 30 筆
-                                _d = pd.read_parquet(files[-1], filters=[('stock_id', '==', sid_str)])
-                                if not _d.empty:
-                                    _d['date'] = pd.to_datetime(_d['date'])
-                                    _d_match = _d[_d['date'] == ed]
-                                    if not _d_match.empty:
-                                        entry_close = float(_d_match['close'].iloc[0])
+                            if not files:
+                                return {}, None
+                            df = pd.read_parquet(files[-1], columns=['stock_id', 'date', 'close'])
+                            df['date'] = pd.to_datetime(df['date'])
+                            df['stock_id'] = df['stock_id'].astype(str)
+                            latest_date = df['date'].max()
+                            latest_rows = (
+                                df[df['date'] == latest_date]
+                                  .drop_duplicates(subset='stock_id', keep='last')
+                                  .set_index('stock_id')['close']
+                            )
+                            return latest_rows.to_dict(), latest_date.strftime('%Y-%m-%d')
+                        except Exception as e:
+                            print(f"進行中樣本 close 抓取失敗: {e}")
+                            return {}, None
+
+                    latest_close_map, latest_date_str = _load_latest_close_for_pending()
+
+                    st.divider()
+                    _today_naive = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
+                    _dedup_note = ""
+                    if len(pending_raw) > len(pending):
+                        _dedup_note = f"(原 {len(pending_raw)} 筆,同檔已去重)"
+                    st.markdown(f"**⏳ 進行中觀察樣本(共 {len(pending)} 檔{_dedup_note})**")
+                    st.caption(
+                        f"剛入選還沒成熟的樣本,**同檔股票只保留最新一次**,目前浮動報酬以最新收盤價計算"
+                        f"(快取日期:{latest_date_str or 'N/A'})。**不列入勝率統計**,僅供觀察。"
+                    )
+
+                    pending_rows = []
+                    pending_floats = []  # 蒐集浮動報酬給統計用
+                    for s in sorted(pending, key=lambda x: x["date"], reverse=True):
+                        sid_str = str(s["sid"])
+                        entry_date_str = s["date"]
+                        score = s.get("score")
+                        entry_close = s.get("entry_close")  # v2 schema 有,v1 沒
+
+                        # v1 entry 可能沒 entry_close → 從 daily parquet 找入選日的 close
+                        if entry_close is None:
+                            try:
+                                ed = pd.Timestamp(entry_date_str)
+                                files = sorted(CACHE_DIR.glob('daily_*.parquet'))
+                                if files:
+                                    # 用 ad-hoc 查詢,效能不重要因為 pending 通常 < 30 筆
+                                    _d = pd.read_parquet(files[-1], filters=[('stock_id', '==', sid_str)])
+                                    if not _d.empty:
+                                        _d['date'] = pd.to_datetime(_d['date'])
+                                        _d_match = _d[_d['date'] == ed]
+                                        if not _d_match.empty:
+                                            entry_close = float(_d_match['close'].iloc[0])
+                            except Exception:
+                                pass
+
+                        latest_close = latest_close_map.get(sid_str)
+
+                        if entry_close is not None and latest_close is not None and entry_close > 0:
+                            float_ret = (latest_close - entry_close) / entry_close * 100
+                            pending_floats.append(float_ret)
+                            # 台股紅漲綠跌
+                            if float_ret > 0.05:
+                                ret_str = f"🔴 +{float_ret:.2f}%"
+                            elif float_ret < -0.05:
+                                ret_str = f"🟢 {float_ret:.2f}%"
+                            else:
+                                ret_str = f"⚪ {float_ret:+.2f}%"
+                        else:
+                            ret_str = "—"
+                            latest_close = None
+
+                        # 算「還剩幾個交易日成熟」(用實際自然日近似:5 交易日 ≈ 7 自然日)
+                        try:
+                            days_since = (_today_naive - pd.Timestamp(entry_date_str)).days
+                            days_left = max(0, 7 - days_since)  # 粗估
+                            if days_left == 0:
+                                mature_status = "即將成熟"
+                            else:
+                                mature_status = f"剩 ~{days_left} 日"
                         except Exception:
-                            pass
+                            mature_status = "—"
 
-                    latest_close = latest_close_map.get(sid_str)
+                        pending_rows.append({
+                            "入選日":    entry_date_str,
+                            "代號":      sid_str,
+                            "名稱":      ui_name_map.get(sid_str, ""),
+                            "分數":      f"{score} 分" if score is not None else "—",
+                            "入選價":    f"{entry_close:.2f}" if entry_close else "—",
+                            "目前價":    f"{latest_close:.2f}" if latest_close else "—",
+                            "浮動報酬": ret_str,
+                            "成熟":      mature_status,
+                        })
 
-                    if entry_close is not None and latest_close is not None and entry_close > 0:
-                        float_ret = (latest_close - entry_close) / entry_close * 100
-                        pending_floats.append(float_ret)
-                        # 台股紅漲綠跌
-                        if float_ret > 0.05:
-                            ret_str = f"🔴 +{float_ret:.2f}%"
-                        elif float_ret < -0.05:
-                            ret_str = f"🟢 {float_ret:.2f}%"
+                    st.dataframe(pd.DataFrame(pending_rows), use_container_width=True, hide_index=True)
+
+                    # 進行中樣本的趨勢摘要
+                    if pending_floats:
+                        wins = sum(1 for r in pending_floats if r > 0)
+                        avg_float = sum(pending_floats) / len(pending_floats)
+                        mc1, mc2, mc3 = st.columns(3)
+                        mc1.metric("目前浮動勝率", f"{wins / len(pending_floats) * 100:.0f}%",
+                                   f"{wins} / {len(pending_floats)}",
+                                   help="這些股票還沒滿 5 個交易日,用最新收盤價算的「未實現」勝率,還沒定案。")
+                        mc2.metric("平均浮動報酬", f"{avg_float:+.2f}%",
+                                   delta_color="inverse",  # 台股紅漲綠跌 → metric 預設綠正紅負,要 inverse
+                                   help=(
+                                       "進行中(還沒滿 5 交易日)樣本的平均帳面報酬,尚未定案。\n\n"
+                                       "右側狀態依此值判定:\n"
+                                       "• > +3% → 📈 整體偏紅(訊號近期強勢)\n"
+                                       "• −3% ~ +3% → ⏳ 接近平盤(漲跌不明顯,等滿 5 天再看)\n"
+                                       "• < −3% → 📉 整體偏綠(留意訊號失效)"
+                                   ))
+                        # 警示
+                        if avg_float > 3:
+                            mc3.success("📈 進行中樣本目前**整體偏紅**,系統訊號近期表現強勢")
+                        elif avg_float < -3:
+                            mc3.warning("📉 進行中樣本目前**整體偏綠**,留意近期訊號失效")
                         else:
-                            ret_str = f"⚪ {float_ret:+.2f}%"
-                    else:
-                        ret_str = "—"
-                        latest_close = None
+                            mc3.info("⏳ 進行中樣本目前**接近平盤**,等待成熟")
 
-                    # 算「還剩幾個交易日成熟」(用實際自然日近似:5 交易日 ≈ 7 自然日)
-                    try:
-                        days_since = (_today_naive - pd.Timestamp(entry_date_str)).days
-                        days_left = max(0, 7 - days_since)  # 粗估
-                        if days_left == 0:
-                            mature_status = "即將成熟"
+                # ── 樣本明細表(顯示哪幾檔股票、實際報酬多少) ──
+                # 同檔股票只保留「日期最新的已完成樣本」 = 分流去重模式 B
+                valid_samples_raw = [s for s in samples if s.get("return_5d") is not None]
+                valid_samples = _dedup_keep_latest(valid_samples_raw)
+                if valid_samples:
+                    st.divider()
+                    _comp_note = ""
+                    if len(valid_samples_raw) > len(valid_samples):
+                        _comp_note = f",原 {len(valid_samples_raw)} 筆同檔已去重"
+                    st.markdown(f"**樣本明細(已完成,共 {len(valid_samples)} 檔{_comp_note},顯示前 50)**")
+                    st.caption(
+                        "同檔股票只保留**最新一次的已完成樣本**;勾選欄頭可排序;台股紅漲綠跌。"
+                        "看到報酬巨大的個股可點進去研究是什麼條件讓它大漲/大跌。"
+                    )
+
+                    # 名稱對映用既有 ui_name_map(已從 daily parquet 載入)
+                    rows_detail = []
+                    for s in sorted(valid_samples, key=lambda x: x["date"], reverse=True)[:50]:
+                        sid_str = str(s["sid"])
+                        ret = s["return_5d"]
+                        # 台股紅漲綠跌:emoji + 數值
+                        if ret > 0.05:
+                            ret_str = f"🔴 +{ret:.2f}%"
+                        elif ret < -0.05:
+                            ret_str = f"🟢 {ret:.2f}%"
                         else:
-                            mature_status = f"剩 ~{days_left} 日"
-                    except Exception:
-                        mature_status = "—"
+                            ret_str = f"⚪ {ret:+.2f}%"
 
-                    pending_rows.append({
-                        "入選日":    entry_date_str,
-                        "代號":      sid_str,
-                        "名稱":      ui_name_map.get(sid_str, ""),
-                        "分數":      f"{score} 分" if score is not None else "—",
-                        "入選價":    f"{entry_close:.2f}" if entry_close else "—",
-                        "目前價":    f"{latest_close:.2f}" if latest_close else "—",
-                        "浮動報酬": ret_str,
-                        "成熟":      mature_status,
-                    })
+                        rows_detail.append({
+                            "入選日":    s["date"],
+                            "代號":      sid_str,
+                            "名稱":      ui_name_map.get(sid_str, ""),
+                            "分數":      f"{s['score']} 分" if s.get("score") is not None else "—",
+                            "5 日後報酬": ret_str,
+                            "10 日後":   f"{s['return_10d']:+.2f}%" if s.get("return_10d") is not None else "—",
+                            "20 日後":   f"{s['return_20d']:+.2f}%" if s.get("return_20d") is not None else "—",
+                        })
+                    st.dataframe(
+                        pd.DataFrame(rows_detail),
+                        use_container_width=True, hide_index=True,
+                    )
 
-                st.dataframe(pd.DataFrame(pending_rows), use_container_width=True, hide_index=True)
-
-                # 進行中樣本的趨勢摘要
-                if pending_floats:
-                    wins = sum(1 for r in pending_floats if r > 0)
-                    avg_float = sum(pending_floats) / len(pending_floats)
-                    mc1, mc2, mc3 = st.columns(3)
-                    mc1.metric("目前浮動勝率", f"{wins / len(pending_floats) * 100:.0f}%",
-                               f"{wins} / {len(pending_floats)}",
-                               help="這些股票還沒滿 5 個交易日,用最新收盤價算的「未實現」勝率,還沒定案。")
-                    mc2.metric("平均浮動報酬", f"{avg_float:+.2f}%",
-                               delta_color="inverse",  # 台股紅漲綠跌 → metric 預設綠正紅負,要 inverse
-                               help=(
-                                   "進行中(還沒滿 5 交易日)樣本的平均帳面報酬,尚未定案。\n\n"
-                                   "右側狀態依此值判定:\n"
-                                   "• > +3% → 📈 整體偏紅(訊號近期強勢)\n"
-                                   "• −3% ~ +3% → ⏳ 接近平盤(漲跌不明顯,等滿 5 天再看)\n"
-                                   "• < −3% → 📉 整體偏綠(留意訊號失效)"
-                               ))
-                    # 警示
-                    if avg_float > 3:
-                        mc3.success("📈 進行中樣本目前**整體偏紅**,系統訊號近期表現強勢")
-                    elif avg_float < -3:
-                        mc3.warning("📉 進行中樣本目前**整體偏綠**,留意近期訊號失效")
-                    else:
-                        mc3.info("⏳ 進行中樣本目前**接近平盤**,等待成熟")
-
-            # ── 樣本明細表(顯示哪幾檔股票、實際報酬多少) ──
-            # 同檔股票只保留「日期最新的已完成樣本」 = 分流去重模式 B
-            valid_samples_raw = [s for s in samples if s.get("return_5d") is not None]
-            valid_samples = _dedup_keep_latest(valid_samples_raw)
-            if valid_samples:
-                st.divider()
-                _comp_note = ""
-                if len(valid_samples_raw) > len(valid_samples):
-                    _comp_note = f",原 {len(valid_samples_raw)} 筆同檔已去重"
-                st.markdown(f"**樣本明細(已完成,共 {len(valid_samples)} 檔{_comp_note},顯示前 50)**")
-                st.caption(
-                    "同檔股票只保留**最新一次的已完成樣本**;勾選欄頭可排序;台股紅漲綠跌。"
-                    "看到報酬巨大的個股可點進去研究是什麼條件讓它大漲/大跌。"
-                )
-
-                # 名稱對映用既有 ui_name_map(已從 daily parquet 載入)
-                rows_detail = []
-                for s in sorted(valid_samples, key=lambda x: x["date"], reverse=True)[:50]:
-                    sid_str = str(s["sid"])
-                    ret = s["return_5d"]
-                    # 台股紅漲綠跌:emoji + 數值
-                    if ret > 0.05:
-                        ret_str = f"🔴 +{ret:.2f}%"
-                    elif ret < -0.05:
-                        ret_str = f"🟢 {ret:.2f}%"
-                    else:
-                        ret_str = f"⚪ {ret:+.2f}%"
-
-                    rows_detail.append({
-                        "入選日":    s["date"],
-                        "代號":      sid_str,
-                        "名稱":      ui_name_map.get(sid_str, ""),
-                        "分數":      f"{s['score']} 分" if s.get("score") is not None else "—",
-                        "5 日後報酬": ret_str,
-                        "10 日後":   f"{s['return_10d']:+.2f}%" if s.get("return_10d") is not None else "—",
-                        "20 日後":   f"{s['return_20d']:+.2f}%" if s.get("return_20d") is not None else "—",
-                    })
-                st.dataframe(
-                    pd.DataFrame(rows_detail),
-                    use_container_width=True, hide_index=True,
-                )
-
-                # CSV 匯出:未去重的完整原始紀錄(含所有重複入選),方便 Excel 自行分析
-                full_df = pd.DataFrame(valid_samples_raw)
-                full_df["名稱"] = full_df["sid"].astype(str).map(ui_name_map).fillna("")
-                st.download_button(
-                    f"📥 下載完整原始樣本 CSV(未去重,{len(valid_samples_raw)} 筆)",
-                    full_df.to_csv(index=False).encode("utf-8-sig"),
-                    file_name=f"performance_samples_raw_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv",
-                    use_container_width=False,
-                    help="UI 顯示已套用「同檔只留最新」去重,但這個 CSV 是原始完整紀錄(含所有重複入選),供 Excel 進階分析使用"
-                )
+                    # CSV 匯出:未去重的完整原始紀錄(含所有重複入選),方便 Excel 自行分析
+                    full_df = pd.DataFrame(valid_samples_raw)
+                    full_df["名稱"] = full_df["sid"].astype(str).map(ui_name_map).fillna("")
+                    st.download_button(
+                        f"📥 下載完整原始樣本 CSV(未去重,{len(valid_samples_raw)} 筆)",
+                        full_df.to_csv(index=False).encode("utf-8-sig"),
+                        file_name=f"performance_samples_raw_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv",
+                        use_container_width=False,
+                        help="UI 顯示已套用「同檔只留最新」去重,但這個 CSV 是原始完整紀錄(含所有重複入選),供 Excel 進階分析使用"
+                    )
     else:
         st.info(f"目前累積 {_hist_days} 天歷史,需 ≥5 天才能算績效。每天執行 Telegram 推播自動累積。")
 
