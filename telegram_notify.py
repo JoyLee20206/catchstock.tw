@@ -255,14 +255,14 @@ def main():
                 f"{hot_ctx}"
                 f"\n"
                 f"【冠軍標的】\n"
-                f"{sid_top} {name_top}(總分 {score_top}/10)"
+                f"{sid_top} {name_top}(總分 {score_top}/12)"
                 f"{'、帶量突破' if is_breakout else ''}"
                 f"{'、籌碼共振(大戶增散戶減)' if is_sync else ''}\n"
                 f"\n"
                 f"【分數系統說明】\n"
-                f"本系統雖以 10 分為滿分,但實務最高僅見 8 分"
-                f"(法人雙買+大戶散戶共振+RS強+月營收YoY同時成立極罕見)。\n"
-                f"故 8 分視同冠軍級訊號,7 分為合格,6 分為邊緣"
+                f"滿分 12(大戶上升、散戶下降各佔 2 分,其餘各 1 分),"
+                f"實務最高約 10 分(全部條件同時成立極罕見)。\n"
+                f"故 9 分以上視同冠軍級訊號(必含籌碼共振),7~8 分為合格,6 分為邊緣"
                 f"(僅在大盤資料缺失自動降標時出現)。\n"
                 f"\n"
                 f"【寫作規範】\n"
@@ -310,7 +310,12 @@ def main():
         change_pct_map = load_change_pct_map()  # {sid: pct}
 
         if df is None or len(df) == 0:
-            content = "💡 目前盤勢較嚴峻,沒有股票達標。"
+            if meta.get('panic_guard'):
+                content = ("🛑 <b>恐慌煞車啟動</b>:止跌判讀目前為「高度恐慌」,今日暫停推薦新股。\n"
+                           "<i>(歷史實證:此階段照常選股,入選股 5 日平均 -6.9%——寧可空手等降溫。"
+                           "止跌分級轉🟡以下自動恢復)</i>\n")
+            else:
+                content = "💡 目前盤勢較嚴峻,沒有股票達標。"
             today_set = set()
         else:
             content = f"🔥 <b>今日達標個股 (共 {len(df)} 檔)</b>\n"
@@ -319,9 +324,8 @@ def main():
 
             for _, row in df.head(TOP_N_DISPLAY).iterrows():
                 sid_str    = str(row['代號'])
-                # 系統實務最高分為 8(法人雙買+大戶散戶共振+RS強+營收YoY 同時成立極罕見),
-                # 故 8 分視同冠軍級訊號
-                score_icon = "🔥" if row['總分'] >= 8 else "•"
+                # 滿分 12 制(大戶/散戶各 2 分):9 分以上必含籌碼共振,視同冠軍級訊號
+                score_icon = "🔥" if row['總分'] >= 9 else "•"
                 stock_name = html.escape(str(row['名稱']))   # 防禦 ETF 名稱含 &/< 等字元
 
                 # 漲跌幅(緊接在分數後,訊息密度高)
