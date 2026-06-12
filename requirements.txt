@@ -16,3 +16,4 @@ xlwt>=1.3                  # screening0515.py 匯出嘉實 .xls 格式
 requests>=2.31
 lxml>=4.9
 beautifulsoup4>=4.12
+html5lib>=1.1             # fetch_cache.py ISIN 備援解析:lxml 解不動的亂格式 HTML 由它接手(pd.read_html fallback)
