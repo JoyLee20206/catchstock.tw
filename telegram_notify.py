@@ -1,6 +1,5 @@
 import os
 import json
-import requests
 import pandas as pd
 import tempfile
 import html
@@ -18,74 +17,11 @@ from market_sentiment import compute_sentiment, format_sentiment_for_tg
 
 WATCHLIST_FILE = str(CACHE_DIR / "watchlist.json")  # 由 UI 寫入,TG 讀取做警示
 
-# ── 環境變數 ───────────────────────────────────────────────────────────
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-
 # ── 路徑與設定 ─────────────────────────────────────────────────────────
-TG_MAX_LEN = 4000          # Telegram 單訊息上限為 4096,留 96 字餘裕
 TOP_N_DISPLAY = 15         # 訊息列出前 N 檔
 
-
-# ══════════════════════════════════════════════════════════════════════
-# Telegram 送訊息(自動分段)
-# ══════════════════════════════════════════════════════════════════════
-def _split_for_telegram(text: str, max_len: int) -> list:
-    """在換行邊界切分長訊息;單段絕不超過 max_len。
-    HTML 標籤都在單一行內成對出現,只在「行與行之間」切就不會弄壞 <b>/<i>/<a>。
-    """
-    if len(text) <= max_len:
-        return [text]
-
-    chunks = []
-    current = ""
-    for line in text.split("\n"):
-        # 罕見情況:單行超長(例如 AI 失控吐巨型句子),強制按字元切
-        if len(line) > max_len:
-            if current:
-                chunks.append(current.rstrip())
-                current = ""
-            for i in range(0, len(line), max_len):
-                chunks.append(line[i:i + max_len])
-            continue
-
-        # 加上這行會爆量 → 收一段
-        if len(current) + len(line) + 1 > max_len:
-            if current.strip():     # 防呆:避免 append 空 chunk(Telegram 會 400)
-                chunks.append(current.rstrip())
-            current = line + "\n"
-        else:
-            current += line + "\n"
-
-    if current.strip():
-        chunks.append(current.rstrip())
-    return chunks
-
-
-def send_telegram_message(text: str) -> bool:
-    """透過 Telegram Bot API 發送 HTML 格式訊息,超過 TG_MAX_LEN 自動分段。"""
-    if not TOKEN or not CHAT_ID:
-        print("未設定 Telegram Token 或 Chat ID")
-        return False
-
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    chunks = _split_for_telegram(text, TG_MAX_LEN)
-    all_ok = True
-
-    for i, chunk in enumerate(chunks, 1):
-        payload = {
-            "chat_id": CHAT_ID,
-            "text": chunk,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,  # 避免每個 Yahoo 連結都展開縮圖
-        }
-        try:
-            resp = requests.post(url, json=payload, timeout=15)
-            resp.raise_for_status()
-        except Exception as e:
-            print(f"[Telegram 第 {i}/{len(chunks)} 段發送失敗] {e}")
-            all_ok = False
-    return all_ok
+# Telegram 發送(HTML + 自動分段)已抽到 tg_common,與 bottom_push 共用同一份
+from tg_common import send_telegram_message
 
 
 # ══════════════════════════════════════════════════════════════════════

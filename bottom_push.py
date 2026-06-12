@@ -11,25 +11,20 @@
 - VIXTWN 雙來源都掛 → 訊息帶 🚨 告警,絕不靜默
 - 沒設 TELEGRAM_BOT_TOKEN 時轉為 dry-run(只印不發),方便本機測試
 """
-import os
 import sys
 import io
 import traceback
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-import requests
-
 from bottom_signal import (
     run_all_checks, persist_bottom_history, persist_bottom_latest,
     format_bottom_for_tg,
 )
 from market_sentiment import persist_fi_history
+from tg_common import send_telegram_message, get_credentials
 
 CACHE_DIR = Path(__file__).parent / "cache"
-
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 def _tw_now() -> datetime:
@@ -43,26 +38,15 @@ def _pass_label() -> str:
 
 
 def send_telegram(text: str) -> bool:
-    """發 Telegram;沒 token 就 dry-run 印出來。"""
-    if not TOKEN or not CHAT_ID:
-        print("ℹ️ 未設定 TELEGRAM_BOT_TOKEN/CHAT_ID,dry-run 模式:")
-        print("-" * 40)
-        print(text)
-        print("-" * 40)
-        return True
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": text,
-                  "disable_web_page_preview": True},
-            timeout=20,
-        )
-        ok = r.status_code == 200
-        print("📲 Telegram", "已發送" if ok else f"失敗 {r.status_code}: {r.text[:200]}")
-        return ok
-    except Exception as e:
-        print(f"📲 Telegram 發送例外: {str(e)[:200]}")
-        return False
+    """發 Telegram;沒 token 就 dry-run 印出來。
+    止跌訊息是純文字(parse_mode=None):內容可能含 <、& 等字元,套 HTML 模式會被 TG 退 400。
+    """
+    ok = send_telegram_message(text, parse_mode=None,
+                               dry_run_when_no_token=True, timeout=20)
+    token, chat_id = get_credentials()
+    if token and chat_id:  # dry-run 時上面已印過內容,不再重複報「已發送」
+        print("📲 Telegram", "已發送" if ok else "發送失敗(詳見上方逐段錯誤)")
+    return ok
 
 
 def main() -> int:
