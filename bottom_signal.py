@@ -408,6 +408,10 @@ def fetch_index_ohlc_from_cache(cache_dir, max_age_days: int = 0) -> "pd.DataFra
         if any(c not in df.columns for c in need):
             return None
         df = df[need].dropna()
+        if df.empty:
+            # 舊版 fetch_cache 用 FMTQIK 端點抓的檔只有收盤,開高低全 NaN
+            print("   ⚠ twii 快取沒有完整 OHLC 列(僅收盤的舊格式),改現抓")
+            return None
         df["date"] = pd.to_datetime(df["date"])
         df = df.drop_duplicates("date").sort_values("date").set_index("date")
         df.index = [d.date() for d in df.index]
@@ -443,6 +447,9 @@ def fetch_stock_ohlc_from_cache(cache_dir, stock_no: str,
             return None
         df = df.rename(columns={"max": "high", "min": "low"})
         df = df[["date", "open", "high", "low", "close"]].dropna()
+        if df.empty:
+            print(f"   ⚠ daily 快取({stock_no})沒有完整 OHLC 列,改現抓")
+            return None
         df["date"] = pd.to_datetime(df["date"])
         df = df.drop_duplicates("date").sort_values("date").set_index("date")
         df.index = [d.date() for d in df.index]
