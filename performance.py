@@ -252,7 +252,40 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
                 )
         by_score[score] = stat
 
-    return {"samples": samples, "overall": overall, "by_score": by_score}
+    # ── 同樣本比較(common sample):不同持有期鎖定同一批 pick ──
+    # 各持有期的有效樣本天生不同(新 pick 只活得出短天期報酬),直接互比會變成
+    # 「3 日含最近的單、10 日只剩早期的單」各說各話(出場回測 vs 持有天數表打架的根源)。
+    # 取「最長且已有資料的持有期」算得出報酬的那批 pick,所有持有期都只統計這批
+    # → 同一批股票、同一段時期,跨持有期才可直接比較。
+    overall_common = {}
+    if samples:
+        common_base_n = None
+        for n in sorted(n_days_list, reverse=True):
+            if any(s[f"return_{n}d"] is not None for s in samples):
+                common_base_n = n
+                break
+        if common_base_n:
+            common = [s for s in samples if s[f"return_{common_base_n}d"] is not None]
+            overall_common["base_n"] = common_base_n
+            overall_common["n_picks"] = len(common)
+            for n in n_days_list:
+                valid = [s[f"return_{n}d"] for s in common if s[f"return_{n}d"] is not None]
+                if not valid:
+                    continue
+                wins = sum(1 for v in valid if v > 0)
+                gains = [v for v in valid if v > 0]
+                losses = [v for v in valid if v <= 0]
+                total_loss = sum(losses)
+                overall_common[f"n_{n}d"] = len(valid)
+                overall_common[f"win_rate_{n}d"] = wins / len(valid)
+                overall_common[f"avg_return_{n}d"] = sum(valid) / len(valid)
+                overall_common[f"net_expectancy_{n}d"] = sum(valid) / len(valid) - TRADE_COST_PCT
+                overall_common[f"profit_factor_{n}d"] = (
+                    sum(gains) / abs(total_loss) if total_loss < 0 else float('inf')
+                )
+
+    return {"samples": samples, "overall": overall, "by_score": by_score,
+            "overall_common": overall_common}
 
 
 def _load_twii_regime(cache_dir, ma_days: int = 60):
@@ -853,9 +886,14 @@ def check_system_health(history: list, cache_dir, hold_days: int = 5,
         base.update({"status": "warn", "label": "🟡 警戒",
                      "reason": "、".join(warns) + "。edge 仍在但轉弱,建議收緊停損、降低部位。"})
     else:
+        # 全期也為正且近期與其相當 → 才說「與全期一致」;否則(如全期負、近期轉正)只陳述近期,避免誤導
+        if all_net_exp > 0:
+            _cmp = f"與全期({all_net_exp:+.2f}%)相當" if recent_net_exp >= all_net_exp * DECAY_FRAC else f"(全期 {all_net_exp:+.2f}%)"
+        else:
+            _cmp = f"已優於全期({all_net_exp:+.2f}%)"
         base.update({"status": "ok", "label": "🟢 正常",
                      "reason": f"近 {n_recent} 個入選日淨期望值 {recent_net_exp:+.2f}%、勝率 {recent_win*100:.0f}%,"
-                               f"與全期({all_net_exp:+.2f}%)一致,edge 維持中。"})
+                               f"{_cmp},edge 維持中。"})
     return base
 
 
