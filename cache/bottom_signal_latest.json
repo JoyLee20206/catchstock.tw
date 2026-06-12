@@ -51,7 +51,7 @@
    "group": "02 股價走勢",
    "name": "低點墊高",
    "ok": null,
-   "value": "轉折點不足",
+   "value": "前轉折 03/31(距今 50 日)屬上一波段,不比較",
    "manual": false,
    "observe": false
   },
@@ -77,8 +77,8 @@
    "key": "vol_spike_down",
    "group": "03 成交量",
    "name": "爆量下跌",
-   "ok": null,
-   "value": "資料缺",
+   "ok": false,
+   "value": "量 1.17 兆(0.84×均) +2.4%",
    "manual": false,
    "observe": false
   },
@@ -86,8 +86,8 @@
    "key": "vol_shrink",
    "group": "03 成交量",
    "name": "量縮止穩",
-   "ok": null,
-   "value": "資料缺",
+   "ok": true,
+   "value": "量縮 +2.4%",
    "manual": false,
    "observe": false
   },
@@ -95,8 +95,8 @@
    "key": "vol_up",
    "group": "03 成交量",
    "name": "帶量上漲",
-   "ok": null,
-   "value": "資料缺",
+   "ok": false,
+   "value": "量縮 +2.4%",
    "manual": false,
    "observe": false
   },
@@ -122,8 +122,8 @@
    "key": "fut_basis",
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
-   "ok": null,
-   "value": "資料缺",
+   "ok": true,
+   "value": "價差 +19",
    "manual": false,
    "observe": false
   },
@@ -234,6 +234,6 @@
  "level": 0,
  "level_label": "高度恐慌",
  "level_icon": "🔴",
- "n_ok": 6,
- "generated_at": "2026-06-12 10:46"
+ "n_ok": 8,
+ "generated_at": "2026-06-12 11:00"
 }
