@@ -12,11 +12,13 @@ if hasattr(sys.stdout, 'reconfigure'):
 # ==========================================
 CACHE_DIR = Path("cache")
 # ──────────────────────────────────────────────────────────────
-# 計分總覽 (滿分 10):
-#   1. 投信買超       2. 外資買超          3. 投信+外資雙買超
-#   4. 券相關合併     5. 400張大戶上升     6. 散戶下降
-#   7. 技術面三合一   8. KD 低檔金叉       9. 月營收達標
-#   10. RS vs 大盤 (僅多頭計分;空頭時記 0 — 見動態門檻調整)
+# 計分總覽 (滿分 12):
+#   1. 投信買超(1)     2. 外資買超(1)        3. 投信+外資雙買超(1)
+#   4. 券相關合併(1)   5. 400張大戶上升(2)   6. 散戶下降(2)
+#   7. 技術面三合一(1) 8. KD 低檔金叉(1)     9. 月營收達標(1)
+#   10. RS vs 大盤(1) (僅多頭計分;空頭時記 0 — 見動態門檻調整)
+#   ※ 大戶/散戶加重為 2 分:訊號歸因唯二明顯正 edge(+9.2%/+6.4%),
+#     門檻 7 分下等於「無籌碼訊號就進不來」(其餘條件加總最高 6 分)
 #
 # 動態門檻調整:
 #   - 大盤跌破季線 → PASS_SCORE 自動 +1 (空頭從嚴);且 RS 訊號不計分
@@ -26,7 +28,8 @@ CACHE_DIR = Path("cache")
 # 籌碼共振 (大戶↑+散戶↓):「不再額外計分」,但作為排序優先序
 # (大戶與散戶各自獨立 1 分;同時成立自然累積到 2 分)
 # ──────────────────────────────────────────────────────────────
-PASS_SCORE = 7             # 滿分 10 的過關門檻 (大盤空頭時自動 +1;RS 失效時自動 -1)
+PASS_SCORE = 7             # 滿分 12 的過關門檻 (大盤空頭時自動 +1;RS 失效時自動 -1)
+                           # 空頭門檻 8:基本盤 5(RS 關)+ 大戶 2 = 7 不夠 → 需大戶+散戶雙籌碼才過
 
 # 法人 / 籌碼
 LOOKBACK_DAYS = 5          # 投信/外資觀察天數
@@ -90,6 +93,12 @@ RS_LOOKBACK         = 20       # 個股 vs 大盤的 N 日漲幅比較 (RS 計�
 MIN_AVG_VOL_LOTS = 400     # 近 20 日均量下限 (張),過濾流動性不足
 ATR_MAX_PCT      = 12.0     # ATR(14) / 現價 上限(%),過濾波動過大的飆股
 
+# 恐慌煞車 (接止跌判讀 bottom_signal 的排程結果)
+# 歸因實證:崩盤期照常選股,入選股後 5 日平均 -6.89% —— 此階段選什麼都賠。
+# 大盤破季線(空頭從嚴)是落後指標,急跌初段擋不住;VIXTWN 閘門反應快得多。
+PANIC_GUARD_LEVEL_STOP   = "高度恐慌"  # 止跌判讀為此分級 → 當日暫停推薦新股
+PANIC_GUARD_MAX_AGE_DAYS = 4           # latest.json 超過 N 天未更新 → 視為未知,不啟用煞車
+
 # ==========================================
 
 def latest(name, required=True):
@@ -101,6 +110,30 @@ def latest(name, required=True):
         print(f"   [警告] 找不到選配的 {name} 快取,該項條件將以 0 分計算。")
         return pd.DataFrame()
     return pd.read_parquet(files[-1])
+
+def _load_bottom_panic_level(max_age_days=PANIC_GUARD_MAX_AGE_DAYS):
+    """讀止跌判讀排程結果(cache/bottom_signal_latest.json),回 (level_label, age_days)。
+
+    bottom_push 排程每天 16:10/21:30 更新此檔。檔案不存在/壞檔/超過
+    max_age_days 天未更新(排程斷線)→ 回 (None, age):煞車不啟用,選股照常,
+    寧可放行也不要因為一個輔助檔壞掉就永遠停止選股。
+    """
+    import json
+    try:
+        f = CACHE_DIR / "bottom_signal_latest.json"
+        if not f.exists():
+            return None, None
+        data = json.loads(f.read_text(encoding="utf-8"))
+        gen = str(data.get("generated_at", ""))[:10]
+        age = (datetime.now().date() - datetime.strptime(gen, "%Y-%m-%d").date()).days
+        if age > max_age_days:
+            print(f"   [恐慌煞車] 止跌判讀檔已 {age} 天未更新,視為未知、不啟用煞車")
+            return None, age
+        return data.get("level_label"), age
+    except Exception as e:
+        print(f"   [恐慌煞車] 止跌判讀檔讀取失敗(不啟用): {str(e)[:80]}")
+        return None, None
+
 
 def _calc_kd_series(highs, lows, closes, n=9):
     """Taiwan 常用 KD: K(t)=(2*K(t-1)+RSV(t))/3, D(t)=(2*D(t-1)+K(t))/3, 初值 50
@@ -381,7 +414,7 @@ def run_screening(
     output_dir = Path(output_dir) if output_dir else Path('.')
 
     print("=" * 60)
-    print(">>> 本地計分選股 (滿分 10;法人 3 / 籌碼 3 / 技術 2 / 基本 1 / 大盤 1)")
+    print(">>> 本地計分選股 (滿分 12;法人 3 / 籌碼 5[大戶、散戶各 2] / 技術 2 / 基本 1 / 大盤 1)")
     print(">>> 預篩 (不計分): 日均量 < {} 張 或 ATR% > {}% 直接剔除".format(MIN_AVG_VOL_LOTS, ATR_MAX_PCT))
     print("=" * 60)
     print(">>> 讀取快取...")
@@ -519,6 +552,38 @@ def run_screening(
               f"需「大戶↑或散戶↓」至少其一才入選;門檻維持 {effective_pass_score}")
     else:
         print(f"   [多頭] 大盤站上季線,門檻維持 {effective_pass_score}")
+
+    # ── 恐慌煞車:止跌判讀「高度恐慌」→ 當日暫停推薦新股 ─────────────
+    panic_level, _panic_age = _load_bottom_panic_level()
+    if panic_level == PANIC_GUARD_LEVEL_STOP:
+        print(f"🛑 [恐慌煞車] 止跌判讀分級「{panic_level}」:今日暫停推薦新股,"
+              f"待恐慌降溫(🟡 剛降溫以下)自動恢復。")
+        twii_pct = 0.0
+        bias_ma60 = 0.0
+        if market_data_ok and twii_close is not None and len(twii_close) >= 2:
+            c_now, c_prev = twii_close.iloc[-1], twii_close.iloc[-2]
+            twii_pct = (c_now - c_prev) / c_prev * 100
+            if twii_ma and twii_ma > 0:
+                bias_ma60 = (c_now - twii_ma) / twii_ma * 100
+        meta = {
+            'market_data_ok':       market_data_ok,
+            'market_bullish':       market_bullish,
+            'market_consolidating': market_consolidating,
+            'market_state':         'bear' if not market_bullish else
+                                    ('consolidation' if market_consolidating else 'bull'),
+            'market_status':        "恐慌觀望",
+            'twii_now':             twii_now,
+            'twii_ma':              twii_ma,
+            'twii_pct':             twii_pct,
+            'twii_bias':            bias_ma60,
+            'score_note':           "🛑 止跌判讀:高度恐慌——今日暫停推薦新股,待恐慌降溫自動恢復",
+            'base_pass_score':      pass_score,
+            'effective_pass_score': effective_pass_score,
+            'cache_max_date':       cache_max_date,
+            'twii_lookback_change': twii_lookback_change,
+            'panic_guard':          True,
+        }
+        return pd.DataFrame(), {}, meta
 
     # --- 訊號 1: 投信買超 ---
     print(">>> [1/9] 投信買超 (近 {} 日總淨額 > 0 且 ≥ {} 日買超)...".format(LOOKBACK_DAYS, IT_MIN_BUY_DAYS))
@@ -892,7 +957,7 @@ def run_screening(
     print(f"    · 無 daily K 資料                           : {len(reject_no_daily):>4} 檔")
     print(f"    · vol+atr 皆觸發 (已計入上述)                : {len(both):>4} 檔")
     print(f"    · 合計剔除 (聯集)                            : {len(reject_set):>4} 檔")
-    print(f">>> 計分與排序... (門檻 = {effective_pass_score} / 10)")
+    print(f">>> 計分與排序... (門檻 = {effective_pass_score} / 12)")
     # 盤整期籌碼硬門票:依分數區間實證 (8分勝率53%/+0.71% vs 7分43%/-0.35%),
     # 且大戶↑ edge +6.01%、散戶↓ +3.16% 為僅有的明顯正向訊號 → 盤整時升級為入場條件
     chip_gate_on = market_data_ok and market_consolidating
@@ -938,9 +1003,12 @@ def run_screening(
         rv   = rev_sig.get(sid, 0)
         rs   = rs_sig.get(sid, 0)
 
-        # 滿分 10:法人 3 (投信、外資、雙買) + 籌碼 3 (券、大戶、散戶) + 技術 2 (技術面、KD) + 基本 1 + 大盤 1
+        # 滿分 12:法人 3 (投信、外資、雙買) + 籌碼 5 (券 1、大戶 2、散戶 2) + 技術 2 (技術面、KD) + 基本 1 + 大盤 1
+        # 大戶/散戶各 2 分:訊號歸因實證它們是唯二明顯正 edge(+9.2% / +6.4%),其餘訊號
+        # 接近門票性質。加重後門檻 7 分 = 「基本盤(投信+外資+雙買+技術+RS+券=6)之外,
+        # 至少要一個籌碼訊號」,籌碼實質升級為全時段入場條件
         score = (it['flag'] + fi['flag'] + it_fi_dual +
-                 margin_combined + l + sd +
+                 margin_combined + 2 * l + 2 * sd +
                  tech + kd + rv + rs)
 
         if score < effective_pass_score:
@@ -1012,7 +1080,7 @@ def run_screening(
             df.to_excel(out, index=False)
             print(f"   ⚠ 原 xlsx 被開啟中,改存為 {out}")
         print("=" * 60)
-        print(f"✅ 篩選完成!共 {len(df)} 檔達標 (總分 >= {effective_pass_score} / 10)")
+        print(f"✅ 篩選完成!共 {len(df)} 檔達標 (總分 >= {effective_pass_score} / 12)")
         if chip_gate_on:
             print(f"   · [盤整慎選] 籌碼硬門票剔除 (達分但無大戶↑/散戶↓): {chip_gate_rejected} 檔")
         chip_sync_count = (df["★籌碼共振(大戶↑散戶↓)"] == 1).sum()
@@ -1085,6 +1153,7 @@ def run_screening(
         'effective_pass_score':  effective_pass_score,
         'cache_max_date':        cache_max_date,
         'twii_lookback_change':  twii_lookback_change, # Bug 2 修正：key 名稱與 UI 對齊
+        'panic_guard':           False,                # 恐慌煞車未觸發 (觸發時在前面提早 return)
     }
     return (df, file_paths, meta)
 
