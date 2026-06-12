@@ -96,11 +96,11 @@ RS_LOOKBACK         = 20       # 個股 vs 大盤的 N 日漲幅比較 (RS 計�
 MIN_AVG_VOL_LOTS = 400     # 近 20 日均量下限 (張),過濾流動性不足
 ATR_MAX_PCT      = 12.0     # ATR(14) / 現價 上限(%),過濾波動過大的飆股
 
-# 恐慌煞車 (接止跌判讀 bottom_signal 的排程結果)
-# 歸因實證:崩盤期照常選股,入選股後 5 日平均 -6.89% —— 此階段選什麼都賠。
-# 大盤破季線(空頭從嚴)是落後指標,急跌初段擋不住;VIXTWN 閘門反應快得多。
-PANIC_GUARD_LEVEL_STOP   = "高度恐慌"  # 止跌判讀為此分級 → 當日暫停推薦新股
-PANIC_GUARD_MAX_AGE_DAYS = 4           # latest.json 超過 N 天未更新 → 視為未知,不啟用煞車
+# 恐慌警示 (接止跌判讀 bottom_signal 的排程結果;只警示、不擋選股)
+# 歸因實證:崩盤期入選股後 5 日平均 -6.89%。原設計為「恐慌煞車」直接停止推薦,
+# 2026-06-13 應使用者要求改回照常選股,僅在推播/UI 加警語,部位自行斟酌。
+PANIC_WARN_LEVEL         = "高度恐慌"  # 止跌判讀為此分級 → 推播/UI 帶警語
+PANIC_GUARD_MAX_AGE_DAYS = 4           # latest.json 超過 N 天未更新 → 視為未知,不警示
 
 # ==========================================
 
@@ -118,8 +118,7 @@ def _load_bottom_panic_level(max_age_days=PANIC_GUARD_MAX_AGE_DAYS):
     """讀止跌判讀排程結果(cache/bottom_signal_latest.json),回 (level_label, age_days)。
 
     bottom_push 排程每天 16:10/21:30 更新此檔。檔案不存在/壞檔/超過
-    max_age_days 天未更新(排程斷線)→ 回 (None, age):煞車不啟用,選股照常,
-    寧可放行也不要因為一個輔助檔壞掉就永遠停止選股。
+    max_age_days 天未更新(排程斷線)→ 回 (None, age):不警示,選股照常。
     """
     import json
     try:
@@ -130,11 +129,11 @@ def _load_bottom_panic_level(max_age_days=PANIC_GUARD_MAX_AGE_DAYS):
         gen = str(data.get("generated_at", ""))[:10]
         age = (datetime.now().date() - datetime.strptime(gen, "%Y-%m-%d").date()).days
         if age > max_age_days:
-            print(f"   [恐慌煞車] 止跌判讀檔已 {age} 天未更新,視為未知、不啟用煞車")
+            print(f"   [恐慌警示] 止跌判讀檔已 {age} 天未更新,視為未知、不警示")
             return None, age
         return data.get("level_label"), age
     except Exception as e:
-        print(f"   [恐慌煞車] 止跌判讀檔讀取失敗(不啟用): {str(e)[:80]}")
+        print(f"   [恐慌警示] 止跌判讀檔讀取失敗(略過): {str(e)[:80]}")
         return None, None
 
 
@@ -556,37 +555,12 @@ def run_screening(
     else:
         print(f"   [多頭] 大盤站上季線,門檻維持 {effective_pass_score}")
 
-    # ── 恐慌煞車:止跌判讀「高度恐慌」→ 當日暫停推薦新股 ─────────────
+    # ── 恐慌警示:止跌判讀「高度恐慌」→ 照常選股,僅標警語(不擋) ──────
     panic_level, _panic_age = _load_bottom_panic_level()
-    if panic_level == PANIC_GUARD_LEVEL_STOP:
-        print(f"🛑 [恐慌煞車] 止跌判讀分級「{panic_level}」:今日暫停推薦新股,"
-              f"待恐慌降溫(🟡 剛降溫以下)自動恢復。")
-        twii_pct = 0.0
-        bias_ma60 = 0.0
-        if market_data_ok and twii_close is not None and len(twii_close) >= 2:
-            c_now, c_prev = twii_close.iloc[-1], twii_close.iloc[-2]
-            twii_pct = (c_now - c_prev) / c_prev * 100
-            if twii_ma and twii_ma > 0:
-                bias_ma60 = (c_now - twii_ma) / twii_ma * 100
-        meta = {
-            'market_data_ok':       market_data_ok,
-            'market_bullish':       market_bullish,
-            'market_consolidating': market_consolidating,
-            'market_state':         'bear' if not market_bullish else
-                                    ('consolidation' if market_consolidating else 'bull'),
-            'market_status':        "恐慌觀望",
-            'twii_now':             twii_now,
-            'twii_ma':              twii_ma,
-            'twii_pct':             twii_pct,
-            'twii_bias':            bias_ma60,
-            'score_note':           "🛑 止跌判讀:高度恐慌——今日暫停推薦新股,待恐慌降溫自動恢復",
-            'base_pass_score':      pass_score,
-            'effective_pass_score': effective_pass_score,
-            'cache_max_date':       cache_max_date,
-            'twii_lookback_change': twii_lookback_change,
-            'panic_guard':          True,
-        }
-        return pd.DataFrame(), {}, meta
+    panic_warning = (panic_level == PANIC_WARN_LEVEL)
+    if panic_warning:
+        print(f"⚠️ [恐慌警示] 止跌判讀分級「{panic_level}」:照常選股;"
+              f"提醒:歷史上此階段入選股 5 日平均 -6.9%,部位請自行斟酌。")
 
     # --- 訊號 1: 投信買超 ---
     print(">>> [1/9] 投信買超 (近 {} 日總淨額 > 0 且 ≥ {} 日買超)...".format(LOOKBACK_DAYS, IT_MIN_BUY_DAYS))
@@ -1135,6 +1109,10 @@ def run_screening(
         score_note = "⚠️ 大盤盤整修正中：RS 不計分，且需「大戶↑或散戶↓」至少其一才入選"
     elif not market_data_ok:
         score_note = "⚠️ 大盤數據取得失敗，門檻自動調整"
+    # 恐慌警示(不擋選股):疊加在既有 note 後面,推播標頭的 ❗ 行會一起顯示
+    if panic_warning:
+        _pw_note = "🛑 止跌判讀:高度恐慌——此階段歷史上入選股 5 日平均 -6.9%,部位請自行斟酌"
+        score_note = f"{score_note}；{_pw_note}" if score_note else _pw_note
 
     if not market_bullish:
         market_state, market_status = 'bear', "謹慎保守"
@@ -1158,7 +1136,7 @@ def run_screening(
         'effective_pass_score':  effective_pass_score,
         'cache_max_date':        cache_max_date,
         'twii_lookback_change':  twii_lookback_change, # Bug 2 修正：key 名稱與 UI 對齊
-        'panic_guard':           False,                # 恐慌煞車未觸發 (觸發時在前面提早 return)
+        'panic_warning':         panic_warning,        # 高度恐慌警示 (只標警語,不擋選股)
     }
     return (df, file_paths, meta)
 

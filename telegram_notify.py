@@ -310,12 +310,7 @@ def main():
         change_pct_map = load_change_pct_map()  # {sid: pct}
 
         if df is None or len(df) == 0:
-            if meta.get('panic_guard'):
-                content = ("🛑 <b>恐慌煞車啟動</b>:止跌判讀目前為「高度恐慌」,今日暫停推薦新股。\n"
-                           "<i>(歷史實證:此階段照常選股,入選股 5 日平均 -6.9%——寧可空手等降溫。"
-                           "止跌分級轉🟡以下自動恢復)</i>\n")
-            else:
-                content = "💡 目前盤勢較嚴峻,沒有股票達標。"
+            content = "💡 目前盤勢較嚴峻,沒有股票達標。"
             today_set = set()
         else:
             content = f"🔥 <b>今日達標個股 (共 {len(df)} 檔)</b>\n"
