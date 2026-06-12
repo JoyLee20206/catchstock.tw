@@ -137,13 +137,16 @@ def _fallback_prev_to_today(name):
         print(f"   [墊檔失敗] {name}: {e}")
         return False
 
-def _should_skip_weekly(name, weekday=5, min_days=6, catch_up_days=9):
+def _should_skip_weekly(name, weekday=5, min_days=6, catch_up_days=7):
     """週更類快取的閘門(適用變動很少的資料:個股期貨清單、台指期保證金)。
 
     更新時機鎖定「**每逢週六、且距上次抓 ≥ min_days 天**」;另加過期補抓安全網。
+    註:排程(GHA)只在週一~五跑,「週六」分支實際上不會觸發,真正的更新機制是
+    過期補抓——catch_up_days=7 讓檔齡滿一週就在平日排程補抓,維持「每週更新」的頻率
+    (原 9 天會讓實際頻率變成每 9~10 天)。
     規則(回 True=略過、False=要抓),依序判斷:
       - 沒有任何舊檔 → 抓(初次建檔,不等週六)
-      - 檔齡 ≥ catch_up_days(預設 9 天)→ **任一天都補抓**(漏了週六、資料太舊的安全網,連 FORCE 也補)
+      - 檔齡 ≥ catch_up_days(預設 7 天)→ **任一天都補抓**(漏了週六、資料太舊的安全網,連 FORCE 也補)
       - FORCE 且檔還不算太舊 → 略過(force 不為這類變動少的資料多打 TAIFEX)
       - 今天是週六 且 檔齡 ≥ min_days → 抓(正常每週更新)
       - 其餘(非週六 / 太近)→ 略過
