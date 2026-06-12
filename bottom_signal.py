@@ -15,7 +15,8 @@
   P/C ratio       — TAIFEX /cht/3/pcRatioDown(CSV)
   成交金額/加權   — TWSE rwd FMTQIK(可帶月份抓歷史)
   外資現貨買賣超  — TWSE rwd BFI82U(可帶日期抓歷史)
-  加權/2330 OHLC  — yfinance ^TWII / 2330.TW(GHA 上若失敗,之後補 TWSE 備援)
+  加權/2330 OHLC  — 快取優先(選股排程 twii/daily parquet,須為今日)
+                    → TWSE 官方(MI_5MINS_HIST / STOCK_DAY)→ yfinance 備援
   外資期貨未平倉  — 沿用 market_sentiment._fetch_taifex_institutional
                     + fi_futures_history.json(需累積 ≥ 2 日才能判「回補」)
 
@@ -348,22 +349,111 @@ def fetch_breadth_from_cache(cache_dir, days: int = 6,
         return None
 
 
-def fetch_us_vix_from_cache(cache_dir, max_age_days: int = 6) -> "pd.DataFrame | None":
-    """美股 VIX 備援:選股排程的 vix parquet(yfinance 現抓失敗時用)。"""
+def fetch_us_vix_from_cache(cache_dir, max_age_days: int = 6,
+                            fetched_today_only: bool = False) -> "pd.DataFrame | None":
+    """美股 VIX,從選股排程的 vix parquet 讀取。
+
+    fetched_today_only=True(cache 優先):檔名日期必須是今天——代表
+    選股排程今天抓過,內容與此刻打 yfinance 等價(台灣下午美股未開盤,
+    雙方的最新值都是同一個美股收盤);不是今天就回 None 改現抓。
+    注意用「檔名」而非內容日期:美股 VIX 最新值本來就是 1~3 天前
+    (週末/美股假日),內容日期判斷不了新鮮度。
+    fetched_today_only=False(備援):yfinance 掛了,內容 max_age_days
+    天內都堪用(總比沒有好)。
+    已知極端況:排程當天 yfinance 也失敗時會「墊昨檔」(檔名今天、內容
+    少最新一天),此時 cache 優先會吃到少一天的資料;但那種日子現抓
+    多半也會失敗,且差距收斂項用 5 日均,影響有限。
+    """
     if cache_dir is None:
         return None
     try:
         files = sorted(Path(cache_dir).glob("vix_*.parquet"))
         if not files:
             return None
+        if fetched_today_only:
+            fname_date = files[-1].stem[len("vix_"):]
+            if fname_date != datetime.now().strftime("%Y-%m-%d"):
+                print(f"   ⚠ vix 快取是 {fname_date} 抓的(非今日),改現抓")
+                return None
         df = pd.read_parquet(files[-1])
         df.columns = [str(c).lower() for c in df.columns]
         df = df.set_index(pd.to_datetime(df["date"])).sort_index()
         if (datetime.now() - df.index[-1]).days > max_age_days:
             return None
+        if fetched_today_only:
+            print(f"   ✓ 美股 VIX 用 vix 快取(最新收盤 {df.index[-1]:%Y-%m-%d})")
         return df[["close"]].dropna()
     except Exception as e:
         print(f"   ⚠ vix 快取讀取失敗: {str(e)[:80]}")
+        return None
+
+
+def fetch_index_ohlc_from_cache(cache_dir, max_age_days: int = 0) -> "pd.DataFrame | None":
+    """加權指數 OHLC,從選股排程的 twii parquet 讀取 — 零網路請求。
+
+    fetch_cache.py 每天 15:30 抓 TWSE 官方 TAIEX(同 fetch_index_ohlc_twse
+    的來源,資料等價)。本訊號把最後一列當「今日」判定,所以 cache 最新日
+    必須是今天(max_age_days=0);16:10 初判時選股排程可能還沒 commit,
+    cache 還停在昨天 → 回 None,讓呼叫端照舊現抓。
+    """
+    if cache_dir is None:
+        return None
+    try:
+        files = sorted(Path(cache_dir).glob("twii_*.parquet"))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        df.columns = [str(c).lower() for c in df.columns]
+        need = ["date", "open", "high", "low", "close"]
+        if any(c not in df.columns for c in need):
+            return None
+        df = df[need].dropna()
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.drop_duplicates("date").sort_values("date").set_index("date")
+        df.index = [d.date() for d in df.index]
+        age = (datetime.now().date() - df.index[-1]).days
+        if age > max_age_days:
+            print(f"   ⚠ twii 快取最新日 {df.index[-1]}(已 {age} 天),改現抓")
+            return None
+        print(f"   ✓ 加權指數用 twii 快取({len(df)} 筆,最新 {df.index[-1]})")
+        return df.tail(130)
+    except Exception as e:
+        print(f"   ⚠ twii 快取讀取失敗: {str(e)[:80]}")
+        return None
+
+
+def fetch_stock_ohlc_from_cache(cache_dir, stock_no: str,
+                                max_age_days: int = 0) -> "pd.DataFrame | None":
+    """個股 OHLC,從選股排程的 daily parquet 讀取 — 零網路請求。
+
+    daily parquet 是 yfinance 還原價(欄名 open/max/min/close),與官方
+    原始價略有差異;本訊號只比相對關係(今低 vs 前低、收盤 vs MA),
+    同一檔案內部一致即可,不影響判定。最新日不是今天 → 回 None 改現抓。
+    """
+    if cache_dir is None:
+        return None
+    try:
+        files = sorted(Path(cache_dir).glob("daily_*.parquet"))
+        if not files:
+            return None
+        df = pd.read_parquet(
+            files[-1], columns=["stock_id", "date", "open", "max", "min", "close"])
+        df = df[df["stock_id"].astype(str) == str(stock_no)]
+        if df.empty:
+            return None
+        df = df.rename(columns={"max": "high", "min": "low"})
+        df = df[["date", "open", "high", "low", "close"]].dropna()
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.drop_duplicates("date").sort_values("date").set_index("date")
+        df.index = [d.date() for d in df.index]
+        age = (datetime.now().date() - df.index[-1]).days
+        if age > max_age_days:
+            print(f"   ⚠ daily 快取({stock_no})最新日 {df.index[-1]}(已 {age} 天),改現抓")
+            return None
+        print(f"   ✓ {stock_no} 用 daily 快取({len(df)} 筆,最新 {df.index[-1]})")
+        return df
+    except Exception as e:
+        print(f"   ⚠ daily 快取({stock_no})讀取失敗: {str(e)[:80]}")
         return None
 
 
@@ -659,8 +749,10 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
         alerts.append("🚨 台灣恐慌指數(閘門)兩個來源都抓不到!今天無法判定分級,"
                       "請晚點按「立即重抓」再試,持續失敗請檢查期交所網站是否改版。")
 
-    print("📥 抓美股 VIX / 美債 / 美元 / 台幣 / 費半(yfinance)…")
-    us_vix = _yf_series("^VIX", period="30d")
+    print("📥 抓美股 VIX(快取優先)/ 美債 / 美元 / 台幣 / 費半(yfinance)…")
+    us_vix = fetch_us_vix_from_cache(cache_dir, fetched_today_only=True)
+    if us_vix is None:
+        us_vix = _yf_series("^VIX", period="30d")
     if us_vix is None:
         us_vix = fetch_us_vix_from_cache(cache_dir)
     us10y = _yf_series("^TNX", period="15d")       # 美國 10 年期公債殖利率(%)
@@ -668,15 +760,19 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     twd = _yf_series("TWD=X", period="15d")        # 美元兌台幣(升=台幣貶)
     sox = _yf_series("^SOX", period="60d")         # 費城半導體指數
 
-    print("📥 抓加權 / 台積電 OHLC(TWSE 官方,yfinance 備援)…")
-    twii = fetch_index_ohlc_twse()
+    print("📥 抓加權 / 台積電 OHLC(快取優先;TWSE 官方 → yfinance 備援)…")
+    twii = fetch_index_ohlc_from_cache(cache_dir)
+    if twii is None:
+        twii = fetch_index_ohlc_twse()
     if twii is None:
         twii = _yf_series("^TWII", period="120d")
         if twii is not None:
             alerts.append("大盤股價改用備用來源(Yahoo):證交所官方暫時抓不到,"
                           "判讀照常,但備用來源偶爾缺一兩天資料,"
                           "「未破前低」等比較前幾天的項目可能略有誤差。下次更新通常會自動恢復。")
-    tsmc = fetch_stock_ohlc_twse("2330")
+    tsmc = fetch_stock_ohlc_from_cache(cache_dir, "2330")
+    if tsmc is None:
+        tsmc = fetch_stock_ohlc_twse("2330")
     if tsmc is None:
         tsmc = _yf_series("2330.TW", period="60d")
         if tsmc is not None:
