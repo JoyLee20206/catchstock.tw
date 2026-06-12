@@ -1,12 +1,12 @@
 {
- "asof": "2026-06-11",
+ "asof": "2026-06-12",
  "items": [
   {
    "key": "gate",
    "group": "01 恐慌指數",
    "name": "跌破 40 ★閘門",
    "ok": false,
-   "value": "今 43.6 / 昨 43.9",
+   "value": "今 41.9 / 昨 43.6",
    "manual": false,
    "observe": false
   },
@@ -15,7 +15,7 @@
    "group": "01 恐慌指數",
    "name": "續降 38",
    "ok": false,
-   "value": "今 43.6",
+   "value": "今 41.9",
    "manual": false,
    "observe": false
   },
@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 24.1 / 5日均 19.7",
+   "value": "差 23.4 / 5日均 20.6",
    "manual": false,
    "observe": false
   },
@@ -33,7 +33,7 @@
    "group": "01 恐慌指數",
    "name": "爆衝後急殺",
    "ok": false,
-   "value": "日高 45.0 收 43.6(回落 3.1%)",
+   "value": "日高 42.6 收 41.9(回落 1.7%)",
    "manual": false,
    "observe": false
   },
@@ -41,8 +41,8 @@
    "key": "px_no_low",
    "group": "02 股價走勢",
    "name": "未破前低",
-   "ok": false,
-   "value": "今低 42,006 / 前10日低 42,377",
+   "ok": true,
+   "value": "今低 43,588 / 前10日低 42,006",
    "manual": false,
    "observe": false
   },
@@ -50,8 +50,8 @@
    "key": "px_higher_low",
    "group": "02 股價走勢",
    "name": "低點墊高",
-   "ok": null,
-   "value": "前轉折 03/31(距今 49 日)屬上一波段,不比較",
+   "ok": true,
+   "value": "前低 31,706 → 新低 39,967",
    "manual": false,
    "observe": false
   },
@@ -59,8 +59,8 @@
    "key": "px_strong_k",
    "group": "02 股價走勢",
    "name": "強K守收盤",
-   "ok": false,
-   "value": "收 43,149(黑K,下影 78%)",
+   "ok": true,
+   "value": "收 44,169(紅K,下影 48%)",
    "manual": false,
    "observe": false
   },
@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 1.34 兆(0.97×均) -0.2%",
+   "value": "量 1.17 兆(0.84×均) +2.4%",
    "manual": false,
    "observe": false
   },
@@ -87,7 +87,7 @@
    "group": "03 成交量",
    "name": "量縮止穩",
    "ok": true,
-   "value": "量縮 -0.2%",
+   "value": "量縮 +2.4%",
    "manual": false,
    "observe": false
   },
@@ -96,7 +96,7 @@
    "group": "03 成交量",
    "name": "帶量上漲",
    "ok": false,
-   "value": "量縮 -0.2%",
+   "value": "量縮 +2.4%",
    "manual": false,
    "observe": false
   },
@@ -113,8 +113,8 @@
    "key": "breadth_falloff",
    "group": "04 信用與廣度",
    "name": "跌家比從極端回落",
-   "ok": true,
-   "value": "跌家比 74% → 58%",
+   "ok": false,
+   "value": "跌家比 58% → 23%",
    "manual": false,
    "observe": true
   },
@@ -123,7 +123,7 @@
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
    "ok": true,
-   "value": "價差 +92",
+   "value": "價差 +19",
    "manual": false,
    "observe": false
   },
@@ -132,7 +132,7 @@
    "group": "05 期貨與大戶",
    "name": "外資現貨賣超收斂",
    "ok": true,
-   "value": "今 -1 億 / 近5日均賣 3 億",
+   "value": "今 +0 億 / 近5日均賣 3 億",
    "manual": false,
    "observe": false
   },
@@ -141,7 +141,7 @@
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
    "ok": false,
-   "value": "淨額 -61,949 → -63,168 口",
+   "value": "淨額 -63,168 → -65,039 口",
    "manual": false,
    "observe": false
   },
@@ -150,7 +150,7 @@
    "group": "05 期貨與大戶",
    "name": "P/C比從極端回落",
    "ok": false,
-   "value": "166% → 133%",
+   "value": "133% → 168%",
    "manual": false,
    "observe": false
   },
@@ -158,8 +158,8 @@
    "key": "tsmc_no_low",
    "group": "06 台積電",
    "name": "台積止穩不破低",
-   "ok": false,
-   "value": "今低 2,210 / 前10日低 2,230",
+   "ok": true,
+   "value": "今低 2,290 / 前10日低 2,210",
    "manual": false,
    "observe": false
   },
@@ -168,7 +168,7 @@
    "group": "06 台積電",
    "name": "台積翻紅站MA5",
    "ok": false,
-   "value": "收 2,250 / MA5 2,294",
+   "value": "收 2,310 / MA5 2,283",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 31.58 → 31.58",
+   "value": "USDTWD 31.54 → 31.62",
    "manual": false,
    "observe": true
   },
@@ -229,11 +229,11 @@
  ],
  "alerts": [],
  "manual_flags": {},
- "vixtwn": 43.58,
- "fi_net_today": -63168,
+ "vixtwn": 41.89,
+ "fi_net_today": -65039,
  "level": 0,
  "level_label": "高度恐慌",
  "level_icon": "🔴",
- "n_ok": 5,
- "generated_at": "2026-06-11 21:34"
+ "n_ok": 9,
+ "generated_at": "2026-06-12 10:12"
 }
