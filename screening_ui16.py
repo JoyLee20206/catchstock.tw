@@ -718,8 +718,8 @@ with st.sidebar:
 ### 📌 第二區:核心 / KD(打分數 + 看技術線)
 這區決定「一檔股票**及不及格**」。
 
-* **過關門檻(滿分 12 分)**:系統幫每檔股票**打分數**,**達到門檻才會被選出來**。
-    * 分數怎麼來:法人有沒有買、大戶有沒有增加(2 分)、散戶有沒有在跑(2 分)、營收有沒有成長、技術面強不強…等加總。大戶/散戶配重最高,因為歷史數據證明它們最會挑到贏家。
+* **過關門檻(滿分 11 分)**:系統幫每檔股票**打分數**,**達到門檻才會被選出來**。
+    * 分數怎麼來:法人有沒有買、大戶有沒有增加(2 分)、散戶有沒有在跑(2 分)、營收有沒有成長、技術面強不強…等加總。大戶/散戶配重最高,因為歷史數據證明它們最會挑到贏家。(「券相關」歷史數據反而扣分,已暫停計分、僅記錄觀察)
     * 門檻**調高=更嚴**(選出來少而精)、**調低=更寬鬆**(選出來多)。
     * 🛡️ 大盤轉弱(跌破季線)時,系統會**自動把門檻 +1 分**,幫你變謹慎、避開容易跟跌的弱股。
 * **KD 是什麼?** 一個常見技術指標,簡單看股價是「便宜被低估」還是「太貴被高估」。
@@ -754,8 +754,8 @@ with st.sidebar:
 
     st.divider()
     st.subheader("📌 核心 / KD")
-    st.slider(labeled("過關門檻 PASS_SCORE", 'pass_score'), 1, 12, key='pass_score',
-              help="滿分 12 分，達標才算入榜。\n\n計分包含：法人買超、大戶增散戶減（各 2 分，訊號歸因唯二正 edge）、資減券增、技術突破、KD金叉、營收成長與大盤相對強弱。\n\n💡 門檻 7 分時，沒有「大戶增或散戶減」其一的股票進不來。系統會智能判斷：若大盤破季線會自動 +1 分（空頭從嚴）。")
+    st.slider(labeled("過關門檻 PASS_SCORE", 'pass_score'), 1, 11, key='pass_score',
+              help="滿分 11 分，達標才算入榜。\n\n計分包含：法人買超、大戶增散戶減（各 2 分，訊號歸因唯二正 edge）、技術突破、KD金叉、營收成長與大盤相對強弱。券相關 2026-06 起停用觀察（只記錄不計分）。\n\n💡 門檻 7 分時，沒有「大戶增或散戶減」其一的股票進不來。系統會智能判斷：若大盤破季線會自動 +1 分（空頭從嚴）。")
     st.slider(labeled("KD 觀察區間 (天)", 'kd_lookback'), 1, 30, key='kd_lookback',
               help="往回看 N 天，尋找『曾經』發生低檔金叉的股票。\n\n- 設短一點：專抓剛發動的。\n- 設長一點：容許起漲後稍微休息的股票。")
     st.slider(labeled("KD 低檔啟動門檻", 'kd_low_from'), 10, 50, key='kd_low_from',
@@ -1840,9 +1840,12 @@ with _tab_perf:
 
             with _sub_overview:
                 # ── 📅 持有天數比較(找最佳出場時機) ──
-                # 同一批 picks 在不同持有期的表現並排,看「抱幾天最划算」。
+                # 同樣本比較:鎖定「已滿最長持有期」的同一批 pick 統計所有持有期,
+                # 避免「3 日含最新的單、10 日只剩早期的單」不同批互比(會跟出場回測打架)。
                 # 全部持有期都顯示;尚無資料(pick 還沒活夠天數)者標「累積中」。
                 _all_periods = (3, 5, 10, 20)
+                _cmp_src = perf.get("overall_common") or overall   # 同樣本優先,舊快取退回全樣本
+                _cmp_base = _cmp_src.get("base_n")
                 if True:
                     st.markdown("**📅 不同持有天數比較(同一批選股,抱幾天最划算?)**")
                     _cmp_rows = []
@@ -1851,7 +1854,7 @@ with _tab_perf:
                     _has_pending = False
                     for n in _all_periods:
                         # 該持有期還沒有任何 pick 活夠天數 → 累積中
-                        if f"n_{n}d" not in overall:
+                        if f"n_{n}d" not in _cmp_src:
                             _has_pending = True
                             _need = max(1, n - _hist_days)   # 約還需幾天(以歷史天數粗估)
                             _cmp_rows.append({
@@ -1864,8 +1867,8 @@ with _tab_perf:
                                 "損益比":  "—",
                             })
                             continue
-                        _exp = overall.get(f"net_expectancy_{n}d")
-                        _pf  = overall.get(f"profit_factor_{n}d")
+                        _exp = _cmp_src.get(f"net_expectancy_{n}d")
+                        _pf  = _cmp_src.get(f"profit_factor_{n}d")
                         _pf_str = "∞" if _pf == float("inf") else (f"{_pf:.2f}" if _pf is not None else "—")
                         if _exp is not None and (_best_exp is None or _exp > _best_exp):
                             _best_exp, _best_n = _exp, n
@@ -1875,14 +1878,21 @@ with _tab_perf:
                             _best_daily, _best_dn = _daily, n
                         _cmp_rows.append({
                             "持有天數": f"{n} 日",
-                            "樣本數":  overall.get(f"n_{n}d", 0),
-                            "勝率":    f"{overall.get(f'win_rate_{n}d', 0)*100:.0f}%",
-                            "平均報酬": f"{overall.get(f'avg_return_{n}d', 0):+.2f}%",
+                            "樣本數":  _cmp_src.get(f"n_{n}d", 0),
+                            "勝率":    f"{_cmp_src.get(f'win_rate_{n}d', 0)*100:.0f}%",
+                            "平均報酬": f"{_cmp_src.get(f'avg_return_{n}d', 0):+.2f}%",
                             "淨期望值": f"{_exp:+.2f}%" if _exp is not None else "—",
                             "日均報酬": f"{_daily:+.2f}%" if _daily is not None else "—",
                             "損益比":  _pf_str,
                         })
                     st.dataframe(pd.DataFrame(_cmp_rows), use_container_width=True, hide_index=True)
+                    if _cmp_base:
+                        st.caption(
+                            f"📌 **同樣本比較**:只統計「已滿 {_cmp_base} 個交易日」的同一批 pick"
+                            f"({_cmp_src.get('n_picks', 0)} 筆),所有持有期比的是同一批股票、同一段時期。"
+                            f"最新還沒活滿 {_cmp_base} 日的 pick 不納入(它們的短天期報酬會出現在"
+                            f"下方「各持有期詳細指標」的全樣本統計裡)。"
+                        )
                     if _has_pending:
                         st.caption("⏳ 標「累積中」的持有期,是因為最早入選的 pick 還沒滿該天數;歷史累積足夠後會自動補上。")
                     if _best_n is not None:
@@ -2165,12 +2175,12 @@ with _tab_perf:
                     st.divider()
                     st.markdown("**各分數區間 5 日勝率**")
                     st.caption(
-                        "🔥 9 分以上 = 頂級(滿分 12 制:大戶↑/散戶↓各 2 分,9 分以上必含籌碼訊號)"
+                        "🔥 9 分以上 = 頂級(滿分 11 制:大戶↑/散戶↓各 2 分、券停用,9 分以上必含籌碼訊號)"
                         "｜ ✅ 7~8 分 = 合格 ｜ ⚠️ 6 分 = 邊緣(僅大盤資料缺時出現)。"
-                        "　註:改制(2026-06)前的舊紀錄為滿分 10 制,當時 8 分≈新制 10 分,跨期比較請留意。"
+                        "　註:改制(2026-06)前的舊紀錄為滿分 10 制,當時 8 分≈新制 9 分,跨期比較請留意。"
                         "　每次入選算一筆(同檔不同天分開計),故筆數比明細表的檔數多是正常的。"
                     )
-                    # 分數 → 標籤對映 (滿分 12 制;舊 10 制紀錄會被歸入較低一級,跨期僅供參考)
+                    # 分數 → 標籤對映 (滿分 11 制;舊 10 制紀錄會被歸入較低一級,跨期僅供參考)
                     def _score_label(score: int) -> str:
                         if score >= 9:
                             return f"🔥 頂級({score} 分)"
@@ -2253,8 +2263,10 @@ with _tab_perf:
                     st.info(f"📊 {_ex['error']}")
                 else:
                     st.caption(
-                        f"對每筆已滿 {_ex['max_hold']} 個交易日的 pick,模擬不同出場方式的實現報酬。"
+                        f"對每筆已滿 {_ex['max_hold']} 個交易日的 pick(共 {_ex['n']} 筆),"
+                        f"模擬不同出場方式的實現報酬。"
                         f"「日均報酬」= 淨期望值 ÷ 平均持有天數,比效率用(早出場可多做幾趟)。"
+                        f"樣本基準與上方「持有天數比較」一致(都只算活滿天數的 pick),數字可互相對照。"
                     )
                     _best_net = max((s["net_exp"] for s in _ex["strategies"]), default=None)
                     _best_daily = max((s["daily"] for s in _ex["strategies"]), default=None)

@@ -255,13 +255,13 @@ def main():
                 f"{hot_ctx}"
                 f"\n"
                 f"【冠軍標的】\n"
-                f"{sid_top} {name_top}(總分 {score_top}/12)"
+                f"{sid_top} {name_top}(總分 {score_top}/11)"
                 f"{'、帶量突破' if is_breakout else ''}"
                 f"{'、籌碼共振(大戶增散戶減)' if is_sync else ''}\n"
                 f"\n"
                 f"【分數系統說明】\n"
-                f"滿分 12(大戶上升、散戶下降各佔 2 分,其餘各 1 分),"
-                f"實務最高約 10 分(全部條件同時成立極罕見)。\n"
+                f"滿分 11(大戶上升、散戶下降各佔 2 分,券相關停用不計分,其餘各 1 分),"
+                f"實務最高約 9 分(全部條件同時成立極罕見)。\n"
                 f"故 9 分以上視同冠軍級訊號(必含籌碼共振),7~8 分為合格,6 分為邊緣"
                 f"(僅在大盤資料缺失自動降標時出現)。\n"
                 f"\n"
@@ -324,7 +324,7 @@ def main():
 
             for _, row in df.head(TOP_N_DISPLAY).iterrows():
                 sid_str    = str(row['代號'])
-                # 滿分 12 制(大戶/散戶各 2 分):9 分以上必含籌碼共振,視同冠軍級訊號
+                # 滿分 11 制(大戶/散戶各 2 分,券停用):9 分以上必含籌碼共振,視同冠軍級訊號
                 score_icon = "🔥" if row['總分'] >= 9 else "•"
                 stock_name = html.escape(str(row['名稱']))   # 防禦 ETF 名稱含 &/< 等字元
 
