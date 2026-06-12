@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 23.4 / 5日均 20.6",
+   "value": "差 24.1 / 5日均 19.7",
    "manual": false,
    "observe": false
   },
@@ -50,8 +50,8 @@
    "key": "px_higher_low",
    "group": "02 股價走勢",
    "name": "低點墊高",
-   "ok": true,
-   "value": "前低 31,706 → 新低 39,967",
+   "ok": null,
+   "value": "轉折點不足",
    "manual": false,
    "observe": false
   },
@@ -77,8 +77,8 @@
    "key": "vol_spike_down",
    "group": "03 成交量",
    "name": "爆量下跌",
-   "ok": false,
-   "value": "量 1.17 兆(0.84×均) +2.4%",
+   "ok": null,
+   "value": "資料缺",
    "manual": false,
    "observe": false
   },
@@ -86,8 +86,8 @@
    "key": "vol_shrink",
    "group": "03 成交量",
    "name": "量縮止穩",
-   "ok": true,
-   "value": "量縮 +2.4%",
+   "ok": null,
+   "value": "資料缺",
    "manual": false,
    "observe": false
   },
@@ -95,8 +95,8 @@
    "key": "vol_up",
    "group": "03 成交量",
    "name": "帶量上漲",
-   "ok": false,
-   "value": "量縮 +2.4%",
+   "ok": null,
+   "value": "資料缺",
    "manual": false,
    "observe": false
   },
@@ -122,8 +122,8 @@
    "key": "fut_basis",
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
-   "ok": true,
-   "value": "價差 +19",
+   "ok": null,
+   "value": "資料缺",
    "manual": false,
    "observe": false
   },
@@ -168,7 +168,7 @@
    "group": "06 台積電",
    "name": "台積翻紅站MA5",
    "ok": false,
-   "value": "收 2,310 / MA5 2,283",
+   "value": "收 2,310 / MA5 2,279",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 31.54 → 31.62",
+   "value": "USDTWD 31.54 → 31.63",
    "manual": false,
    "observe": true
   },
@@ -234,6 +234,6 @@
  "level": 0,
  "level_label": "高度恐慌",
  "level_icon": "🔴",
- "n_ok": 9,
- "generated_at": "2026-06-12 10:12"
+ "n_ok": 6,
+ "generated_at": "2026-06-12 10:46"
 }
