@@ -379,14 +379,15 @@ def _next_ym(y, m):
     return (y, m + 1) if m < 12 else (y + 1, 1)
 
 
+# 門檻數字為 11 分制(2026-06-13 對齊:預設 8;舊 10 分制的 6/7/8 約等於新制 7/8/9)
 PRESETS = {
     'default':  {},  # all defaults
-    'bull':     dict(pass_score=6, kd_lookback=10, kd_low_from=40, kd_high_cap_now=85),
-    'bear':     dict(pass_score=8, kd_lookback=3, kd_low_from=25, kd_high_cap_now=75, min_avg_vol_lots=500),
+    'bull':     dict(pass_score=7, kd_lookback=10, kd_low_from=40, kd_high_cap_now=85),
+    'bear':     dict(pass_score=9, kd_lookback=3, kd_low_from=25, kd_high_cap_now=75, min_avg_vol_lots=500),
     # 低檔發動(取代舊「KD 起漲」):找「KD 從更深超賣(<25)剛翻揚、且今日仍在低檔(<55,還沒漲上去)」的股。
-    # 門檻 6(原本 5 太鬆 → 選太多;光籌碼大戶↑+散戶↓+券就 3 分,隨便湊就過 5)。
+    # 門檻 7(11 分制;雙籌碼 4 分+KD 1 分+技術/法人湊 2 分即過,偏寬是刻意的——抄底組合本來就靠 KD 條件收斂)。
     # 流動性提高到 500 張,濾掉冷門股、再減量。偏「抄底/跌深翻揚」,與「追強勢」組合互補;務必先回測驗證 edge。
-    'low_launch': dict(pass_score=6, kd_lookback=5, kd_low_from=25, kd_high_cap_now=55, min_avg_vol_lots=500),
+    'low_launch': dict(pass_score=7, kd_lookback=5, kd_low_from=25, kd_high_cap_now=55, min_avg_vol_lots=500),
 }
 
 
