@@ -1,15 +1,107 @@
-"""資料健康度監控
+"""資料檢查共用模組:新鮮度(夠不夠新)+ 完整性(有沒有壞掉)
 
-針對 daily / institutional / chips parquet 跑一系列檢查,
-偵測 fetch_cache 過程可能發生的資料異常,在 TG header 與 UI 顯示警告。
+UI 與 Telegram 共用同一套判斷,避免兩邊顯示不一致
+(網頁紅燈但 TG 沒事、或 TG 警告但網頁說 OK)。
 
-檢查項目:
+一、新鮮度 cache_freshness():看「日期」— 資料是哪天的、距今幾天
+   (原 cache_status.py,2026-06-12 併入本檔)
+
+二、完整性 check_data_health():看「內容」— 偵測 fetch_cache 過程的資料異常:
 1. 今日總成交量 vs 20 日均量 → 低於 50% 視為異常(可能部分股票漏抓)
 2. 個股 close = 0 或 NaN → 抓取失敗
 3. 散戶持股率不在 [0, 100] → chips 資料壞掉
 4. 法人資料筆數驟降 → 三大法人 fetch 異常
 """
 import pandas as pd
+
+
+def cache_freshness(cache_date) -> dict:
+    """判斷 cache 新鮮度,回傳結構化結果。
+
+    Args:
+        cache_date: cache 最新一筆資料的日期(pd.Timestamp / datetime / None / NaT)
+
+    Returns:
+        dict with keys:
+        - level: "missing" | "ok" | "info" | "warn" | "error"
+        - msg:   給人看的中文訊息(一句話,詳細版 — 供 TG / 說明用)
+        - short: 精簡版(供 UI 頂部狀態欄,維持單行不擠)
+        - days:  距今天差幾天(int);若 cache_date 不合法則為 None
+
+    Level 對照:
+        missing — cache_date 為 None / NaT(找不到 cache 檔)
+        ok      — 當天資料或週末延遲 ≤ 2 天
+        info    — 1-3 天,可能是國定假日
+        warn    — 4-5 天,可能 fetch 排程出問題
+        error   — ≥ 6 天,需要立即處理
+    """
+    if cache_date is None or pd.isna(cache_date):
+        return {"level": "missing", "msg": "找不到 daily 快取,請先執行 fetch_cache.py",
+                "short": "找不到 daily 快取", "days": None}
+
+    now_tpe = pd.Timestamp.now(tz="Asia/Taipei").replace(tzinfo=None)
+    today_naive = now_tpe.normalize()
+
+    cache_dt = pd.Timestamp(cache_date)
+    if cache_dt.tz is not None:
+        cache_dt = cache_dt.tz_localize(None)
+    cache_dt = cache_dt.normalize()
+
+    age = (today_naive - cache_dt).days
+    date_str = cache_dt.strftime("%Y-%m-%d")
+    is_weekend = today_naive.weekday() >= 5  # 5=週六, 6=週日
+    now_hour = now_tpe.hour
+
+    # 當天資料
+    if age == 0:
+        if now_hour < 15:
+            return {
+                "level": "info",
+                "msg": f"目前資料為 {date_str}。今日盤後數據預計 15:30 自動更新。",
+                "short": f"資料 {date_str}・待盤後更新",
+                "days": 0,
+            }
+        return {
+            "level": "ok",
+            "msg": f"cache 最新日期: {date_str}(今日最新數據)",
+            "short": f"資料 {date_str}・今日最新",
+            "days": 0,
+        }
+
+    # 週末延遲(週五收盤後到週日,age 會是 1~2)
+    if is_weekend and age <= 2:
+        return {
+            "level": "ok",
+            "msg": f"cache 最新日期: {date_str}(週末未開盤,此已為最新交易日)",
+            "short": f"資料 {date_str}・最新交易日",
+            "days": age,
+        }
+
+    # 平日 1~3 天(可能是國定假日)
+    if age <= 3:
+        return {
+            "level": "info",
+            "msg": f"cache 最新日期: {date_str}({age} 天前,若遇國定假日未開盤即為最新資料)",
+            "short": f"資料 {date_str}・{age} 天前",
+            "days": age,
+        }
+
+    # 4-5 天(警告)
+    if age <= 5:
+        return {
+            "level": "warn",
+            "msg": f"cache 最新日期: {date_str}({age} 天前,可能 fetch_cache 排程失敗)",
+            "short": f"資料 {date_str}・{age} 天前,留意排程",
+            "days": age,
+        }
+
+    # ≥ 6 天(嚴重)
+    return {
+        "level": "error",
+        "msg": f"cache 最新日期: {date_str}({age} 天前)⚠ 過舊,請立即更新",
+        "short": f"資料 {date_str}・{age} 天前⚠ 過舊",
+        "days": age,
+    }
 
 
 def check_data_health(cache_dir) -> dict:

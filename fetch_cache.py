@@ -2,7 +2,7 @@ import os, sys, warnings, time, requests, io, random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# 固定用台北時區,避免雲端 (UTC) 跨日時檔名與 cache_status / telegram_notify (TPE) 不一致
+# 固定用台北時區,避免雲端 (UTC) 跨日時檔名與 data_health / telegram_notify (TPE) 不一致
 TPE_TZ = timezone(timedelta(hours=8))
 import pandas as pd
 import yfinance as yf

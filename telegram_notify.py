@@ -8,9 +8,8 @@ from screening0515 import run_screening, PASS_SCORE, HIGH_BREAK_DAYS, CACHE_DIR
 
 # 共用模組
 from ai_helper import call_openrouter_ai
-from cache_status import cache_freshness
+from data_health import cache_freshness, check_data_health, format_health_for_tg
 from picks_history import load_history, save_history, compute_streak, build_picks_from_df, get_sids, compute_hot_picks
-from data_health import check_data_health, format_health_for_tg
 from watchlist_alerts import check_watchlist, format_alerts_for_tg
 from performance import compute_performance, format_performance_summary, check_system_health
 from market_sentiment import compute_sentiment, format_sentiment_for_tg
@@ -178,7 +177,7 @@ def main():
         if score_note:
             header += f"❗ <b>{score_note}</b>\n"
 
-        # 快取新鮮度:共用 cache_status,只在 warn/error/missing 等級才示警
+        # 快取新鮮度:共用 data_health.cache_freshness,只在 warn/error/missing 等級才示警
         freshness = cache_freshness(cache_max_date)
         if freshness["level"] in ("warn", "error", "missing"):
             header += f"⚠️ <b>{freshness['msg']},僅供參考</b>\n"

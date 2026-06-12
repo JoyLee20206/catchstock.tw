@@ -37,7 +37,7 @@ from screening0515 import (
 
 # 共用模組(與 telegram_notify.py 共用同一份邏輯)
 from ai_helper import call_openrouter_ai, AI_MODELS, get_api_key
-from cache_status import cache_freshness
+from data_health import cache_freshness
 from picks_history import load_history, compute_hot_picks
 from data_health import check_data_health
 from industry_rotation import compute_industry_rotation
