@@ -318,12 +318,17 @@ def _market_summary_from_twii():
     today_close = float(closes.iloc[-1])
     prev_close  = float(closes.iloc[-2])
     ma60        = float(closes.tail(60).mean())
+    ma20        = float(closes.tail(20).mean())
+    # 與 screening0515 的盤整判斷同口徑:站上季線但「跌破月線」或「近 20 日下跌」
+    chg20       = (today_close / float(closes.iloc[-21]) - 1) * 100 if len(closes) > 20 else 0.0
+    bullish     = today_close >= ma60
     return {
         "close":    today_close,
         "ma60":     ma60,
         "pct":      (today_close - prev_close) / prev_close * 100,
         "bias":     (today_close - ma60) / ma60 * 100,
-        "bullish":  today_close >= ma60,
+        "bullish":  bullish,
+        "consolidating": bullish and (today_close < ma20 or chg20 < 0),
         "latest_date": closes.index[-1],   # 最新一筆指數的日期(供延遲偵測)
     }
 
@@ -406,8 +411,12 @@ with _status_cols[1]:
     if _mkt is None:
         st.markdown("**📈 大盤** N/A<br>_(yfinance 暫無資料)_", unsafe_allow_html=True)
     else:
-        _bull_icon = "📈" if _mkt["bullish"] else "📉"
-        _bull_txt  = "多頭" if _mkt["bullish"] else "空頭"
+        if not _mkt["bullish"]:
+            _bull_icon, _bull_txt = "📉", "空頭"
+        elif _mkt.get("consolidating"):
+            _bull_icon, _bull_txt = "🌀", "盤整修正"
+        else:
+            _bull_icon, _bull_txt = "📈", "多頭"
         _pct_color = "#dc2626" if _mkt["pct"] > 0 else ("#16a34a" if _mkt["pct"] < 0 else "#6b7280")
         # 延遲偵測(B):指數最新日期落後個股 cache 最新日 → 標示「資料延遲」,避免拿落後值誤判
         _stale_note = ""
@@ -795,13 +804,19 @@ def show_market_banner(meta: dict) -> None:
     if not meta.get('market_data_ok'):
         st.warning(f"🟡 大盤資料抓取失敗，本次無 RS 計分 | 過關門檻 {base} → **{eff}**")
         return
-    bullish      = meta.get('market_bullish', True)
+    bullish       = meta.get('market_bullish', True)
+    consolidating = meta.get('market_consolidating', False)
     twii_now_raw = meta.get('twii_now')
     twii_ma_raw  = meta.get('twii_ma')
     change_raw   = meta.get('twii_lookback_change')
     # Bug B 修正：用 pd.notna 同時擋 None 與 NaN
     change       = float(change_raw) if pd.notna(change_raw) else 0.0
-    state_txt    = "📈 多頭(站上季線)" if bullish else "📉 空頭(跌破季線)"
+    if not bullish:
+        state_txt = "📉 空頭(跌破季線)"
+    elif consolidating:
+        state_txt = "🌀 盤整修正(站上季線但跌破月線/近20日下跌)"
+    else:
+        state_txt = "📈 多頭(站上季線)"
     twii_now_s   = f"{twii_now_raw:,.0f}" if pd.notna(twii_now_raw) else "N/A"
     twii_ma_s    = f"{twii_ma_raw:,.0f}"  if pd.notna(twii_ma_raw)  else "N/A"
     if base is None or eff is None:
@@ -811,7 +826,9 @@ def show_market_banner(meta: dict) -> None:
     else:
         thr_txt = f"過關門檻 {base} → **{eff}**"
     msg = f"{state_txt}  |  {thr_txt}  |  加權指數 {twii_now_s} / MA60 {twii_ma_s} | 近 20 日 {change:+.2f}%"
-    if bullish:
+    if consolidating:
+        msg += "  |  ⚠️ RS 不計分,且需「大戶↑或散戶↓」至少其一才入選"
+    if bullish and not consolidating:
         st.success(msg)
     else:
         st.warning(msg)
@@ -3383,7 +3400,13 @@ with _tab_sent:
             _bull = meta.get('market_bullish', None)
             _twii_pct = meta.get('twii_pct')
             if _bull is not None:
-                _bg_market = f"\n- 大盤狀態: {'多頭(站上季線)' if _bull else '空頭(跌破季線)'}"
+                if not _bull:
+                    _state_desc = "空頭(跌破季線)"
+                elif meta.get('market_consolidating'):
+                    _state_desc = "盤整修正(站上季線但跌破月線/近20日下跌,RS 不計分、籌碼門票啟用)"
+                else:
+                    _state_desc = "多頭(站上季線)"
+                _bg_market = f"\n- 大盤狀態: {_state_desc}"
                 if pd.notna(_twii_pct):
                     _bg_market += f", 今日 {_twii_pct:+.2f}%"
 

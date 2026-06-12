@@ -83,6 +83,7 @@ KD_HIGH_CAP_NOW  = 80    # 今日 K 上限:超過此值代表已超買,即使曾
 # 大盤趨勢 + RS (動態 PASS_SCORE + 計分項)
 MARKET_INDEX_TICKER = "^TWII"  # 加權指數 (yfinance ticker)
 MARKET_MA_DAYS      = 60       # 大盤季線判斷 (大盤跌破則 PASS_SCORE 自動 +1)
+MARKET_MA_SHORT     = 20       # 大盤月線:站上季線但跌破月線 (或近 20 日下跌) → 視為「盤整/修正」
 RS_LOOKBACK         = 20       # 個股 vs 大盤的 N 日漲幅比較 (RS 計分用)
 
 # 預篩條件 (不計分,未達標直接剔除)
@@ -409,6 +410,7 @@ def run_screening(
     # 失敗時 fallback 為「跳過」(market_bullish=True、twii_lookback_change=0),不會中斷選股
     print(">>> 抓取大盤指數 (^TWII) 用於 RS 與趨勢過濾...")
     market_bullish        = True
+    market_consolidating  = False   # 站上季線但跌破月線/近 20 日下跌 → 盤整修正 (RS 關閉 + 籌碼硬門票)
     twii_lookback_change  = 0.0
     market_data_ok        = False
     twii_close            = None    # Bug #3 修正:提到 try 外讓個股 RS 迴圈能用,做日期對齊查表
@@ -477,9 +479,22 @@ def run_screening(
                     twii_lookback_change = float(
                         (twii_close.iloc[-1] / ref - 1) * 100
                     )
+            # 盤整/修正判斷:站上季線 (非空頭) 但「跌破月線」或「近 20 日大盤下跌」。
+            # 動機:5 月中~6 月初大盤全程站上季線,二分法把修正盤整當多頭跑,
+            # RS 持續計分 → 專挑漲多補跌股 (歸因 RS edge -4.59%)。盤整時 RS 比照空頭關閉。
+            twii_ma_short = float(twii_close.tail(MARKET_MA_SHORT).mean())
+            market_consolidating = market_bullish and (
+                twii_now < twii_ma_short or twii_lookback_change < 0
+            )
             market_data_ok = True
-            print(f"   大盤 {twii_now:.0f} / MA{MARKET_MA_DAYS} {twii_ma:.0f} → "
-                  f"{'多頭(站上季線)' if market_bullish else '空頭(跌破季線)'};"
+            if market_bullish and market_consolidating:
+                state_txt = "盤整修正(站上季線但跌破月線/近20日下跌)"
+            elif market_bullish:
+                state_txt = "多頭(站上季線)"
+            else:
+                state_txt = "空頭(跌破季線)"
+            print(f"   大盤 {twii_now:.0f} / MA{MARKET_MA_DAYS} {twii_ma:.0f} / "
+                  f"MA{MARKET_MA_SHORT} {twii_ma_short:.0f} → {state_txt};"
                   f"近 {RS_LOOKBACK} 日漲幅 {twii_lookback_change:+.2f}% (大盤最末日基準)")
         else:
             print("   [警告] ^TWII 資料不足,跳過大盤過濾與 RS 計分")
@@ -497,6 +512,11 @@ def run_screening(
     elif not market_bullish:
         effective_pass_score = effective_pass_score + 1
         print(f"   [空頭從嚴] 大盤破季線,門檻從 {PASS_SCORE} 提高至 {effective_pass_score}")
+    elif market_consolidating:
+        # 盤整不動門檻:RS 關閉本身已少 1 分可拿,再加籌碼硬門票 (大戶↑/散戶↓至少其一),
+        # 若門檻再 +1 等於三重緊縮,極易選不到股。
+        print(f"   [盤整慎選] 大盤站上季線但跌破月線/近20日下跌:RS 不計分、"
+              f"需「大戶↑或散戶↓」至少其一才入選;門檻維持 {effective_pass_score}")
     else:
         print(f"   [多頭] 大盤站上季線,門檻維持 {effective_pass_score}")
 
@@ -769,10 +789,11 @@ def run_screening(
                     twii_change  = (twii_end / twii_start - 1) * 100
                     rs_diff = stock_change - twii_change
                     rs_diff_map[sid] = round(rs_diff, 2)
-                    # RS 看大盤臉色:多頭(站上季線)才獎勵相對強勢;空頭時 RS 不計分。
-                    # 依據訊號歸因回測:做頭往下時「過去最強的股」反而摔最重(RS edge 為負),
-                    # 此時追強勢等於專挑會反轉的名字。多頭趨勢中強者恆強,RS 仍有效,故僅按 regime 開關。
-                    rs_sig[sid] = int(rs_diff > 0) if market_bullish else 0
+                    # RS 看大盤臉色:純多頭才獎勵相對強勢;空頭與「盤整修正」皆不計分。
+                    # 依據訊號歸因回測:做頭往下時「過去最強的股」反而摔最重(RS edge 為負);
+                    # 2026/5 中~6 月初的修正盤整期 (全程站上季線) RS edge 實測 -4.59%,
+                    # 證實「站上季線但月線下/近20日下跌」時追強勢同樣專挑會補跌的名字。
+                    rs_sig[sid] = int(rs_diff > 0) if (market_bullish and not market_consolidating) else 0
 
     # --- 訊號 9: 月營收 — 優先 YoY,YoY 不可行時降級 MoM ---
     # MoM 春節過濾:依據「MoM 序列的目標月份」逐股判斷,而非執行月。
@@ -872,6 +893,10 @@ def run_screening(
     print(f"    · vol+atr 皆觸發 (已計入上述)                : {len(both):>4} 檔")
     print(f"    · 合計剔除 (聯集)                            : {len(reject_set):>4} 檔")
     print(f">>> 計分與排序... (門檻 = {effective_pass_score} / 10)")
+    # 盤整期籌碼硬門票:依分數區間實證 (8分勝率53%/+0.71% vs 7分43%/-0.35%),
+    # 且大戶↑ edge +6.01%、散戶↓ +3.16% 為僅有的明顯正向訊號 → 盤整時升級為入場條件
+    chip_gate_on = market_data_ok and market_consolidating
+    chip_gate_rejected = 0
     results = []
     for sid in all_ids:
         if sid in reject_set:
@@ -919,6 +944,12 @@ def run_screening(
                  tech + kd + rv + rs)
 
         if score < effective_pass_score:
+            continue
+
+        # 盤整期硬門票:達分數門檻後,還需「大戶↑ 或 散戶↓」至少其一 (⭐中信心以上)。
+        # 只在盤整 regime 啟用;多頭/空頭維持原邏輯 (標籤不影響入選),保留對照組可持續回測。
+        if chip_gate_on and not (l == 1 or sd == 1):
+            chip_gate_rejected += 1
             continue
 
         results.append({
@@ -982,6 +1013,8 @@ def run_screening(
             print(f"   ⚠ 原 xlsx 被開啟中,改存為 {out}")
         print("=" * 60)
         print(f"✅ 篩選完成!共 {len(df)} 檔達標 (總分 >= {effective_pass_score} / 10)")
+        if chip_gate_on:
+            print(f"   · [盤整慎選] 籌碼硬門票剔除 (達分但無大戶↑/散戶↓): {chip_gate_rejected} 檔")
         chip_sync_count = (df["★籌碼共振(大戶↑散戶↓)"] == 1).sum()
         rs_count        = (df["RS優於大盤"] == 1).sum()
         dual_count      = (df["投信+外資雙買"] == 1).sum()
@@ -999,7 +1032,12 @@ def run_screening(
         print("=" * 60)
         file_paths = {'xlsx': out, 'dsl': dsl_out, 'xls': khsg_out}
     else:
-        print(f"❌ 無標的達 {effective_pass_score} 分,建議調低 PASS_SCORE 或放寬個別條件。")
+        if chip_gate_on and chip_gate_rejected > 0:
+            # 達分股全被籌碼門票刷掉 → 提示真正原因,別誤導使用者去調低門檻
+            print(f"❌ 有 {chip_gate_rejected} 檔達 {effective_pass_score} 分,但均無「大戶↑或散戶↓」訊號,"
+                  f"被盤整慎選門票剔除。盤整期寧缺勿濫,屬正常現象。")
+        else:
+            print(f"❌ 無標的達 {effective_pass_score} 分,建議調低 PASS_SCORE 或放寬個別條件。")
         df = pd.DataFrame()
         file_paths = {}
 
@@ -1020,13 +1058,24 @@ def run_screening(
     score_note = ""
     if market_data_ok and not market_bullish:
         score_note = f"⚠️ 大盤跌破季線，門檻已由 {pass_score} 提高至 {effective_pass_score}"
+    elif market_data_ok and market_consolidating:
+        score_note = "⚠️ 大盤盤整修正中：RS 不計分，且需「大戶↑或散戶↓」至少其一才入選"
     elif not market_data_ok:
         score_note = "⚠️ 大盤數據取得失敗，門檻自動調整"
+
+    if not market_bullish:
+        market_state, market_status = 'bear', "謹慎保守"
+    elif market_consolidating:
+        market_state, market_status = 'consolidation', "盤整慎選"
+    else:
+        market_state, market_status = 'bull', "偏多操作"
 
     meta = {
         'market_data_ok':        market_data_ok,
         'market_bullish':        market_bullish,
-        'market_status':         "偏多操作" if market_bullish else "謹慎保守",
+        'market_consolidating':  market_consolidating,
+        'market_state':          market_state,   # 'bull' / 'consolidation' / 'bear'
+        'market_status':         market_status,
         'twii_now':              twii_now,
         'twii_ma':               twii_ma,
         'twii_pct':              twii_pct,
