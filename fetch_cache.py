@@ -1138,8 +1138,8 @@ def _roc_date_to_iso(s):
 # 只放「實測確認存在」的兩個端點(其餘路徑實測為真 404 / 回 HTML,留著只會浪費重試)。
 # 注意:TWSE 邊際節點「限速」時也會回 404,故下方把 404 當「短暫」退讓重試,而非「端點不存在」。
 _TAIEX_ENDPOINTS = [
-    "https://www.twse.com.tw/exchangeReport/FMTQIK",        # 含「發行量加權股價指數」(收盤)
-    "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST",   # 含「收盤指數」+ OHLC
+    "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST",   # 「收盤指數」+ OHLC(優先:止跌判讀需要開高低)
+    "https://www.twse.com.tw/exchangeReport/FMTQIK",        # 「發行量加權股價指數」(僅收盤,備援)
 ]
 _TAIEX_OK_URL = {"url": None}
 
@@ -1267,15 +1267,27 @@ def fetch_twii_daily():
             prev = pd.DataFrame()
     _has_official = (not prev.empty and "source" in prev.columns
                      and (prev["source"] == "twse").any())
+    # 官方列是否帶 OHLC:舊版端點順位 FMTQIK(僅收盤)優先,抓出來的檔
+    # Open/High/Low 全 NaN;止跌判讀(bottom_signal)需要開高低,
+    # 偵測到缺就觸發一次性完整回補(現已改 MI_5MINS_HIST 優先)
+    _official_has_ohlc = False
+    if _has_official and all(c in prev.columns for c in ("Open", "High", "Low")):
+        _tw_rows = prev[prev["source"] == "twse"]
+        _official_has_ohlc = bool(_tw_rows[["Open", "High", "Low"]]
+                                  .notna().all(axis=1).any())
 
     # 要抓的月份(用每月任一日當參數,端點會回整月)
     _now = datetime.now(TPE_TZ)
-    if _has_official:
-        # 已官方回補過 → 只刷新當月 + 上月(捕捉最新與月初校正)
+    if _has_official and _official_has_ohlc:
+        # 已官方回補過且含 OHLC → 只刷新當月 + 上月(捕捉最新與月初校正)
         months = [_now, (_now.replace(day=1) - timedelta(days=1))]
     else:
-        # 首次切換 / 舊 yfinance 檔 → 完整回補約 2 年
-        print(f"   首次切換官方源:回補約 {TWII_BACKFILL_MONTHS} 個月(較久,之後每日僅刷新近月)...")
+        # 首次切換 / 舊 yfinance 檔 / 官方列缺 OHLC → 完整回補約 2 年
+        if _has_official:
+            print(f"   官方快取缺 OHLC(舊 FMTQIK 格式):一次性完整回補約 "
+                  f"{TWII_BACKFILL_MONTHS} 個月,補齊開高低...")
+        else:
+            print(f"   首次切換官方源:回補約 {TWII_BACKFILL_MONTHS} 個月(較久,之後每日僅刷新近月)...")
         months, cur = [], _now.replace(day=1)
         for _ in range(TWII_BACKFILL_MONTHS):
             months.append(cur)
@@ -1327,8 +1339,16 @@ def fetch_twii_daily():
     for part in merge_parts:
         part["date"] = pd.to_datetime(part["date"], errors="coerce").dt.strftime("%Y-%m-%d")
     combined = (pd.concat(merge_parts, ignore_index=True)
-                  .dropna(subset=["date", "Close"])
-                  .drop_duplicates(subset=["date"], keep="first")   # official 排前面 → 同日保官方
+                  .dropna(subset=["date", "Close"]))
+    # 同日去重優先序:有完整 OHLC 的列 > 僅收盤的列(FMTQIK 備援日不可把
+    # 已補齊的開高低蓋回 NaN);同層級維持 concat 順序(official 在前 → 保官方)
+    _ohlc_cols = [c for c in ("Open", "High", "Low") if c in combined.columns]
+    combined["_full_ohlc"] = (combined[_ohlc_cols].notna().all(axis=1)
+                              if _ohlc_cols else False)
+    combined = (combined
+                  .sort_values("_full_ohlc", ascending=False, kind="stable")
+                  .drop_duplicates(subset=["date"], keep="first")
+                  .drop(columns="_full_ohlc")
                   .sort_values("date").reset_index(drop=True))
     combined["date"] = pd.to_datetime(combined["date"])  # 與舊版一致(UI 會再 to_datetime)
     combined.to_parquet(path_for("twii"))
