@@ -1,12 +1,12 @@
 {
- "asof": "2026-06-12",
+ "asof": "2026-06-15",
  "items": [
   {
    "key": "gate",
    "group": "01 恐慌指數",
    "name": "跌破 40 ★閘門",
-   "ok": false,
-   "value": "今 41.9 / 昨 43.6",
+   "ok": true,
+   "value": "今 40.0 / 昨 41.9",
    "manual": false,
    "observe": false
   },
@@ -15,7 +15,7 @@
    "group": "01 恐慌指數",
    "name": "續降 38",
    "ok": false,
-   "value": "今 41.9",
+   "value": "今 40.0",
    "manual": false,
    "observe": false
   },
@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 24.1 / 5日均 19.7",
+   "value": "差 23.2 / 5日均 22.5",
    "manual": false,
    "observe": false
   },
@@ -33,7 +33,7 @@
    "group": "01 恐慌指數",
    "name": "爆衝後急殺",
    "ok": false,
-   "value": "日高 42.6 收 41.9(回落 1.7%)",
+   "value": "日高 40.7 收 40.0(回落 1.7%)",
    "manual": false,
    "observe": false
   },
@@ -42,7 +42,7 @@
    "group": "02 股價走勢",
    "name": "未破前低",
    "ok": true,
-   "value": "今低 43,588 / 前10日低 42,006",
+   "value": "今低 44,448 / 前10日低 42,006",
    "manual": false,
    "observe": false
   },
@@ -51,7 +51,7 @@
    "group": "02 股價走勢",
    "name": "低點墊高",
    "ok": null,
-   "value": "前轉折 03/31(距今 50 日)屬上一波段,不比較",
+   "value": "前轉折 03/31(距今 51 日)屬上一波段,不比較",
    "manual": false,
    "observe": false
   },
@@ -60,7 +60,7 @@
    "group": "02 股價走勢",
    "name": "強K守收盤",
    "ok": true,
-   "value": "收 44,169(紅K,下影 48%)",
+   "value": "收 45,397(紅K,下影 92%)",
    "manual": false,
    "observe": false
   },
@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 1.17 兆(0.84×均) +2.4%",
+   "value": "量 1.12 兆(0.81×均) +2.8%",
    "manual": false,
    "observe": false
   },
@@ -87,7 +87,7 @@
    "group": "03 成交量",
    "name": "量縮止穩",
    "ok": true,
-   "value": "量縮 +2.4%",
+   "value": "量縮 +2.8%",
    "manual": false,
    "observe": false
   },
@@ -96,7 +96,7 @@
    "group": "03 成交量",
    "name": "帶量上漲",
    "ok": false,
-   "value": "量縮 +2.4%",
+   "value": "量縮 +2.8%",
    "manual": false,
    "observe": false
   },
@@ -114,7 +114,7 @@
    "group": "04 信用與廣度",
    "name": "跌家比從極端回落",
    "ok": false,
-   "value": "跌家比 58% → 23%",
+   "value": "跌家比 23% → 30%",
    "manual": false,
    "observe": true
   },
@@ -123,7 +123,7 @@
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
    "ok": true,
-   "value": "價差 +19",
+   "value": "價差 +183",
    "manual": false,
    "observe": false
   },
@@ -141,7 +141,7 @@
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
    "ok": false,
-   "value": "淨額 -63,168 → -65,039 口",
+   "value": "淨額 -65,039 → -66,734 口",
    "manual": false,
    "observe": false
   },
@@ -150,7 +150,7 @@
    "group": "05 期貨與大戶",
    "name": "P/C比從極端回落",
    "ok": false,
-   "value": "133% → 168%",
+   "value": "168% → 172%",
    "manual": false,
    "observe": false
   },
@@ -159,7 +159,7 @@
    "group": "06 台積電",
    "name": "台積止穩不破低",
    "ok": true,
-   "value": "今低 2,290 / 前10日低 2,210",
+   "value": "今低 2,345 / 前10日低 2,210",
    "manual": false,
    "observe": false
   },
@@ -167,8 +167,8 @@
    "key": "tsmc_ma",
    "group": "06 台積電",
    "name": "台積翻紅站MA5",
-   "ok": false,
-   "value": "收 2,310 / MA5 2,279",
+   "ok": true,
+   "value": "收 2,375 / MA5 2,297",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": true,
-   "value": "99.9 → 99.8",
+   "value": "99.9 → 99.5",
    "manual": false,
    "observe": false
   },
@@ -194,8 +194,8 @@
    "key": "twd_stable",
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
-   "ok": true,
-   "value": "USDTWD 31.65 → 31.61",
+   "ok": false,
+   "value": "USDTWD 31.54 → 31.58",
    "manual": false,
    "observe": true
   },
@@ -229,11 +229,11 @@
  ],
  "alerts": [],
  "manual_flags": {},
- "vixtwn": 41.89,
- "fi_net_today": -65039,
- "level": 0,
- "level_label": "高度恐慌",
- "level_icon": "🔴",
- "n_ok": 8,
- "generated_at": "2026-06-12 21:04"
+ "vixtwn": 39.97,
+ "fi_net_today": -66734,
+ "level": 2,
+ "level_label": "在打底",
+ "level_icon": "🟠",
+ "n_ok": 10,
+ "generated_at": "2026-06-15 09:39"
 }
