@@ -743,6 +743,7 @@ def batch_daily_public(name, fn_twse, fn_tpex, start_date, end_date, desc):
     print(f"[{name}] {desc}: 需補抓 {len(dates_to_fetch)} 天（共 {len(dates_needed)} 天，已有 {len(existing_dates)} 天）...")
     all_dfs = [prev_df] if not prev_df.empty else []
     consecutive_empty = 0
+    fetched_days = 0   # 本次實際成功抓進的交易日數（不含沿用的舊快取）
 
     for i, d in enumerate(dates_to_fetch, 1):
         df_twse = fn_twse(d)
@@ -768,13 +769,18 @@ def batch_daily_public(name, fn_twse, fn_tpex, start_date, end_date, desc):
             
         # 都沒問題，才把資料塞進去
         all_dfs.extend([df for df in [df_twse, df_tpex] if not df.empty])
+        fetched_days += 1
         print(f"   [{i}/{len(dates_to_fetch)}] {d} ✓")
 
     if all_dfs:
         dedup_cols = ["date", "stock_id", "name"] if "name" in all_dfs[0].columns else ["date", "stock_id"]
         combined = pd.concat(all_dfs, ignore_index=True).drop_duplicates(subset=dedup_cols, keep="last")
         combined.to_parquet(path_for(name))
-        print(f"   -> {desc} 快取更新完成（總 {len(combined):,} 筆）")
+        if fetched_days:
+            print(f"   -> {desc} 快取更新完成（新增 {fetched_days} 天，總 {len(combined):,} 筆）")
+        else:
+            # 一筆新資料都沒抓到，只是把舊快取改存成今日檔名（避免明天重觸發），資料未變動
+            print(f"   -> {desc} 無新資料，沿用舊快取 {len(combined):,} 筆（僅更新檔名日期）")
         cleanup_old_cache(name)   # 新檔已包含全部歷史,舊檔安全刪除
     else:
         print(f"   !!! {desc} 無任何資料")
@@ -993,12 +999,14 @@ def fetch_tdcc_holders_latest():
     df_tdcc = df[["date", "stock_id", "HoldingSharesLevel", "percent"]].copy()
 
     prev_files = sorted(CACHE_DIR.glob("holders_*.parquet"))
+    prev_dates = set()   # 合併前舊快取已有的週期,用來判斷本次是否真有新週期
     if prev_files:
         try:
             df_prev = pd.read_parquet(prev_files[-1])
             # 保留期截斷:只留 CACHE_RETAIN_DAYS 內的週期 (TDCC 為週資料,90 天 ~12 週,
             # screening1 LARGE_HOLDER_WEEKS=4 已遠遠夠用)
             df_prev = _trim_by_retention(df_prev, label="holders")
+            prev_dates = set(df_prev["date"].dropna().unique())
             combined = pd.concat([df_prev, df_tdcc], ignore_index=True) \
                          .drop_duplicates(subset=["date", "stock_id", "HoldingSharesLevel"], keep="last")
         except Exception as e:
@@ -1009,7 +1017,12 @@ def fetch_tdcc_holders_latest():
 
     combined.to_parquet(path_for("holders"))
     uniq_dates = sorted(combined["date"].dropna().unique())
-    print(f"   -> 大戶比例快取建置完成 ({len(combined):,} 筆,{len(uniq_dates)} 期)")
+    new_dates = sorted(set(uniq_dates) - prev_dates)
+    if new_dates:
+        print(f"   -> 大戶比例快取建置完成 (新增 {len(new_dates)} 期,總 {len(combined):,} 筆,{len(uniq_dates)} 期)")
+    else:
+        # TDCC 回傳的週期已在舊快取中,沒有新週期,只是把舊資料改存成今日檔名,資料未變動
+        print(f"   -> 大戶比例無新週期,沿用舊快取 {len(combined):,} 筆,{len(uniq_dates)} 期(僅更新檔名日期)")
     cleanup_old_cache("holders")   # 新檔已包含全部歷史週期,舊檔安全刪除
 
 # ==========================================
@@ -1771,11 +1784,23 @@ if (not _skip_revenue) and need_fetch("revenue"):
     # --- (c) 合併去重 + 寫回 ---
     rev_frames = [df for df in (df_prev, df_latest) if not df.empty]
     if rev_frames:
+        # 合併前舊快取已有的月份,用來判斷本次是否真有新月份
+        prev_ym = (set(zip(df_prev['revenue_year'], df_prev['revenue_month']))
+                   if (not df_prev.empty and {'revenue_year', 'revenue_month'}.issubset(df_prev.columns))
+                   else set())
         combined = pd.concat(rev_frames, ignore_index=True) \
                      .drop_duplicates(subset=['stock_id', 'revenue_year', 'revenue_month'], keep='last')
         combined.to_parquet(path_for("revenue"))
         ym_set = sorted(set(zip(combined['revenue_year'], combined['revenue_month'])))
-        print(f"   -> 營收資料庫累積完成!總筆數: {len(combined):,},共 {len(ym_set)} 個月")
+        new_ym = sorted(set(ym_set) - prev_ym)
+        if df_latest.empty:
+            # OpenAPI 本次無回應,只是把舊快取改存成今日檔名,資料未變動
+            print(f"   -> 月營收: OpenAPI 本次無回應,沿用舊快取 {len(combined):,} 筆,共 {len(ym_set)} 個月(僅更新檔名日期)")
+        elif new_ym:
+            print(f"   -> 營收資料庫累積完成!新增 {len(new_ym)} 個月,總筆數: {len(combined):,},共 {len(ym_set)} 個月")
+        else:
+            # OpenAPI 有回應但都是既有月份(每月公告前每日重抓會發生),無新月份
+            print(f"   -> 月營收: 本次無新月份(OpenAPI 回傳均為既有資料),沿用舊快取 {len(combined):,} 筆,共 {len(ym_set)} 個月")
         if ym_set:
             print(f"      最新月份: {ym_set[-1][0]}-{ym_set[-1][1]:02d} / "
                   f"最舊月份: {ym_set[0][0]}-{ym_set[0][1]:02d}")
