@@ -12,7 +12,9 @@
 - 沒設 TELEGRAM_BOT_TOKEN 時轉為 dry-run(只印不發),方便本機測試
 """
 import sys
+import os
 import io
+import json
 import traceback
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -25,11 +27,55 @@ from market_sentiment import persist_fi_history
 from tg_common import send_telegram_message, get_credentials
 
 CACHE_DIR = Path(__file__).parent / "cache"
+STATE_FILE = CACHE_DIR / "bottom_push_state.json"
+
+# 「目標」分級門檻:level >= 此值視為已達標(2=在打底🟠, 3=止跌確認🟢)。
+# 達標後改為「只在分級變化時才推」,不再每日重推;未達標前(🔴/🟡)維持每日推播,
+# 才不會漏看打底前的變化。可調此常數改變門檻。
+TARGET_LEVEL = 2
 
 
 def _tw_now() -> datetime:
     """台灣時間(GHA 主機是 UTC)。"""
     return datetime.now(timezone(timedelta(hours=8)))
+
+
+def _load_last_pushed_level():
+    """讀『上次實際推播』的分級;讀不到回 None(視為與任何分級都不同 → 會推,寧可多推不漏推)。"""
+    try:
+        v = json.loads(STATE_FILE.read_text(encoding="utf-8")).get("last_pushed_level")
+        return int(v) if v is not None else None
+    except Exception:
+        return None
+
+
+def _save_last_pushed_level(level: int):
+    try:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text(json.dumps(
+            {"last_pushed_level": int(level),
+             "last_pushed_at": _tw_now().strftime("%Y-%m-%d %H:%M")},
+            ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"   ⚠ 推播狀態寫入失敗(不影響本次推播): {e}")
+
+
+def _decide_push(level: int, prev_level) -> tuple:
+    """是否要發 Telegram。回 (should_push, reason)。
+    - 環境變數 BOTTOM_PUSH_ALWAYS:強制推(測試或想恢復每日推時用)。
+    - 未達目標(level < TARGET_LEVEL):維持每日推播。
+    - 已達標(level >= TARGET_LEVEL):只在分級與上次推播不同才推
+      → 維持同級就安靜;升級或跌回(打底失敗)都會再推。
+    """
+    if os.environ.get("BOTTOM_PUSH_ALWAYS"):
+        return True, "BOTTOM_PUSH_ALWAYS 強制推播"
+    if level < TARGET_LEVEL:
+        return True, f"未達目標分級(Level {level} < {TARGET_LEVEL}),維持每日推播"
+    if prev_level is None:
+        return True, f"首次達標(Level {level})"
+    if level != prev_level:
+        return True, f"分級變化 Level {prev_level} → {level}"
+    return False, f"已達標且分級未變(維持 Level {level}),略過推播"
 
 
 def _pass_label() -> str:
@@ -73,7 +119,21 @@ def main() -> int:
     if result.get("fi_net_today") is not None:
         persist_fi_history(CACHE_DIR, result["fi_net_today"])
 
-    send_telegram(format_bottom_for_tg(result, pass_label=label))
+    # ── 推播收斂:資料/歷史/UI 上面都已照常更新,只有 Telegram 推播做達標後去重 ──
+    level = result["level"]
+    prev_level = _load_last_pushed_level()
+    should_push, reason = _decide_push(level, prev_level)
+    print(f"📊 推播判斷:{reason}")
+    if should_push:
+        text = format_bottom_for_tg(result, pass_label=label)
+        # 首次跨進「目標分級」時,訊息最前面加一行強調
+        if level >= TARGET_LEVEL and (prev_level is None or prev_level < TARGET_LEVEL):
+            text = (f"🎯 首次達到『{result['level_label']}』{result['level_icon']}"
+                    f"(已達目標分級)\n" + text)
+        send_telegram(text)
+        _save_last_pushed_level(level)
+    else:
+        print("🔕 本次不發 Telegram(已達標且分級未變;UI/歷史仍照常更新)")
 
     print(f"✅ 完成:{result['level_icon']} {result['level_label']}"
           f"(成立 {result['n_ok']}/{len(result['items'])})")
