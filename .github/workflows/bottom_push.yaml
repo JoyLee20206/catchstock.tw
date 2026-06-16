@@ -1,6 +1,15 @@
 # 止跌判讀每日推播
 # ⚠️ 此檔需放到 GitHub repo 的 .github/workflows/bottom_push.yaml 才會生效
 #   (與 daily_push.yaml 同一個資料夾)
+#
+# 📣 推播收斂規則(bottom_push.py 內,TARGET_LEVEL=2「在打底🟠」):
+#   - 未達目標分級(🔴高度恐慌 / 🟡剛降溫):維持每日推播,不漏看打底前的變化。
+#   - 已達標(🟠在打底 / 🟢止跌確認):只在「分級變化」時才推 —— 維持同一級就安靜不洗版;
+#     升級(→🟢)或跌回(打底失敗 →🟡/🔴)都會再推提醒。
+#   - 判斷依據「上次實際推播的分級」存在 cache/bottom_push_state.json,並 commit 回 repo
+#     (見下方 git add;CI 每次都是全新 checkout,沒存回去去重就會失效)。
+#   - 想強制推(忽略上述收斂):手動觸發時把 force_push 勾起來(等同設 BOTTOM_PUSH_ALWAYS=1)。
+#   - 程式本身爆掉的 🚨 告警不受收斂影響,一律推、絕不靜默。
 name: Bottom Signal Push
 
 on:
@@ -11,6 +20,11 @@ on:
     - cron: '10 8 * * 1-5'
     - cron: '30 13 * * 1-5'
   workflow_dispatch: # 允許在 GitHub 網頁上手動點擊測試
+    inputs:
+      force_push:
+        description: '強制推播(忽略「達標後分級未變不推」的收斂規則,本次一定發 Telegram)'
+        type: boolean
+        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -38,6 +52,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # 手動觸發且勾選 force_push → '1'(強制推);其餘(排程觸發)→ ''(空字串,照常收斂)
+          BOTTOM_PUSH_ALWAYS: ${{ github.event.inputs.force_push == 'true' && '1' || '' }}
         run: python -u bottom_push.py
 
       - name: 自動將快取存回 GitHub (網頁版歷史色帶自動更新)
@@ -45,6 +61,9 @@ jobs:
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add cache/bottom_signal_history.json cache/bottom_signal_latest.json cache/fi_futures_history.json
+          # 推播去重狀態:必須存回 repo,否則下次 CI 全新 checkout 讀不到上次分級 → 去重失效。
+          # 首次執行可能尚未生成,用 || true 讓缺檔不擋流程。
+          git add cache/bottom_push_state.json || true
           git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update bottom signal history"
           git pull --rebase origin main || true
           git push origin HEAD
