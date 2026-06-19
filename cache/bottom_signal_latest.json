@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "100.1 → 101.1",
+   "value": "100.1 → 100.8",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 31.56 → 31.68",
+   "value": "USDTWD 31.56 → 31.59",
    "manual": false,
    "observe": true
   },
@@ -237,5 +237,5 @@
  "level_label": "在打底",
  "level_icon": "🟠",
  "n_ok": 10,
- "generated_at": "2026-06-19 05:42"
+ "generated_at": "2026-06-19 12:17"
 }
