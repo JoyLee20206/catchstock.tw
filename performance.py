@@ -146,6 +146,28 @@ def _risk_metrics(returns_in_date_order: list, hold_days: int) -> dict:
     return {"mdd": mdd_pct, "sharpe": sharpe, "std": std}
 
 
+def _nonoverlap_mdd(series: list, hold_days: int) -> float:
+    """非重疊取樣的最大回檔(%)。
+
+    「每入選日平均報酬」是 hold_days 天的重疊窗口——天天選股時,相鄰入選日的
+    持有期高度重疊,直接連續複利會把同一段行情重複計入,把資金曲線回檔嚴重灌大
+    (例:一段實際只跌 10% 出頭的回檔,串出來的 MDD 可達 -35%~-40%)。
+
+    改成每隔 hold_days 取一筆(相鄰取樣點的持有期才不重疊,等同序列獨立交易),
+    再算複利 MDD。對所有 hold_days 種起始相位各算一次取平均,避免單一起點的偶然。
+    """
+    if hold_days <= 1 or len(series) < 2:
+        return _risk_metrics(series, hold_days)["mdd"]
+    mdds = []
+    for phase in range(min(hold_days, len(series))):
+        sub = series[phase::hold_days]
+        if len(sub) >= 2:
+            mdds.append(_risk_metrics(sub, hold_days)["mdd"])
+    if not mdds:
+        return _risk_metrics(series, hold_days)["mdd"]
+    return sum(mdds) / len(mdds)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 主要計算函式
 # ══════════════════════════════════════════════════════════════════════
@@ -225,7 +247,11 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
                         _by_date.setdefault(s["date"], []).append(r)
                 daily_avg = [sum(v) / len(v) for _, v in sorted(_by_date.items())]
                 _risk = _risk_metrics(daily_avg, n)
-                overall[f"mdd_{n}d"] = _risk["mdd"]
+                # MDD 改非重疊取樣,與 check_system_health 同口徑:收斂成每日一點仍是
+                # N 日重疊窗口(天天選股時相鄰日持有期重疊),直接複利會把同段下跌重複
+                # 計入、灌大回檔。_nonoverlap_mdd 每隔 N 取一筆再算,才是真實序列交易回檔。
+                # (sharpe/std 是離散度指標、不會像 MDD 那樣累乘放大,仍用原序列)
+                overall[f"mdd_{n}d"] = _nonoverlap_mdd(daily_avg, n)
                 overall[f"sharpe_{n}d"] = _risk["sharpe"]
                 overall[f"std_{n}d"] = _risk["std"]
                 overall[f"risk_n_{n}d"] = len(daily_avg)   # 風險指標的有效「天數」樣本
@@ -864,7 +890,7 @@ def check_system_health(history: list, cache_dir, hold_days: int = 5,
     all_net_exp    = sum(series) / n_all - TRADE_COST_PCT
     recent_net_exp = sum(recent) / n_recent - TRADE_COST_PCT
     recent_win     = sum(1 for r in recent if r > 0) / n_recent
-    mdd_recent     = _risk_metrics(recent, hold_days)["mdd"]   # 近期回檔(%)
+    mdd_recent     = _nonoverlap_mdd(recent, hold_days)   # 近期回檔(%,非重疊取樣,不灌水)
     base.update({"recent_net_exp": recent_net_exp, "all_net_exp": all_net_exp,
                  "recent_win_rate": recent_win, "mdd_recent": mdd_recent})
 

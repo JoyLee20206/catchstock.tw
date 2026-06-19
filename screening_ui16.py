@@ -2199,10 +2199,16 @@ with _tab_perf:
                             _pf_str = "∞"
                         else:
                             _pf_str = f"{_pf:.2f}"
+                        # 該分數有入選(n_picks>0)但無任何已到期 5 日報酬 → 入選日還沒滿
+                        # 5 個交易日,報酬未到期。顯示「進行中」而非冷冰冰的 0,避免誤會沒記到。
+                        # (常見於剛改制後新出現的等級,如 9 分頂級才剛開始選到)
+                        _pending = "win_rate_5d" not in s and s.get("n_picks", 0) > 0
                         rows.append({
                             "分級": _score_label(score),
-                            "樣本數": s.get("n_5d", 0),
-                            "勝率":   f"{s.get('win_rate_5d', 0)*100:.0f}%" if "win_rate_5d" in s else "—",
+                            # 整欄統一字串:未到期放提示字串、已到期放 str(n_5d)。
+                            # 不可混 str 與 int,否則 st.dataframe 的 pyarrow 序列化會 ArrowTypeError。
+                            "樣本數": f"⏳ {s['n_picks']} 筆未到期" if _pending else str(s.get("n_5d", 0)),
+                            "勝率":   f"{s.get('win_rate_5d', 0)*100:.0f}%" if "win_rate_5d" in s else ("待滿 5 日" if _pending else "—"),
                             "平均報酬": f"{s.get('avg_return_5d', 0):+.2f}%" if "avg_return_5d" in s else "—",
                             "敗局均虧": f"{s.get('avg_loss_5d', 0):+.2f}%" if "avg_loss_5d" in s else "—",
                             "損益比": _pf_str,
