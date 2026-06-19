@@ -3882,7 +3882,7 @@ with col_list:
         _bias_map = _load_bias_map(_daily_files[-1].stem if _daily_files else "none")
         if _bias_map and not filtered.empty:
             _codes = filtered['代號'].astype(str)
-            filtered['乖離MA20%'] = _codes.map(lambda c: _bias_map.get(c, {}).get('bias20'))
+            filtered['乖離月線%'] = _codes.map(lambda c: _bias_map.get(c, {}).get('bias20'))
             filtered['乖離季線%'] = _codes.map(lambda c: _bias_map.get(c, {}).get('bias60'))
             filtered['過熱'] = _codes.map(lambda c: '🟡' if _bias_map.get(c, {}).get('hot') else '')
             _n_hot = int((filtered['過熱'] == '🟡').sum())
@@ -3890,7 +3890,7 @@ with col_list:
                 if st.checkbox(
                     f"🚦 排除過熱標的(乖離高、追高風險)— 目前 {_n_hot}/{len(filtered)} 檔",
                     value=False, key="_excl_hot",
-                    help=f"乖離 MA20 > {BIAS_MA20_HOT:.0f}% 或 季線 > {BIAS_MA60_HOT:.0f}% 標 🟡;勾選後從清單與複製碼移除",
+                    help=f"乖離月線 > {BIAS_MA20_HOT:.0f}% 或 季線 > {BIAS_MA60_HOT:.0f}% 標 🟡;勾選後從清單與複製碼移除",
                 ):
                     filtered = filtered[filtered['過熱'] != '🟡']
 
@@ -3922,7 +3922,7 @@ with col_list:
                         "名稱":      ui_name_map.get(sid, ""),
                         "最新價":    round(_close_map.get(sid), 2) if _close_map.get(sid) is not None else None,
                         "產業":      _ind_map.get(sid, ""),
-                        "乖離MA20%": _bias_for_radar.get(sid, {}).get('bias20'),
+                        "乖離月線%": _bias_for_radar.get(sid, {}).get('bias20'),
                         "乖離季線%": _bias_for_radar.get(sid, {}).get('bias60'),
                     })
                 filtered = pd.DataFrame(_rows)
@@ -4016,12 +4016,12 @@ with col_chart:
                         _rs = []
                         if _k_hot:           _rs.append(f"KD {_k_last:.0f} 過熱")
                         if _gain5 > 10:      _rs.append(f"5 日漲 {_gain5:+.0f}%")
-                        if _bias20 > BIAS20_HOT:                    _rs.append(f"乖離MA20 {_bias20:+.0f}%")
+                        if _bias20 > BIAS20_HOT:                    _rs.append(f"乖離月線 {_bias20:+.0f}%")
                         if _bias60 is not None and _bias60 > BIAS60_HOT: _rs.append(f"乖離季線 {_bias60:+.0f}%")
                         _verdict_reason = "追高風險:" + "、".join(_rs)
                     elif (_k_last is None or _k_last < 70) and _gain5 < 8 and _latest > _ma20 and _above_ma60:
                         _verdict_quick = "可進場"
-                        _verdict_reason = f"乖離MA20 {_bias20:+.0f}%" + (f"、季線 {_bias60:+.0f}%" if _bias60 is not None else "")
+                        _verdict_reason = f"乖離月線 {_bias20:+.0f}%" + (f"、季線 {_bias60:+.0f}%" if _bias60 is not None else "")
                     else:
                         _verdict_quick = "觀察"
             except Exception:
