@@ -5,8 +5,8 @@
    "key": "gate",
    "group": "01 恐慌指數",
    "name": "跌破 40 ★閘門",
-   "ok": false,
-   "value": "今 37.9 / 昨 37.3",
+   "ok": true,
+   "value": "今 37.9 / 近5高 43.6",
    "manual": false,
    "observe": false
   },
@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 20.8 / 5日均 22.7(美VIX升所致,不算)",
+   "value": "差 21.5 / 5日均 22.7(美VIX升所致,不算)",
    "manual": false,
    "observe": false
   },
@@ -32,8 +32,8 @@
    "key": "vix_spike",
    "group": "01 恐慌指數",
    "name": "爆衝後急殺",
-   "ok": false,
-   "value": "日高 40.3 收 37.9(回落 6.0%)",
+   "ok": null,
+   "value": "資料缺",
    "manual": false,
    "observe": false
   },
@@ -141,7 +141,7 @@
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
    "ok": false,
-   "value": "淨額 -67,394 → -68,337 口",
+   "value": "淨額 -68,337 → -68,337 口",
    "manual": false,
    "observe": false
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": false,
-   "value": "4.46% → 4.44%",
+   "value": "4.54% → 4.49%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "99.5 → 100.8",
+   "value": "100.1 → 101.1",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 31.52 → 31.57",
+   "value": "USDTWD 31.56 → 31.68",
    "manual": false,
    "observe": true
   },
@@ -233,9 +233,9 @@
  "manual_flags": {},
  "vixtwn": 37.86,
  "fi_net_today": -68337,
- "level": 0,
- "level_label": "高度恐慌",
- "level_icon": "🔴",
- "n_ok": 9,
- "generated_at": "2026-06-18 16:45"
+ "level": 2,
+ "level_label": "在打底",
+ "level_icon": "🟠",
+ "n_ok": 10,
+ "generated_at": "2026-06-19 05:42"
 }
