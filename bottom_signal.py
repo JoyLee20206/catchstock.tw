@@ -41,7 +41,9 @@ import requests
 # 可調參數(回測後再校準)
 # ══════════════════════════════════════════════════════════════════════
 CFG = {
-    "gate_level":        40.0,   # 01 閘門
+    "gate_level":        40.0,   # 01 閘門:跌破才「開」(關→開門檻)
+    "gate_exit_level":   42.0,   # 01 閘門遲滯:已開後需彈回此值以上才「關」
+                                 #    (開→關門檻較高,避免在 40 邊緣單日小彈忽開忽關)
     "fall_level":        38.0,   # 02 續降(嚴格版可改 35)
     "fall_lookback":     3,      # 02 過去 N 日未站回 40
     "spread_avg_days":   5,      # 03 與美 VIX 差距 vs 近 N 日均
@@ -818,18 +820,29 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
 
     items = []
 
-    # ── 01 恐慌指數(閘門) ────────────────────────────────────
+    # ── 01 恐慌指數(閘門,遲滯) ────────────────────────────────
+    #   關→開:跌破 40 且低於近5日高點(確認從恐慌高點回落)
+    #   開→關:已開後需彈回 gate_exit_level(42)以上才關
+    #   兩端不同門檻,避免在 40 邊緣單日小彈就把分級打回最恐慌。
     g = "01 恐慌指數"
+    gate_open_prev = last_gate_state(cache_dir) is True
     if vix_tw is not None and len(vix_tw) >= 2:
-        v, prev = float(vix_tw.iloc[-1]), float(vix_tw.iloc[-2])
-        recent5_max = float(vix_tw.tail(6).iloc[:-1].max()) if len(vix_tw) >= 6 else prev
-        ok = (v < c["gate_level"]) and (v < prev) and (v < recent5_max)
-        items.append(_item("gate", g, f"跌破 {c['gate_level']:.0f} ★閘門", ok,
-                           f"今 {v:.1f} / 昨 {prev:.1f}"))
+        v = float(vix_tw.iloc[-1])
+        # 不含今日的近期高點(資料少時自然退化成現有前幾筆最高,
+        # 不會變回「今<昨」單日比較,以免又被單日小彈卡住)
+        recent5_max = float(vix_tw.tail(6).iloc[:-1].max())
+        if gate_open_prev:
+            ok = v < c["gate_exit_level"]
+            note = f"今 {v:.1f}(已開,守住 {c['gate_exit_level']:.0f} 以下)"
+        else:
+            ok = (v < c["gate_level"]) and (v < recent5_max)
+            note = f"今 {v:.1f} / 近5高 {recent5_max:.1f}"
+        items.append(_item("gate", g, f"跌破 {c['gate_level']:.0f} ★閘門", ok, note))
     elif vix_tw is not None and len(vix_tw) == 1:
         v = float(vix_tw.iloc[-1])
+        thr = c["gate_exit_level"] if gate_open_prev else c["gate_level"]
         items.append(_item("gate", g, f"跌破 {c['gate_level']:.0f} ★閘門",
-                           v < c["gate_level"], f"今 {v:.1f}(無昨日值,僅比 40)"))
+                           v < thr, f"今 {v:.1f}(無昨日值,僅比 {thr:.0f})"))
     else:
         items.append(_item("gate", g, f"跌破 {c['gate_level']:.0f} ★閘門", None, "資料缺"))
 
@@ -1236,6 +1249,20 @@ def load_bottom_history(cache_dir) -> list:
         return []
 
 
+def last_gate_state(cache_dir) -> "bool | None":
+    """讀歷史最後一筆(非今日)的閘門 ok,供遲滯判斷用。
+
+    回 True=昨天已開 / False=昨天未開 / None=無紀錄(首次或資料缺,
+    視同未開,套用較嚴格的「開」門檻)。
+    """
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    hist = [h for h in load_bottom_history(cache_dir) if h.get("date") != today_str]
+    if not hist:
+        return None
+    last = sorted(hist, key=lambda h: h["date"])[-1]
+    return last.get("items", {}).get("gate")
+
+
 def persist_bottom_history(cache_dir, result: dict):
     """每日一筆:日期 / 分級 / 成立數 / 各項 ok。同日重跑覆蓋。"""
     if cache_dir is None or result is None:
@@ -1286,7 +1313,7 @@ def format_bottom_for_tg(result: dict, pass_label: str = "") -> str:
     if gate["ok"] is True:
         lines.append(f"🔑 閘門:VIXTWN {vix_txt} ✅ 已開")
     elif gate["ok"] is False:
-        lines.append(f"🔑 閘門:VIXTWN {vix_txt} ❌ 未開(需跌破 40)")
+        lines.append(f"🔑 閘門:VIXTWN {vix_txt} ❌ 未開(需跌破 40 並脫離高點)")
         lines.append("　└ 閘門未開,分級壓在最恐慌")
     else:
         lines.append(f"🔑 閘門:VIXTWN {vix_txt} ❓ 無法判定")
