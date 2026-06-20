@@ -137,18 +137,20 @@ def _fallback_prev_to_today(name):
         print(f"   [墊檔失敗] {name}: {e}")
         return False
 
-def _should_skip_weekly(name, weekday=5, min_days=6, catch_up_days=7):
+def _should_skip_weekly(name, weekday=5, catch_up_days=7):
     """週更類快取的閘門(適用變動很少的資料:個股期貨清單、台指期保證金)。
 
-    更新時機鎖定「**每逢週六、且距上次抓 ≥ min_days 天**」;另加過期補抓安全網。
-    註:排程(GHA)只在週一~五跑,「週六」分支實際上不會觸發,真正的更新機制是
-    過期補抓——catch_up_days=7 讓檔齡滿一週就在平日排程補抓,維持「每週更新」的頻率
-    (原 9 天會讓實際頻率變成每 9~10 天)。
+    更新時機:**每逢週六就抓**;另加過期補抓安全網(平日漏抓時補)。
+    註:排程(GHA)只在週一~五跑,週六要靠「手動執行 fetch_cache.py」觸發;
+    平日則靠 catch_up_days=7 的過期補抓維持頻率。
+    ⚠ 同日重抓由上游 need_fetch()(看當天檔在不在)負責擋,這裡**不需要再用檔齡卡**。
+    (舊版要求週六 age ≥ 6 才抓,但 7 天補抓會讓檔案每週五就刷新→週六檔齡永遠=1→
+     週六永遠被卡掉。已移除該檔齡條件。)
     規則(回 True=略過、False=要抓),依序判斷:
       - 沒有任何舊檔 → 抓(初次建檔,不等週六)
       - 檔齡 ≥ catch_up_days(預設 7 天)→ **任一天都補抓**(漏了週六、資料太舊的安全網,連 FORCE 也補)
       - FORCE 且檔還不算太舊 → 略過(force 不為這類變動少的資料多打 TAIFEX)
-      - 今天是週六 且 檔齡 ≥ min_days → 抓(正常每週更新)
+      - 今天是週六 → 抓(正常每週更新;同日重抓已由 need_fetch 擋掉)
       - 其餘(非週六 / 太近)→ 略過
     weekday: 0=Mon … 5=Sat … 6=Sun(datetime.weekday())。
     """
@@ -165,9 +167,9 @@ def _should_skip_weekly(name, weekday=5, min_days=6, catch_up_days=7):
         return False     # 過期補抓:太舊就任一天補抓(漏週六的安全網)
     if FORCE:
         return True      # FORCE 且還不算太舊 → 略過
-    if datetime.now(TPE_TZ).weekday() == weekday and age >= min_days:
-        return False     # 正常:週六且夠久 → 抓
-    return True          # 非週六 / 太近 → 略過
+    if datetime.now(TPE_TZ).weekday() == weekday:
+        return False     # 週六 → 抓(同日重抓已由 need_fetch 擋掉,不再卡檔齡)
+    return True          # 非週六 → 略過
 
 def _trim_by_retention(df, label=""):
     """依 CACHE_RETAIN_DAYS 截斷 DataFrame,只保留 cutoff 日期之後的 row。
