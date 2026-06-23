@@ -309,7 +309,7 @@
       "vol_spike_down": false,
       "vol_shrink": false,
       "vol_up": false,
-      "margin_calm": true,
+      "margin_calm": false,
       "breadth_falloff": false,
       "fut_basis": true,
       "f_spot": false,
