@@ -101,6 +101,9 @@ RS_LOOKBACK         = 20       # 個股 vs 大盤的 N 日漲幅比較 (RS 計�
 # 預篩條件 (不計分,未達標直接剔除)
 MIN_AVG_VOL_LOTS = 400     # 近 20 日均量下限 (張),過濾流動性不足
 ATR_MAX_PCT      = 12.0     # ATR(14) / 現價 上限(%),過濾波動過大的飆股
+CHASE_ABOVE_MA20_MAX_PCT = 20.0  # 不追高:現價高出月線(MA20)超過此 % 視為過熱/追高,直接剔除。
+                                 # 依據:技術面三合一(追突破/均線多頭上方)歸因 edge 為負,
+                                 # 過度延伸的進場勝率低。設很大值(如 999)即停用此過濾。
 
 # 恐慌警示 (接止跌判讀 bottom_signal 的排程結果;只警示、不擋選股)
 # 歸因實證:崩盤期入選股後 5 日平均 -6.89%。原設計為「恐慌煞車」直接停止推薦,
@@ -684,6 +687,7 @@ def run_screening(
     ma_sig, breakout_sig, vol_sig = {}, {}, {}
     tech_sig = {}
     kd_sig   = {}
+    _kd_diag = {"eval": 0, "state_ok": 0, "cross_found": 0, "cross_low": 0}  # KD 漏斗診斷:逐關卡計數
     kd_cross_k_map  = {}   # 觸發低檔金叉時的 K 值 (供報表診斷)
     kd_cross_ago_map = {}  # 距今幾個交易日前發生金叉
     rs_sig   = {}
@@ -694,6 +698,7 @@ def run_screening(
     atr_pct_map = {}
     reject_vol  = set()
     reject_atr  = set()
+    reject_chase = set()   # 不追高:現價過度高出 MA20
 
     if not daily_df.empty:
         daily_df = daily_df.sort_values(['stock_id', 'date'])
@@ -751,6 +756,9 @@ def run_screening(
             # 拆出來才不會讓「資料不足 60 天」的新股拿不到 MA20 → 主迴圈趨勢過濾被誤判為 0
             if len(closes) >= 20:
                 ma20_map[sid] = float(closes.tail(20).mean())
+                # 不追高過濾:現價已大幅高出月線 → 過熱,剔除 (對應技術面三合一追高負 edge)
+                if ma20_map[sid] > 0 and price_now > ma20_map[sid] * (1 + CHASE_ABOVE_MA20_MAX_PCT / 100):
+                    reject_chase.add(sid)
 
             # 均線多頭 (MA5 > MA20 > MA60 AND 現價 > MA20) — 需要 60 天
             if len(closes) >= 60:
@@ -792,10 +800,12 @@ def run_screening(
             if highs is not None and lows is not None and len(closes) >= KD_N + 1:
                 k_list, d_list = _calc_kd_series(highs, lows, closes, n=KD_N)
                 if k_list is not None and k_list[-1] is not None and k_list[-2] is not None:
+                    _kd_diag["eval"] += 1
                     k_today = k_list[-1]
                     d_today = d_list[-1]
                     # 條件 3 + 4 先檢查 (今日狀態)
                     if k_today > d_today and k_today < KD_HIGH_CAP_NOW:
+                        _kd_diag["state_ok"] += 1
                         # 掃描範圍:昨日 (距今 1 天) 到 KD_LOOKBACK 天前 (距今 N 天),今日不算
                         # i 為「金叉發生日」的 index,需要 i-1 才能比較,故 i-1 須有 K/D 值
                         # k_list 前 KD_N-1 個是 None,所以 i-1 >= KD_N-1 → i >= KD_N
@@ -810,8 +820,10 @@ def run_screening(
                             crossed_today = k_list[i-1] <= d_list[i-1] and k_list[i] > d_list[i]
 
                             if crossed_today:
+                                _kd_diag["cross_found"] += 1
                                 # 找到了「最近一次」發動的金叉，立刻判定是不是低檔
                                 if k_list[i] < KD_LOW_FROM:
+                                    _kd_diag["cross_low"] += 1
                                     kd_sig[sid] = 1
                                     kd_cross_k_map[sid] = round(k_list[i], 1)
                                     kd_cross_ago_map[sid] = last_idx - i
@@ -933,15 +945,35 @@ def run_screening(
     # 沒有價量,所有技術面/KD/RS 訊號都無從計算,只剩法人/籌碼/營收 → 仍可能累積到過關門檻
     # 為避免「無基本面驗證」的股魚目混珠,直接剔除
     reject_no_daily = set(all_ids) - set(price_map.keys())
-    reject_set = reject_vol | reject_atr | reject_no_daily
+    reject_set = reject_vol | reject_atr | reject_no_daily | reject_chase
     both       = reject_vol & reject_atr
     print(">>> 預篩結果:")
     print(f"    · 流動性不足 (20日均量 < {MIN_AVG_VOL_LOTS} 張): {len(reject_vol):>4} 檔")
     print(f"    · 波動過大  (ATR% > {ATR_MAX_PCT}%)          : {len(reject_atr):>4} 檔")
+    print(f"    · 追高過熱  (現價高於 MA20 {CHASE_ABOVE_MA20_MAX_PCT:.0f}% 以上)   : {len(reject_chase):>4} 檔")
     print(f"    · 無 daily K 資料                           : {len(reject_no_daily):>4} 檔")
     print(f"    · vol+atr 皆觸發 (已計入上述)                : {len(both):>4} 檔")
     print(f"    · 合計剔除 (聯集)                            : {len(reject_set):>4} 檔")
     print(f">>> 計分與排序... (門檻 = {effective_pass_score} / 10)")
+
+    # ── 訊號觸發診斷:定位「死條件」(KD / 月營收 長期 0 觸發) 卡在哪一關 ──
+    print(">>> 訊號觸發統計 (計分前,全市場):")
+    print(f"    · 大戶上升 {sum(large_sig.values())} / 散戶下降 {sum(small_decrease_sig.values())} "
+          f"/ 券相關(觀察) {sum(margin_raw_sig.values())}")
+    print(f"    · 技術三合一(觀察) {sum(tech_sig.values())} / KD低檔金叉 {sum(kd_sig.values())} "
+          f"/ 月營收 {sum(rev_sig.values())}")
+    # KD 漏斗:每一關還剩幾檔,一眼看出是「資料不足」還是「門檻太嚴(K<{KD_LOW_FROM})」
+    print(f"    · KD 漏斗: 可計算 {_kd_diag['eval']} → 今日仍金叉狀態 {_kd_diag['state_ok']} "
+          f"→ 近{KD_LOOKBACK}日有發動金叉 {_kd_diag['cross_found']} "
+          f"→ 其中屬低檔(K<{KD_LOW_FROM}) {_kd_diag['cross_low']}")
+    # 月營收模式分佈:卡在 資料不足/春節跳過/月份不連續/未達 哪一關
+    _rev_reasons = {}
+    for _v in rev_mode_map.values():
+        _rev_reasons[_v] = _rev_reasons.get(_v, 0) + 1
+    if _rev_reasons:
+        print("    · 月營收模式分佈: " + ", ".join(f"{k}={v}" for k, v in sorted(_rev_reasons.items())))
+    else:
+        print("    · 月營收模式分佈: (空 — revenue 快取可能無資料/月數不足/欄位缺漏)")
     # 盤整期籌碼硬門票:依分數區間實證 (8分勝率53%/+0.71% vs 7分43%/-0.35%),
     # 且大戶↑ edge +6.01%、散戶↓ +3.16% 為僅有的明顯正向訊號 → 盤整時升級為入場條件
     chip_gate_on = market_data_ok and market_consolidating
