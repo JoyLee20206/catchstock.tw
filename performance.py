@@ -539,13 +539,24 @@ def backtest_exit_rules(history: list, cache_dir, max_hold: int = 10) -> dict:
                 return r, d
         return path[-1], len(path)
 
+    def _stop_tp(path, stop_pct, tp_pct):  # 停損 -stop_pct% 或停利 +tp_pct%,先到者出場,否則持滿
+        for d, r in enumerate(path, start=1):
+            if r <= -stop_pct:             # 同日以收盤判定,停損優先(保守)
+                return r, d
+            if r >= tp_pct:
+                return r, d
+        return path[-1], len(path)
+
     _STRATS = [
         (f"固定持有 {min(5, max_hold)} 日",  lambda p: _fixed(p, 5)),
         (f"固定持有 {max_hold} 日",          lambda p: _fixed(p, max_hold)),
         ("停損 -5%(否則持滿)",              lambda p: _stop(p, 5)),
         ("停損 -8%(否則持滿)",              lambda p: _stop(p, 8)),
         ("移動停損 8%(高點回落)",           lambda p: _trailing(p, 8)),
+        ("移動停損 5%(高點回落)",           lambda p: _trailing(p, 5)),
         ("停利 +10%(否則持滿)",             lambda p: _take_profit(p, 10)),
+        ("停損-5% + 停利+10%",              lambda p: _stop_tp(p, 5, 10)),
+        ("停損-8% + 停利+15%",              lambda p: _stop_tp(p, 8, 15)),
     ]
 
     strategies = []
@@ -560,11 +571,18 @@ def backtest_exit_rules(history: list, cache_dir, max_hold: int = 10) -> dict:
         avg = sum(rets) / n
         net_exp = avg - TRADE_COST_PCT
         avg_days = sum(days) / n
+        # 損益比 = 平均獲利 / |平均虧損|(對「提高損益比」最直接的對照指標)
+        pos = [r for r in rets if r > 0]
+        neg = [r for r in rets if r < 0]
+        avg_win  = sum(pos) / len(pos) if pos else 0.0
+        avg_loss = sum(neg) / len(neg) if neg else 0.0   # 負數,即「敗局均虧」
+        pl_ratio = (avg_win / abs(avg_loss)) if neg else float("inf")
         strategies.append({
             "name": name, "win_rate": wins / n, "avg": avg,
             "net_exp": net_exp, "avg_days": avg_days,
             "worst": min(rets),
             "daily": net_exp / avg_days if avg_days > 0 else 0.0,
+            "avg_win": avg_win, "avg_loss": avg_loss, "pl_ratio": pl_ratio,
         })
 
     return {"max_hold": max_hold, "n": len(paths), "strategies": strategies}

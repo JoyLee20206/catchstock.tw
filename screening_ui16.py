@@ -2275,21 +2275,29 @@ with _tab_perf:
                     )
                     _best_net = max((s["net_exp"] for s in _ex["strategies"]), default=None)
                     _best_daily = max((s["daily"] for s in _ex["strategies"]), default=None)
+                    # 損益比比較時排除 inf(該策略零虧損,通常樣本太少不具代表性)
+                    _best_pl = max((s["pl_ratio"] for s in _ex["strategies"]
+                                    if s.get("pl_ratio") not in (None, float("inf"))), default=None)
                     _ex_rows = []
                     for _s in _ex["strategies"]:
                         _flag_net   = " 🏆" if _s["net_exp"] == _best_net else ""
                         _flag_daily = " ⚡" if _s["daily"] == _best_daily else ""
+                        _pl = _s.get("pl_ratio")
+                        _flag_pl = " 🎯" if (_best_pl is not None and _pl == _best_pl) else ""
+                        _pl_str = "∞" if _pl == float("inf") else f"{_pl:.2f}"
                         _ex_rows.append({
                             "出場策略": _s["name"],
                             "勝率": f"{_s['win_rate']*100:.0f}%",
                             "平均報酬": f"{_s['avg']:+.2f}%",
                             "淨期望值": f"{_s['net_exp']:+.2f}%{_flag_net}",
+                            "損益比": f"{_pl_str}{_flag_pl}",
+                            "敗局均虧": f"{_s.get('avg_loss', 0):+.2f}%",
                             "平均持有": f"{_s['avg_days']:.1f} 日",
                             "最差單筆": f"{_s['worst']:+.2f}%",
                             "日均報酬": f"{_s['daily']:+.3f}%{_flag_daily}",
                         })
                     st.dataframe(pd.DataFrame(_ex_rows), use_container_width=True, hide_index=True)
-                    st.caption("🏆 = 淨期望值最高(單筆賺最多)　⚡ = 日均報酬最高(效率最高)")
+                    st.caption("🏆 = 淨期望值最高(單筆賺最多)　⚡ = 日均報酬最高(效率最高)　🎯 = 損益比最高(賺賠比最佳)")
                     if _ex["n"] < 30:
                         st.caption(
                             f"📊 樣本 {_ex['n']} 筆——且停損的價值要到空頭才會凸顯,累積跨多空後再採用。"
