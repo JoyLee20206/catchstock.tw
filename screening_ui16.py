@@ -44,7 +44,7 @@ from industry_rotation import compute_industry_rotation
 from performance import (
     compute_performance, compute_equity_curve, backtest_market_filter,
     attribute_signals, backtest_exit_rules, compute_per_stock_performance,
-    check_system_health,
+    check_system_health, compare_chip_resonance,
 )
 from backtest import run_backtest, SIGNAL_LABELS, build_signal_matrices
 from market_sentiment import (
@@ -926,6 +926,12 @@ def _load_market_filter_cached(hold_days=5):
 def _load_signal_attribution_cached(hold_days=5):
     """訊號歸因(10 個計分細項各自對後續報酬的貢獻),快取 10 分鐘。"""
     return attribute_signals(load_history(), CACHE_DIR, hold_days=hold_days)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_chip_resonance_cached(hold_days=5):
+    """共振 vs 非共振 前進報酬比較(B 方案決策依據),快取 10 分鐘。"""
+    return compare_chip_resonance(load_history(), CACHE_DIR, hold_days=hold_days)
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -2259,6 +2265,44 @@ with _tab_perf:
                             f"📊 樣本 {_attr['n_eval']} 筆,且訊號彼此相關(多數 pick 同時觸發多個)——"
                             f"edge 僅供方向參考,別據此改權重。"
                         )
+
+                # ── 🔥 共振 vs 非共振(B 方案:共振該不該升級為計分/最高分層?) ──
+                st.divider()
+                st.markdown("**🔥 籌碼共振 vs 非共振(共振該不該升級為計分 / 最高分層?)**")
+                _cr = _load_chip_resonance_cached(hold_days=5)
+                if _cr.get("error"):
+                    st.info(f"📊 {_cr['error']}")
+                elif _cr.get("n_eval", 0) == 0:
+                    st.info(
+                        "⏳ **共振對照累積中**:尚無含訊號細項且滿 5 交易日的樣本。"
+                        "等每日推播逐筆記錄、pick 養老後這裡會自動跑出『共振 vs 其一 vs 一般』的報酬對照。"
+                    )
+                else:
+                    st.caption(
+                        "把入選股依籌碼狀態分三組,比較後續 5 日報酬。"
+                        "若「共振組」勝率/損益比明顯勝過其餘組 → 才有理由把共振從『盤整限定門票』"
+                        "升級為全時段計分 bonus 或最高分層(B 方案)。"
+                    )
+                    _cr_rows = []
+                    for _g in _cr["groups"]:
+                        _pl = _g["pl_ratio"]
+                        _cr_rows.append({
+                            "籌碼分組": _g["name"],
+                            "樣本": _g["n"],
+                            "勝率": f"{_g['win_rate']*100:.0f}%",
+                            "平均報酬": f"{_g['avg']:+.2f}%",
+                            "中位報酬": f"{_g['median']:+.2f}%",
+                            "損益比": "∞" if _pl == float("inf") else f"{_pl:.2f}",
+                        })
+                    st.dataframe(pd.DataFrame(_cr_rows), use_container_width=True, hide_index=True)
+                    if _cr.get("edge_vs_rest") is not None:
+                        _e = _cr["edge_vs_rest"]
+                        _verdict = ("✅ 共振明顯較優,可考慮升級 B 方案" if _e >= 1.0
+                                    else "⚠️ 共振優勢不明顯,先維持 A 觀察" if _e >= 0
+                                    else "❌ 共振反而較差,先別升級")
+                        st.caption(f"共振 vs 非共振(其一+一般)前進報酬差 = **{_e:+.2f}%** → {_verdict}")
+                    if _cr["n_eval"] < 30:
+                        st.caption(f"📊 樣本僅 {_cr['n_eval']} 筆,方向參考用;累積至 30+ 筆再據此決策 B 方案。")
 
                 # ── 🚪 出場規則回測(何時賣最賺?) ──
                 st.divider()

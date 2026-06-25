@@ -654,6 +654,82 @@ def attribute_signals(history: list, cache_dir, hold_days: int = 5) -> dict:
             "n_with_sig": n_with_sig, "per_signal": per_signal}
 
 
+def compare_chip_resonance(history: list, cache_dir, hold_days: int = 5) -> dict:
+    """共振 vs 非共振 前進報酬比較(B 方案「共振升級為計分/最高分層」的決策依據)。
+
+    把有 sig 記錄且已滿持有期的 pick,依籌碼狀態分三組比較後續 N 日報酬:
+      - 共振:  大戶↑ 且 散戶↓ 同時成立 (🔥高信心)
+      - 其一:  大戶↑ 或 散戶↓ 其中之一 (⭐中信心)
+      - 一般:  兩者皆無
+    若「共振組」的勝率/損益比明顯優於其餘組,才有理由把共振升級為計分 bonus 或最高分層。
+
+    Returns:
+        {"hold_days","n_eval","n_with_sig",
+         "groups":[{"name","n","win_rate","avg","median","pl_ratio"}, ...],
+         "edge_vs_rest": float|None}   # 共振 avg − 非共振(其一+一般) avg
+        無法讀快取回 {"error": ...}。
+    """
+    matrices = _load_price_matrices(cache_dir)
+    if matrices is None:
+        return {"error": "無法讀取 daily 快取"}
+
+    rec_res, rec_one, rec_none = [], [], []
+    n_with_sig = 0
+    for entry in history:
+        if entry.get("date") == "legacy":
+            continue
+        try:
+            entry_ts = pd.Timestamp(entry["date"])
+        except Exception:
+            continue
+        for pick in get_picks(entry):
+            sid = str(pick.get("sid", ""))
+            if not sid:
+                continue
+            sig = pick.get("sig")
+            if not isinstance(sig, dict):
+                continue
+            n_with_sig += 1
+            ret = _forward_return(matrices, sid, entry_ts, hold_days)
+            if ret is None:
+                continue
+            large = sig.get("大戶") == 1
+            small = sig.get("散戶") == 1
+            if large and small:
+                rec_res.append(ret)
+            elif large or small:
+                rec_one.append(ret)
+            else:
+                rec_none.append(ret)
+
+    def _agg(vals):
+        if not vals:
+            return None
+        wins = sum(1 for v in vals if v > 0)
+        pos = [v for v in vals if v > 0]
+        neg = [v for v in vals if v < 0]
+        avg_win  = sum(pos) / len(pos) if pos else 0.0
+        avg_loss = sum(neg) / len(neg) if neg else 0.0   # 負數
+        pl = (avg_win / abs(avg_loss)) if neg else float("inf")
+        return {"n": len(vals), "win_rate": wins / len(vals),
+                "avg": sum(vals) / len(vals),
+                "median": float(pd.Series(vals).median()), "pl_ratio": pl}
+
+    groups = []
+    for nm, vals in (("共振(大戶↑且散戶↓)", rec_res), ("其一", rec_one), ("一般", rec_none)):
+        g = _agg(vals)
+        if g:
+            groups.append({"name": nm, **g})
+
+    rest = rec_one + rec_none
+    edge_vs_rest = ((sum(rec_res) / len(rec_res)) - (sum(rest) / len(rest))
+                    if (rec_res and rest) else None)
+
+    n_eval = len(rec_res) + len(rec_one) + len(rec_none)
+    return {"hold_days": hold_days, "n_eval": n_eval, "n_with_sig": n_with_sig,
+            "groups": groups, "edge_vs_rest": edge_vs_rest}
+
+
 def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
     """算「系統 picks vs ^TWII 大盤」的逐日 N 日後報酬對照。
 
