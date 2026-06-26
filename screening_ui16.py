@@ -814,22 +814,28 @@ def show_market_banner(meta: dict) -> None:
     # Bug B 修正：用 pd.notna 同時擋 None 與 NaN
     change       = float(change_raw) if pd.notna(change_raw) else 0.0
     if not bullish:
-        state_txt = "📉 空頭(跌破季線)"
+        state_main, state_sub = "📉 空頭", "跌破季線"
     elif consolidating:
-        state_txt = "🌀 盤整修正(站上季線但跌破月線/近20日下跌)"
+        state_main, state_sub = "🌀 盤整修正", "站上季線,但跌破月線/近 20 日下跌"
     else:
-        state_txt = "📈 多頭(站上季線)"
+        state_main, state_sub = "📈 多頭", "站上季線"
     twii_now_s   = f"{twii_now_raw:,.0f}" if pd.notna(twii_now_raw) else "N/A"
     twii_ma_s    = f"{twii_ma_raw:,.0f}"  if pd.notna(twii_ma_raw)  else "N/A"
     if base is None or eff is None:
-        thr_txt = "過關門檻未知"
+        thr_txt = "未知"
     elif base == eff:
-        thr_txt = f"過關門檻 {base}"
+        thr_txt = f"**{base}**"
     else:
-        thr_txt = f"過關門檻 {base} → **{eff}**"
-    msg = f"{state_txt}  |  {thr_txt}  |  加權指數 {twii_now_s} / MA60 {twii_ma_s} | 近 20 日 {change:+.2f}%"
+        thr_txt = f"{base} → **{eff}**"
+    _arrow = "▲" if change >= 0 else "▼"
+    # 第一行:狀態(粗體)+ 一句說明;第二行:大盤數字;盤整時第三行才補警語
+    msg = (
+        f"**{state_main}**　{state_sub}\n\n"
+        f"📊 加權指數 **{twii_now_s}**　·　季線(MA60) {twii_ma_s}　·　"
+        f"近 20 日 {_arrow} **{change:+.2f}%**　　🎯 過關門檻 {thr_txt}"
+    )
     if consolidating:
-        msg += "  |  ⚠️ RS 不計分,且需「大戶↑或散戶↓」至少其一才入選"
+        msg += "\n\n⚠️ 此時 RS 不計分,需「大戶↑ 或 散戶↓」至少其一才入選"
     if bullish and not consolidating:
         st.success(msg)
     else:
