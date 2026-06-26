@@ -4717,7 +4717,8 @@ with _tab_quiet:
             st.caption(f"{_bm['retail_msg']}　|　隔日開盤進場 + {_bm['slippage']}% 滑價　|　"
                        f"樣本 {_bm['start']} ~ {_bm['asof']}({_bm['n_days']} 交易日)")
             for _h in _qbt["horizons"]:
-                st.markdown(f"**持有 {_h['hold']} 交易日(≈{_h['months']} 個月)**")
+                _badge = "🟢 4關" if _h.get("retail_active") else "⚪ 3關"
+                st.markdown(f"**持有 {_h['hold']} 交易日(≈{_h['months']} 個月)**　`{_badge}` {_h.get('retail_note','')}")
                 st.dataframe(pd.DataFrame(_h["rows"]), use_container_width=True, hide_index=True)
                 _hv = _h["verdict"]
                 if _hv:
@@ -4725,4 +4726,5 @@ with _tab_quiet:
                     st.caption(f"→ 訊號組 vs 大盤:勝率 {_hv['win_delta_pp']:+.1f}pp、"
                                f"平均報酬 {_hv['ret_delta_pp']:+.2f}pp → {_txt}"
                                f"(文章宣稱兩個月 68%;訊號組 {_hv['signal_win']:.1f}%、大盤 {_hv['market_win']:.1f}%)")
-            st.info("散戶關會在 holders 累積到 ≥6 週且樣本夠時自動納入;本機只有 5 週故自動跳過,目前測 3 關。")
+            st.info("散戶關採「逐持有期判定」:每個持有期各自看樣本筆數夠不夠才納入。"
+                    "通常短持有期(20日)會比長持有期(40日)先湊滿樣本而先亮起 4 關。")

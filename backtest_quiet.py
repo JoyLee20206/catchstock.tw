@@ -127,42 +127,50 @@ def backtest(cache_dir=None):
     rmask = rebal_mask(close.index)
     on_rebal = lambda mat: mat.where(rmask, other=False)
 
-    # ── 散戶關:資料夠才自動納入 ──
+    # ── 散戶關:逐持有期分別判定 ──
+    #   先看 holders 週數夠不夠(不夠則所有持有期都不可能納入);
+    #   再「對每個持有期」各自用該期的樣本筆數決定要不要納入散戶關。
+    #   原因:愈長的持有期愈難湊樣本(要往前留更多未來日),
+    #   逐期判定可讓短持有期(20日)先納入,不必等 40 日也湊滿。
     retail_daily, n_weeks = load_retail_decline_daily(close, cache_dir)
-    retail_active = False
-    if retail_daily is None or n_weeks < MIN_HOLDER_WEEKS:
-        retail_msg = (f"散戶關【跳過】:holders 只有 {n_weeks} 個不同週(需 ≥ {MIN_HOLDER_WEEKS})"
-                      f" → 只測 3 關(量縮+站穩月線+流動性)")
-    else:
-        test_mat = on_rebal(base_trend & liquid & vol_down & retail_daily)
-        test_n = len(compute_signal_returns(test_mat, close, max(HOLD_HORIZONS),
-                                            dedup_within_hold=True, open_matrix=open_))
-        if test_n >= MIN_RETAIL_TRADES:
-            retail_active = True
-            retail_msg = (f"散戶關【自動納入 ✅】:holders {n_weeks} 週、加關後最長持有期 {test_n} 筆"
-                          f"(≥ {MIN_RETAIL_TRADES}) → 測完整 4 關")
-        else:
-            retail_msg = (f"散戶關【跳過】:holders {n_weeks} 週夠,但加關後只剩 {test_n} 筆"
-                          f"(< {MIN_RETAIL_TRADES})樣本太少 → 只測 3 關")
-
-    if retail_active:
-        primary_name = "訊號組(4關:+散戶↓)"
-        groups = [
-            (primary_name,                on_rebal(base_trend & liquid & vol_down & retail_daily)),
-            ("參考·3關(沒散戶)",          on_rebal(base_trend & liquid & vol_down)),
-            ("對照A(全市場/流動性)",       on_rebal(liquid)),
-            ("對照B(站穩月線·沒量縮)",     on_rebal(base_trend & liquid & ~vol_down)),
-        ]
-    else:
-        primary_name = "訊號組(3關:量縮+站穩月線)"
-        groups = [
-            (primary_name,                on_rebal(base_trend & liquid & vol_down)),
-            ("對照A(全市場/流動性)",       on_rebal(liquid)),
-            ("對照B(站穩月線·沒量縮)",     on_rebal(base_trend & liquid & ~vol_down)),
-        ]
+    holders_ok = retail_daily is not None and n_weeks >= MIN_HOLDER_WEEKS
 
     horizons = []
+    any_active = False
     for hold in HOLD_HORIZONS:
+        # 1) 本持有期是否納入散戶關
+        retail_active, retail_note = False, ""
+        if not holders_ok:
+            retail_note = f"散戶關跳過:holders 僅 {n_weeks} 週(需 ≥ {MIN_HOLDER_WEEKS})"
+        else:
+            retail_mat = on_rebal(base_trend & liquid & vol_down & retail_daily)
+            n_r = len(compute_signal_returns(retail_mat, close, hold,
+                                             dedup_within_hold=True, open_matrix=open_))
+            if n_r >= MIN_RETAIL_TRADES:
+                retail_active = True
+                retail_note = f"散戶關納入 ✅(本期樣本 {n_r} 筆 ≥ {MIN_RETAIL_TRADES})"
+            else:
+                retail_note = f"散戶關跳過:本期僅 {n_r} 筆(< {MIN_RETAIL_TRADES})樣本太少"
+        any_active = any_active or retail_active
+
+        # 2) 依本期是否納入散戶,組出比較組
+        if retail_active:
+            primary_name = "訊號組(4關:+散戶↓)"
+            groups = [
+                (primary_name,                on_rebal(base_trend & liquid & vol_down & retail_daily)),
+                ("參考·3關(沒散戶)",          on_rebal(base_trend & liquid & vol_down)),
+                ("對照A(全市場/流動性)",       on_rebal(liquid)),
+                ("對照B(站穩月線·沒量縮)",     on_rebal(base_trend & liquid & ~vol_down)),
+            ]
+        else:
+            primary_name = "訊號組(3關:量縮+站穩月線)"
+            groups = [
+                (primary_name,                on_rebal(base_trend & liquid & vol_down)),
+                ("對照A(全市場/流動性)",       on_rebal(liquid)),
+                ("對照B(站穩月線·沒量縮)",     on_rebal(base_trend & liquid & ~vol_down)),
+            ]
+
+        # 3) 算各組統計
         rows, stats_by = [], {}
         for name, mat in groups:
             tr = compute_signal_returns(mat, close, hold, dedup_within_hold=True, open_matrix=open_)
@@ -191,18 +199,25 @@ def backtest(cache_dir=None):
                 "market_win": round(a["win_rate"] * 100, 1),
             }
         horizons.append({"hold": hold, "months": round(hold / 20, 1),
-                         "rows": rows, "verdict": verdict})
+                         "rows": rows, "verdict": verdict,
+                         "retail_active": retail_active, "retail_note": retail_note,
+                         "primary_name": primary_name})
 
+    if not holders_ok:
+        retail_msg = f"holders 僅 {n_weeks} 週(< {MIN_HOLDER_WEEKS})→ 各持有期一律只測 3 關"
+    else:
+        retail_msg = (f"holders {n_weeks} 週(≥ {MIN_HOLDER_WEEKS} ✅)→ 散戶關「逐持有期」判定,"
+                      f"各期樣本夠才納入(見下方各表上方標註)")
     meta = {
         "asof": close.index.max().strftime("%Y-%m-%d"),
         "start": close.index.min().strftime("%Y-%m-%d"),
         "n_days": len(close.index),
         "slippage": SLIPPAGE_PCT,
-        "retail_active": retail_active,
+        "retail_any_active": any_active,
         "n_weeks": n_weeks,
         "retail_msg": retail_msg,
     }
-    return {"meta": meta, "horizons": horizons, "primary_name": primary_name}
+    return {"meta": meta, "horizons": horizons}
 
 
 def run():
@@ -214,12 +229,12 @@ def run():
           f"({mt['n_days']} 交易日) | 滑價 {mt['slippage']}% | 隔日開盤進場")
     print(f">>> {mt['retail_msg']}\n")
     for h in res["horizons"]:
-        print(f"━━━ 持有 {h['hold']} 交易日(≈{h['months']} 個月) ━━━")
+        print(f"━━━ 持有 {h['hold']} 交易日(≈{h['months']} 個月) | {h['retail_note']} ━━━")
         print(pd.DataFrame(h["rows"]).to_string(index=False))
         v = h["verdict"]
         if v:
             verdict = "有贏過大盤" if v["beats_market"] else "沒有明顯贏過大盤"
-            print(f"  → {res['primary_name']} vs 大盤:勝率 {v['win_delta_pp']:+.1f}pp、"
+            print(f"  → {h['primary_name']} vs 大盤:勝率 {v['win_delta_pp']:+.1f}pp、"
                   f"平均報酬 {v['ret_delta_pp']:+.2f}pp → {verdict}")
             print(f"     (文章宣稱兩個月勝率 68%;訊號組 {v['signal_win']:.1f}%、大盤基準 {v['market_win']:.1f}%)")
         print()
