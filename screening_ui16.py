@@ -47,6 +47,8 @@ from performance import (
     check_system_health, compare_chip_resonance,
 )
 from backtest import run_backtest, SIGNAL_LABELS, build_signal_matrices
+from screening_quiet import screen as quiet_screen
+from backtest_quiet import backtest as quiet_backtest
 from market_sentiment import (
     compute_sentiment,
     load_sentiment_history,
@@ -1026,7 +1028,7 @@ _rotation = _load_industry_rotation_cached()
 
 # ── 4 個分析區塊改用 Tabs 並排,省直向空間 ──
 # 「熱度榜 + 產業輪動」同屬「近期趨勢觀察」(個股層級 vs 產業層級),合併同頁。
-_tab_trend, _tab_perf, _tab_bt, _tab_sent, _tab_bottom, _tab_margin, _tab_alloc = st.tabs([
+_tab_trend, _tab_perf, _tab_bt, _tab_sent, _tab_bottom, _tab_margin, _tab_alloc, _tab_quiet = st.tabs([
     f"🔥 熱度 & 輪動(近{HOT_WINDOW}日)",
     "📊 策略績效",
     "🔬 訊號回測",
@@ -1034,6 +1036,7 @@ _tab_trend, _tab_perf, _tab_bt, _tab_sent, _tab_bottom, _tab_margin, _tab_alloc 
     "🛑 止跌判讀",
     "🧮 期貨保證金",
     "💰 資金配置",
+    "🧹 籌碼沉澱",
 ])
 
 # ── 🛑 止跌判讀分頁(21 項訊號 × 四級分級,VIXTWN 為閘門) ─────────────────
@@ -4662,3 +4665,64 @@ with col_chart:
 **新手心法**:**永遠把單筆風險設 2%**,其他照實填,**計算器叫你買幾張就買幾張**,不要硬加碼。長期下來才能活到大勝那一次。
                         """
                     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 🧹 籌碼沉澱 / 冷門股分頁(screening_quiet.py + backtest_quiet.py)
+# ══════════════════════════════════════════════════════════════════════
+@st.cache_data(ttl=3600, show_spinner="籌碼沉澱篩選中(全市場掃描)…")
+def _run_quiet_screen_cached(cache_date_str: str):
+    """回 (df, meta)。快取鍵帶當日 cache 日期 → 同一天只算一次。"""
+    return quiet_screen(CACHE_DIR)
+
+
+@st.cache_data(ttl=3600, show_spinner="對照組回測中…")
+def _run_quiet_backtest_cached(cache_date_str: str):
+    return quiet_backtest(CACHE_DIR)
+
+
+with _tab_quiet:
+    st.subheader("🧹 籌碼沉澱 / 冷門股篩選")
+    _q_key = globals().get("_cache_key_str", "quiet")
+    try:
+        _qdf, _qmeta = _run_quiet_screen_cached(_q_key)
+        _qbt = _run_quiet_backtest_cached(_q_key)
+    except Exception as _q_err:
+        st.error(f"籌碼沉澱分頁載入失敗:{_q_err}")
+        _qdf, _qmeta, _qbt = None, None, None
+
+    if _qmeta is not None:
+        st.caption(f"四關:{_qmeta['conditions']}　|　資料截止 {_qmeta['asof']}　|　集保最新 {_qmeta['holders_date']}")
+
+        _v = None
+        if _qbt and "horizons" in _qbt:
+            for _h in _qbt["horizons"]:
+                if _h["hold"] == 40 and _h["verdict"]:
+                    _v = _h["verdict"]; break
+        _c1, _c2, _c3 = st.columns(3)
+        _c1.metric("符合檔數", f"{_qmeta['n']}")
+        _c2.metric("訊號組 2個月勝率", f"{_v['signal_win']:.1f}%" if _v else "—")
+        _c3.metric("vs 大盤基準", f"{_v['win_delta_pp']:+.1f}pp" if _v else "—",
+                   delta=(f"報酬 {_v['ret_delta_pp']:+.2f}pp" if _v else None))
+
+        if _qdf is not None and not _qdf.empty:
+            st.dataframe(_qdf, use_container_width=True)
+        else:
+            st.info("本次沒有股票同時符合四關(可能大盤過熱、或量縮股太少)。")
+
+        st.markdown("---")
+        st.markdown("##### 對照組回測")
+        if _qbt and "meta" in _qbt:
+            _bm = _qbt["meta"]
+            st.caption(f"{_bm['retail_msg']}　|　隔日開盤進場 + {_bm['slippage']}% 滑價　|　"
+                       f"樣本 {_bm['start']} ~ {_bm['asof']}({_bm['n_days']} 交易日)")
+            for _h in _qbt["horizons"]:
+                st.markdown(f"**持有 {_h['hold']} 交易日(≈{_h['months']} 個月)**")
+                st.dataframe(pd.DataFrame(_h["rows"]), use_container_width=True, hide_index=True)
+                _hv = _h["verdict"]
+                if _hv:
+                    _txt = "有贏過大盤" if _hv["beats_market"] else "沒有明顯贏過大盤"
+                    st.caption(f"→ 訊號組 vs 大盤:勝率 {_hv['win_delta_pp']:+.1f}pp、"
+                               f"平均報酬 {_hv['ret_delta_pp']:+.2f}pp → {_txt}"
+                               f"(文章宣稱兩個月 68%;訊號組 {_hv['signal_win']:.1f}%、大盤 {_hv['market_win']:.1f}%)")
+            st.info("散戶關會在 holders 累積到 ≥6 週且樣本夠時自動納入;本機只有 5 週故自動跳過,目前測 3 關。")
