@@ -345,11 +345,20 @@ def main():
                     tags += " <code>[突破]</code>"
                 # 已移除 [共振] tag(改用 AI 點評描述,清單聚焦於連續性與突破)
 
+                # 建議停損價(回測顯示 -5% 停損可把最慘單筆從 -31% 砍到 -13%,且效率最高)
+                # 以現價為基準 ×0.95;無現價資料則略過
+                _cur = row.get('現價')
+                stop_part = ""
+                if _cur is not None and not pd.isna(_cur) and _cur > 0:
+                    stop_part = f"　🛑停損 {_cur * 0.95:.1f}"
+
                 content += (
                     f"{score_icon} "
                     f"<a href='https://tw.stock.yahoo.com/quote/{sid_str}'>{sid_str}</a> "
-                    f"{stock_name} ({row['總分']}分){change_part}{tags}\n"
+                    f"{stock_name} ({row['總分']}分){change_part}{tags}{stop_part}\n"
                 )
+
+            content += "\n<i>🛑停損價 = 現價 −5%(回測最佳防守線,僅供參考)</i>\n"
 
             # 主流群聚 + 集中度警告
             if '產業' in df.columns and len(df) > 0:

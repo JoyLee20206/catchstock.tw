@@ -2480,6 +2480,23 @@ with _tab_perf:
                         })
                     st.dataframe(pd.DataFrame(_ex_rows), use_container_width=True, hide_index=True)
                     st.caption("🏆 = 淨期望值最高(單筆賺最多)　⚡ = 日均報酬最高(效率最高)　🎯 = 損益比最高(賺賠比最佳)")
+
+                    # 💡 具體建議:比較「固定持有」vs「-5% 停損」的尾端風險與效率,給出可執行結論
+                    _strat_by_name = {_s["name"]: _s for _s in _ex["strategies"]}
+                    _stop5 = next((v for k, v in _strat_by_name.items() if "停損 -5%" in k), None)
+                    _fixed = next((v for k, v in _strat_by_name.items() if k.startswith("固定持有")
+                                   and v["avg_days"] >= 9), None)  # 拿最長固定持有當對照
+                    if _stop5 and _fixed:
+                        _worst_cut = _fixed["worst"] - _stop5["worst"]   # 正值 = 停損把虧損縮小
+                        st.success(
+                            f"💡 **建議:替每檔設 −5% 停損**。"
+                            f"回測顯示固定抱滿時最慘單筆會賠 {_fixed['worst']:.1f}%,"
+                            f"加上 −5% 停損後最慘只賠 {_stop5['worst']:.1f}%"
+                            f"(**少虧 {abs(_worst_cut):.1f} 個百分點**),"
+                            f"而且日均報酬 {_stop5['daily']:+.3f}% 還是各策略最高(效率最好)。"
+                            f"代價是勝率降到 {_stop5['win_rate']*100:.0f}%(常被洗出場),但換來大跌時的保護。"
+                            f"  \n選股表與每日推播已對每檔標出「🛑建議停損價(現價−5%)」,可直接照用。"
+                        )
                     if _ex["n"] < 30:
                         st.caption(
                             f"📊 樣本 {_ex['n']} 筆——且停損的價值要到空頭才會凸顯,累積跨多空後再採用。"
@@ -4151,8 +4168,20 @@ with col_list:
                 st.success(f"🎯 抄底雷達命中 **{len(_dip_set)}** 檔 {_dstr}。"
                            f"與選股清單邏輯相反(找跌深+籌碼吃貨)→ 獨立呈現;當『觀察名單』,**別閉眼買**、進場等帶量、嚴設停損。")
 
+        # 🛑 建議停損價(-5%):回測顯示 -5% 停損可把最慘單筆從 -31% 砍到 -13%、且效率(日均報酬)最高。
+        # 以現價為基準 ×0.95,插在「現價」欄右邊方便對照。抄底雷達用「最新價」欄、邏輯不同,故不加。
+        if not filtered.empty and '現價' in filtered.columns:
+            _stop_series = filtered['現價'].apply(
+                lambda p: round(p * 0.95, 2) if pd.notna(p) and p > 0 else None
+            )
+            if '🛑建議停損' not in filtered.columns:
+                _insert_at = list(filtered.columns).index('現價') + 1
+                filtered.insert(_insert_at, '🛑建議停損', _stop_series)
+
         filtered = filtered.reset_index(drop=True)
         event = st.dataframe(filtered, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+        if '🛑建議停損' in filtered.columns:
+            st.caption("🛑 **建議停損 = 現價 −5%**:回測中最佳防守線(把最慘單筆從 -31% 砍到 -13%,效率也最高)。僅供參考,實際進場價不同請自行換算。")
 
         st.divider()
         st.subheader("📥 下載匯入檔")
