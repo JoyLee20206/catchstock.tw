@@ -927,6 +927,83 @@ def check_system_health(history: list, cache_dir, hold_days: int = 5,
     return base
 
 
+def compare_chip_resonance(history: list, cache_dir, hold_days: int = 5) -> dict:
+    """籌碼共振 vs 非共振的前進報酬對照。
+
+    把入選股依 sig 裡的籌碼訊號分三組:
+      - 共振組:投信+外資雙買(sig["雙買"]==1)
+      - 其一組:投信或外資其中一個買超(但非雙買)
+      - 一般組:投信/外資皆無觸發
+
+    比較各組後續 N 日報酬,回傳結構供 UI 顯示。
+
+    Returns:
+        {
+          "hold_days", "n_eval",
+          "groups": [{"name","n","win_rate","avg","median","pl_ratio"}, ...],
+          "edge_vs_rest": float | None,   # 共振均報酬 − 其他組均報酬
+        }
+        無法讀快取回 {"error": ...};尚無 sig 樣本回 {"n_eval": 0, ...}。
+    """
+    matrices = _load_price_matrices(cache_dir)
+    if matrices is None:
+        return {"error": "無法讀取 daily 快取"}
+
+    recs = {"共振(投信+外資雙買)": [], "其一(投信或外資)": [], "一般(無法人)": []}
+    n_with_sig = 0
+    for entry in history:
+        if entry.get("date") == "legacy":
+            continue
+        try:
+            entry_ts = pd.Timestamp(entry["date"])
+        except Exception:
+            continue
+        for pick in get_picks(entry):
+            sid = str(pick.get("sid", ""))
+            if not sid:
+                continue
+            sig = pick.get("sig")
+            if not isinstance(sig, dict):
+                continue
+            n_with_sig += 1
+            ret = _forward_return(matrices, sid, entry_ts, hold_days)
+            if ret is None:
+                continue
+            if sig.get("雙買") == 1:
+                recs["共振(投信+外資雙買)"].append(ret)
+            elif sig.get("投信") == 1 or sig.get("外資") == 1:
+                recs["其一(投信或外資)"].append(ret)
+            else:
+                recs["一般(無法人)"].append(ret)
+
+    n_eval = sum(len(v) for v in recs.values())
+    if n_eval == 0:
+        return {"hold_days": hold_days, "n_eval": 0, "groups": [], "edge_vs_rest": None}
+
+    def _grp_stat(name, vals):
+        if not vals:
+            return {"name": name, "n": 0, "win_rate": 0.0, "avg": 0.0, "median": 0.0, "pl_ratio": 0.0}
+        wins = sum(1 for v in vals if v > 0)
+        gains = [v for v in vals if v > 0]
+        losses = [v for v in vals if v <= 0]
+        total_loss = sum(losses)
+        pl = sum(gains) / abs(total_loss) if total_loss < 0 else float("inf")
+        sorted_v = sorted(vals)
+        median = sorted_v[len(sorted_v) // 2]
+        return {"name": name, "n": len(vals), "win_rate": wins / len(vals),
+                "avg": sum(vals) / len(vals), "median": median, "pl_ratio": pl}
+
+    groups = [_grp_stat(name, vals) for name, vals in recs.items()]
+
+    # edge = 共振組均報酬 − 其餘兩組合併均報酬
+    resonance_avg = groups[0]["avg"] if groups[0]["n"] > 0 else None
+    rest_vals = recs["其一(投信或外資)"] + recs["一般(無法人)"]
+    rest_avg = sum(rest_vals) / len(rest_vals) if rest_vals else None
+    edge = (resonance_avg - rest_avg) if (resonance_avg is not None and rest_avg is not None) else None
+
+    return {"hold_days": hold_days, "n_eval": n_eval, "groups": groups, "edge_vs_rest": edge}
+
+
 def format_performance_summary(perf: dict) -> str:
     """產生一行 TG 用的績效摘要。"""
     o = perf.get("overall", {})
