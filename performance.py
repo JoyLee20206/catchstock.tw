@@ -560,11 +560,19 @@ def backtest_exit_rules(history: list, cache_dir, max_hold: int = 10) -> dict:
         avg = sum(rets) / n
         net_exp = avg - TRADE_COST_PCT
         avg_days = sum(days) / n
+        gains = [r for r in rets if r > 0]
+        losses = [r for r in rets if r <= 0]
+        total_loss = sum(losses)
+        # 損益比:總獲利 / 總虧損絕對值;無虧損時為 inf
+        pl_ratio = (sum(gains) / abs(total_loss)) if total_loss < 0 else float("inf")
+        # 敗局平均虧損(無虧損時 0)
+        avg_loss = (total_loss / len(losses)) if losses else 0.0
         strategies.append({
             "name": name, "win_rate": wins / n, "avg": avg,
             "net_exp": net_exp, "avg_days": avg_days,
             "worst": min(rets),
             "daily": net_exp / avg_days if avg_days > 0 else 0.0,
+            "pl_ratio": pl_ratio, "avg_loss": avg_loss,
         })
 
     return {"max_hold": max_hold, "n": len(paths), "strategies": strategies}
@@ -885,9 +893,9 @@ def check_system_health(history: list, cache_dir, hold_days: int = 5,
             "series_dates": series_dates, "series_returns": series}
 
     if n_all < MIN_ALL or n_recent < MIN_RECENT:
-        base.update({"status": "insufficient", "label": "⏳ 累積中",
-                     "reason": f"樣本不足(全期 {n_all}/{MIN_ALL} 入選日、近期 {n_recent}/{MIN_RECENT}),"
-                               f"暫不評估失效,避免年輕/全多頭資料誤報。",
+        base.update({"status": "insufficient", "label": "⏳ 資料累積中",
+                     "reason": f"目前只記錄了 {n_all} 天選股(需要 {MIN_ALL} 天)、近期 {n_recent} 天(需要 {MIN_RECENT} 天),"
+                               f"樣本還太少,現在下結論容易被一兩天的行情誤導,先繼續累積。",
                      "series_dates": series_dates, "series_returns": series})
         return base
 
@@ -899,31 +907,31 @@ def check_system_health(history: list, cache_dir, hold_days: int = 5,
                  "recent_win_rate": recent_win, "mdd_recent": mdd_recent})
 
     if recent_net_exp < 0:
-        base.update({"status": "fail", "label": "🔴 失效警報",
-                     "reason": f"近 {n_recent} 個入選日的淨期望值轉為 {recent_net_exp:+.2f}%(扣成本後賠錢)——"
-                               f"策略 edge 可能失效,建議暫停新進場、回頭檢查訊號與大盤環境。"})
+        base.update({"status": "fail", "label": "🔴 最近開始賠錢",
+                     "reason": f"最近 {n_recent} 天選的股票,扣掉成本後平均每筆變成賠 {abs(recent_net_exp):.2f}%——"
+                               f"這套選股最近不靈了,建議先暫停照單進場,回頭檢查是不是大盤環境變了。"})
         return base
 
     warns = []
     if mdd_recent < MDD_WARN:
-        warns.append(f"近期回檔 {mdd_recent:.1f}%(深於 {MDD_WARN:.0f}%)")
+        warns.append(f"最近一波從高點最多回跌了 {abs(mdd_recent):.1f}%(超過 {abs(MDD_WARN):.0f}% 的警戒線)")
     if recent_win < WIN_WARN:
-        warns.append(f"近期勝率 {recent_win*100:.0f}%(低於 {WIN_WARN*100:.0f}%)")
+        warns.append(f"最近賺錢的比例只有 {recent_win*100:.0f}%(低於 {WIN_WARN*100:.0f}%,賠的比賺的多)")
     if all_net_exp > 0 and recent_net_exp < all_net_exp * DECAY_FRAC:
-        warns.append(f"近期淨期望值 {recent_net_exp:+.2f}% 不到全期 {all_net_exp:+.2f}% 的一半(衰退)")
+        warns.append(f"最近平均每筆淨賺 {recent_net_exp:+.2f}%,不到過去平均({all_net_exp:+.2f}%)的一半,明顯變差")
 
     if warns:
-        base.update({"status": "warn", "label": "🟡 警戒",
-                     "reason": "、".join(warns) + "。edge 仍在但轉弱,建議收緊停損、降低部位。"})
+        base.update({"status": "warn", "label": "🟡 要留意",
+                     "reason": "、".join(warns) + "。還沒到賠錢,但賺錢能力在轉弱,建議停損抓緊一點、買少一點。"})
     else:
-        # 全期也為正且近期與其相當 → 才說「與全期一致」;否則(如全期負、近期轉正)只陳述近期,避免誤導
+        # 過去整體也賺、且最近沒掉太多 → 才說「跟以往差不多」;否則(如過去賠、最近轉賺)只講最近,避免誤導
         if all_net_exp > 0:
-            _cmp = f"與全期({all_net_exp:+.2f}%)相當" if recent_net_exp >= all_net_exp * DECAY_FRAC else f"(全期 {all_net_exp:+.2f}%)"
+            _cmp = f"跟過去平均({all_net_exp:+.2f}%)差不多" if recent_net_exp >= all_net_exp * DECAY_FRAC else f"(過去平均 {all_net_exp:+.2f}%)"
         else:
-            _cmp = f"已優於全期({all_net_exp:+.2f}%)"
-        base.update({"status": "ok", "label": "🟢 正常",
-                     "reason": f"近 {n_recent} 個入選日淨期望值 {recent_net_exp:+.2f}%、勝率 {recent_win*100:.0f}%,"
-                               f"{_cmp},edge 維持中。"})
+            _cmp = f"比過去整體({all_net_exp:+.2f}%)還更好"
+        base.update({"status": "ok", "label": "🟢 正常運作",
+                     "reason": f"最近 {n_recent} 天選的股票,扣掉成本後平均每筆淨賺 {recent_net_exp:+.2f}%、賺錢比例 {recent_win*100:.0f}%,"
+                               f"{_cmp},這套選股目前還管用。"})
     return base
 
 

@@ -1782,15 +1782,18 @@ with _tab_trend:
 with _tab_perf:
     if _hist_days >= 5:  # 至少有 5 天歷史才有意義
         st.caption(
-            "回答「我這套系統真的有用嗎?」— 對每筆歷史選股,從 daily 快取算出後續 N 日報酬。"
-            "  \n⚙️ **進場假設:訊號日隔日開盤 + 0.1% 滑價**(去除前視偏誤);出場:持有 N 日後收盤;交易成本 0.5%。"
+            "這頁在回答一件事:**「跟著這套系統選股,到底有沒有賺?」**"
+            "做法是把過去每一天系統選出的股票,拿真實股價算出「買進後放幾天的報酬」,再統計起來。"
+            "  \n⚙️ **怎麼算的(貼近真實買賣)**:不是用選股當天的價格,而是**等到隔天開盤才買進**"
+            "(避免「事後諸葛」高估報酬),買價再多抓 0.1% 當作實際成交的價差;"
+            "**放滿 N 天後以收盤價賣出**;報酬還會扣掉約 0.5% 的手續費與證交稅。"
         )
 
         # ── 🚨 系統失效監控(近期 edge 還在嗎?)──────────────────────────
         # 比較近期 vs 全期的每入選日淨期望值 + 回檔,策略退化時主動示警(符合「何時該停止相信它」)。
         _health = _load_system_health_cached(hold_days=5, recent_window=20)
         _hstatus = _health.get("status")
-        _hmsg = f"**{_health.get('label','')}　系統失效監控(近 {_health.get('n_recent',0)} 個入選日)**：{_health.get('reason','')}"
+        _hmsg = f"**{_health.get('label','')}　這套選股最近還靈不靈?(看最近 {_health.get('n_recent',0)} 天)**：{_health.get('reason','')}"
         if _hstatus == "fail":
             st.error(_hmsg)
         elif _hstatus == "warn":
@@ -2458,7 +2461,12 @@ with _tab_perf:
                         _flag_daily = " ⚡" if _s["daily"] == _best_daily else ""
                         _pl = _s.get("pl_ratio")
                         _flag_pl = " 🎯" if (_best_pl is not None and _pl == _best_pl) else ""
-                        _pl_str = "∞" if _pl == float("inf") else f"{_pl:.2f}"
+                        if _pl is None:
+                            _pl_str = "—"
+                        elif _pl == float("inf"):
+                            _pl_str = "∞"
+                        else:
+                            _pl_str = f"{_pl:.2f}"
                         _ex_rows.append({
                             "出場策略": _s["name"],
                             "勝率": f"{_s['win_rate']*100:.0f}%",
