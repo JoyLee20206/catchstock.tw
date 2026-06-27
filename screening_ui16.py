@@ -960,6 +960,62 @@ def _load_system_health_cached(hold_days=5, recent_window=20):
     return check_system_health(load_history(), CACHE_DIR,
                                hold_days=hold_days, recent_window=recent_window)
 
+
+def _compute_sector_health(df_today, history, rs_col=None, lookback_days=6):
+    """🏭 主流類股健康度:今日「最集中的產業」最近是否在降溫?給「該不該先減碼」的早期警報。
+
+    比季線濾網更早、更貼身——專剋「集中在單一強勢類股(如半導體)」的相關性風險。
+    用兩個訊號判定:
+      1. 該主導產業的「每日入選檔數」近期趨勢(今日 vs 前幾個選股日均)——驟降 = 類股降溫
+      2. 今日該產業 picks 的 RS 健康度(RS>0 的比例)——多數轉弱 = 領頭羊失速
+
+    回 dict 或 None(非集中/資料不足)。
+    """
+    if df_today is None or df_today.empty or '產業' not in df_today.columns:
+        return None
+    _ind = df_today['產業'].replace('', '其他').fillna('其他')
+    cnt = _ind.value_counts()
+    if cnt.empty:
+        return None
+    dom = str(cnt.index[0])
+    dom_today = int(cnt.iloc[0])
+    dom_share = dom_today / len(df_today)
+    # 只在「真的集中(主導產業 ≥ 40%)」時才有意義,否則不是集中風險、不示警
+    if dom_share < 0.4:
+        return {"status": "n/a", "dom": dom, "dom_share": dom_share}
+
+    # 1) 主導產業近期每日入選檔數(從 history;排除今日那筆當基準)
+    daily = []
+    for entry in (history or [])[-(lookback_days + 1):]:
+        if entry.get("date") == "legacy":
+            continue
+        picks = entry.get("picks") or []
+        c = sum(1 for p in picks if (p.get("industry") or "其他") == dom)
+        daily.append(c)
+    prior = daily[:-1] if len(daily) >= 2 else []
+    prior_avg = (sum(prior) / len(prior)) if prior else None
+    drop = ((prior_avg - dom_today) / prior_avg) if (prior_avg and prior_avg > 0) else None
+
+    # 2) RS 健康度:今日主導產業 picks 裡 RS(個股−大盤漲幅差)> 0 的比例
+    rs_health = None
+    if rs_col and rs_col in df_today.columns:
+        _rs_vals = pd.to_numeric(df_today.loc[_ind == dom, rs_col], errors="coerce").dropna()
+        if len(_rs_vals) > 0:
+            rs_health = float((_rs_vals > 0).mean())
+
+    # 判定(由嚴到鬆)
+    if (drop is not None and drop >= 0.5) or (rs_health is not None and rs_health < 0.3):
+        status = "fail"
+    elif (drop is not None and drop >= 0.25) or (rs_health is not None and rs_health < 0.5):
+        status = "warn"
+    elif drop is None and rs_health is None:
+        status = "insufficient"
+    else:
+        status = "ok"
+    return {"status": status, "dom": dom, "dom_share": dom_share,
+            "dom_today": dom_today, "prior_avg": prior_avg, "drop": drop,
+            "rs_health": rs_health}
+
 # ── 🎯 首頁速覽卡片(3 秒看完今日重點) ──
 # 4 張 metric:今日達標 / 大盤狀態 / 最強產業 / 系統 5 日勝率
 if meta is not None and df is not None:
@@ -1556,6 +1612,34 @@ with _tab_alloc:
         _ind_cap     = _cap * _icap / 100.0
         _work = df[df['總分'] >= _minscore].copy()
 
+        # 🛡️ 集中度 → 總曝險建議:今日選股若高度集中在單一產業,等於「實質單押一個方向」,
+        # 即使單檔/單一產業有上限,整體相關性風險仍高 → 建議降低總投入、多留現金。
+        _conc_top, _conc_share, _emax_suggest = None, 0.0, 100
+        if not _work.empty and '產業' in _work.columns:
+            _ind_cnt = _work['產業'].replace('', '其他').fillna('其他').value_counts()
+            if len(_ind_cnt) > 0:
+                _conc_top = _ind_cnt.index[0]
+                _conc_share = _ind_cnt.iloc[0] / len(_work)
+                if _conc_share >= 0.7:
+                    _emax_suggest = 50
+                elif _conc_share >= 0.5:
+                    _emax_suggest = 60
+        if _conc_top is not None and _conc_share >= 0.5:
+            st.warning(
+                f"🛡️ **今日 {_conc_share*100:.0f}% 達標股集中在「{_conc_top}」**——"
+                f"等於實質單押一個方向,反轉時整批同時受傷。"
+                f"建議把下方「總曝險上限」調到 **{_emax_suggest}%** 左右,多留現金降低相關性風險。"
+            )
+        _emax = st.slider(
+            "🛡️ 總曝險上限 %(集中時調低、多留現金)",
+            min_value=10, max_value=100,
+            value=(_emax_suggest if _conc_share >= 0.5 else 100),
+            step=5, key="_alloc_emax",
+            help="所有部位投入合計的上限(佔總資金)。100% = 不額外限制(仍受單檔/產業上限約束);"
+                 "今日選股高度集中時系統會自動把預設值調低,你也可手動再調。",
+        )
+        _exposure_cap_amt = _cap * _emax / 100.0
+
         def _stop_of(r):
             _atr = r.get('ATR%')
             v = (_atrm * _atr) if (_atr is not None and pd.notna(_atr) and _atr > 0) else _fb_stop
@@ -1590,6 +1674,14 @@ with _tab_alloc:
                 for x in _rows:
                     if x["產業"] in _over:
                         x["invest"] *= _ind_cap / _ind_tot[x["產業"]]
+                # 🛡️ 總曝險上限:投入合計超過上限時,所有部位等比例縮減(集中時降相關性風險)
+                _cur_total = sum(x["invest"] for x in _rows)
+                _exposure_scaled = False
+                if _cur_total > _exposure_cap_amt and _cur_total > 0:
+                    _sf = _exposure_cap_amt / _cur_total
+                    for x in _rows:
+                        x["invest"] *= _sf
+                    _exposure_scaled = True
                 _out = []
                 for x in _rows:
                     _shares = int(x["invest"] // x["price"]) if _odd else int(x["invest"] // (x["price"]*1000))*1000
@@ -1632,6 +1724,9 @@ with _tab_alloc:
                     st.caption(f"🏭 產業佔比:{_ind_line}")
                     if _over:
                         st.caption(f"⚠️ 已自動把超過 {_icap}% 上限的產業({', '.join(_over)})等比例縮減。")
+                if _exposure_scaled:
+                    st.caption(f"🛡️ 因設定「總曝險上限 {_emax}%」,已把所有部位等比例縮減,"
+                               f"實際投入約 {_tot_invest/_cap*100:.0f}% 資金、其餘留現金(降低集中相關性風險)。")
                 if _skipped:
                     _u = "1 股" if _odd else "1 張"
                     st.caption(f"ℹ️ {len(_skipped)} 檔因「資金買不到 {_u}」未列入:"
@@ -4132,6 +4227,65 @@ with col_list:
                     help=f"乖離月線 > {BIAS_MA20_HOT:.0f}% 或 季線 > {BIAS_MA60_HOT:.0f}% 標 🟡;勾選後從清單與複製碼移除",
                 ):
                     filtered = filtered[filtered['過熱'] != '🟡']
+
+        # 🥇 類股內 RS 二次篩選:同一產業裡依「個股−大盤漲幅差」排名,只留領頭羊、剔除跟風落後者。
+        # 用意:強勢類股(如半導體)主導時,與其全收,不如挑類股內 RS 最強的幾檔——反轉時跌得少。
+        _rs_col = next((c for c in filtered.columns if "個股-大盤漲幅差" in str(c)), None)
+        if _rs_col and not filtered.empty and '產業' in filtered.columns:
+            _rank = filtered.groupby('產業')[_rs_col].rank(ascending=False, method='min')
+            _size = filtered.groupby('產業')['代號'].transform('size')
+            # 類股內名次(1 = 該產業 RS 最強);RS 缺值標「—」
+            _rank_str = [
+                f"{int(r)}/{int(s)}" if pd.notna(r) else "—"
+                for r, s in zip(_rank, _size)
+            ]
+            if '類股RS名次' not in filtered.columns:
+                # 插在「總分」後(表格最左、顯眼);無總分欄則退回附加在最後
+                if '總分' in filtered.columns:
+                    filtered.insert(list(filtered.columns).index('總分') + 1,
+                                    '類股RS名次', _rank_str)
+                else:
+                    filtered['類股RS名次'] = _rank_str
+            _max_grp = int(_size.max()) if len(_size) else 0
+            # 只在「有某產業 ≥ 3 檔」時才提供篩選(單檔/兩檔產業篩了沒意義)
+            if _max_grp >= 3:
+                _topn = st.slider(
+                    "🥇 各類股只留 RS 前 N 強(剔除同類跟風落後者)",
+                    min_value=1, max_value=_max_grp, value=_max_grp, step=1,
+                    key="_rs_topn",
+                    help="在同一產業裡依『個股−大盤漲幅差』(RS)排名,只保留前 N 名。"
+                         "拉到最右 = 不過濾;往左拉 = 強勢類股裡只留領頭羊,跟風落後股剔除。"
+                         "RS 缺值的股一律保留(不因缺資料被誤刪)。",
+                )
+                if _topn < _max_grp:
+                    _before = len(filtered)
+                    # RS 缺值(_rank 為 NaN)一律保留,避免因缺資料被誤刪
+                    filtered = filtered[(_rank <= _topn) | _rank.isna()]
+                    _removed = _before - len(filtered)
+                    if _removed > 0:
+                        st.caption(f"🥇 已剔除 {_removed} 檔同類股 RS 落後者,留下各產業前 {_topn} 強。")
+
+        # 🏭 主流類股健康度警報:今日最集中的產業近期是否降溫?比季線濾網更早、專剋集中風險。
+        # 用今日完整 picks(df)算主導產業與 RS;用 history 算該產業近期入選檔數趨勢。
+        _sh = _compute_sector_health(df, load_history(), rs_col=_rs_col)
+        if _sh and _sh.get("status") not in (None, "n/a"):
+            _dom = _sh["dom"]
+            _bits = [f"今日 **{_sh['dom_share']*100:.0f}%** 集中在「{_dom}」"]
+            if _sh.get("drop") is not None and _sh.get("prior_avg"):
+                _trend = ("驟降" if _sh["drop"] >= 0.5 else "減少" if _sh["drop"] >= 0.25
+                          else "回升" if _sh["drop"] < 0 else "持平")
+                _bits.append(f"該產業入選數 {_sh['dom_today']} 檔(近期均 {_sh['prior_avg']:.1f} → {_trend})")
+            if _sh.get("rs_health") is not None:
+                _bits.append(f"其中 RS 仍強者占 {_sh['rs_health']*100:.0f}%")
+            _msg = "🏭 **主流類股健康度**:" + "、".join(_bits) + "。"
+            if _sh["status"] == "fail":
+                st.error(_msg + "　🔴 **領頭類股明顯降溫**——考慮先減碼、收緊停損,別追加同類部位。")
+            elif _sh["status"] == "warn":
+                st.warning(_msg + "　🟡 **領頭類股轉弱跡象**——留意,別再加碼同類,優先留 RS 最強的幾檔。")
+            elif _sh["status"] == "ok":
+                st.success(_msg + "　🟢 領頭類股目前仍健康。")
+            else:
+                st.info(_msg + "　⏳ 歷史天數不足,趨勢累積中。")
 
         # 🎯 籌碼抄底雷達(④ 實證固化:資減券增 + 大戶逆勢增持)。預設關閉 → 不啟用就不付建矩陣的 ~5 秒。
         # 勾選後「整個表替換為 13 檔雷達清單」——抄底雷達是『找弱股反轉』,與選股清單『追強勢』邏輯相反,
