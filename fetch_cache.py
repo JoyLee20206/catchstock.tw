@@ -1384,39 +1384,49 @@ def fetch_vix_daily():
     if not need_fetch("vix"):
         print("[vix] ^VIX 已有今日快取,略過"); return
     print("[vix] 抓取 ^VIX 60 日歷史...")
-    try:
-        data = yf.download("^VIX", period="60d", auto_adjust=True,
-                           progress=False, threads=False)
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
-        if data.empty:
-            print("   !!! ^VIX 抓取無資料,沿用舊檔(若有)")
-            prev_files = sorted(CACHE_DIR.glob("vix_*.parquet"))
-            if prev_files and not path_for("vix").exists():
-                pd.read_parquet(prev_files[-1]).to_parquet(path_for("vix"))
-                cleanup_old_cache("vix")
+    MAX_VIX_RETRY = 3
+    for attempt in range(MAX_VIX_RETRY):
+        try:
+            data = yf.download("^VIX", period="60d", auto_adjust=True,
+                               progress=False, threads=False)
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            if data.empty:
+                print("   !!! ^VIX 抓取無資料,沿用舊檔(若有)")
+                prev_files = sorted(CACHE_DIR.glob("vix_*.parquet"))
+                if prev_files and not path_for("vix").exists():
+                    pd.read_parquet(prev_files[-1]).to_parquet(path_for("vix"))
+                    cleanup_old_cache("vix")
+                return
+            if data.index.tz is not None:
+                data.index = data.index.tz_localize(None)
+            df_vix = data.reset_index()
+            for col in ("Date", "Datetime", "index", "level_0"):
+                if col in df_vix.columns:
+                    df_vix = df_vix.rename(columns={col: "date"})
+                    break
+            df_vix.to_parquet(path_for("vix"))
+            print(f"   -> ^VIX 60 日快取完成 ({len(df_vix)} 筆,"
+                  f"最新值 {float(df_vix['Close'].iloc[-1]):.2f})")
+            cleanup_old_cache("vix")
             return
-        if data.index.tz is not None:
-            data.index = data.index.tz_localize(None)
-        df_vix = data.reset_index()
-        for col in ("Date", "Datetime", "index", "level_0"):
-            if col in df_vix.columns:
-                df_vix = df_vix.rename(columns={col: "date"})
-                break
-        df_vix.to_parquet(path_for("vix"))
-        print(f"   -> ^VIX 60 日快取完成 ({len(df_vix)} 筆,"
-              f"最新值 {float(df_vix['Close'].iloc[-1]):.2f})")
-        cleanup_old_cache("vix")
-    except Exception as e:
-        print(f"   !!! ^VIX 抓取失敗: {e}")
-        prev_files = sorted(CACHE_DIR.glob("vix_*.parquet"))
-        if prev_files and not path_for("vix").exists():
-            try:
-                pd.read_parquet(prev_files[-1]).to_parquet(path_for("vix"))
-                cleanup_old_cache("vix")
-                print("   -> 已用昨日 ^VIX 墊檔")
-            except Exception as e2:
-                print(f"   !!! 連墊檔都失敗: {e2}")
+        except Exception as e:
+            is_rate_limit = "RateLimit" in type(e).__name__ or "Too Many Requests" in str(e)
+            if is_rate_limit and attempt < MAX_VIX_RETRY - 1:
+                wait = 30 * (attempt + 1)
+                print(f"   !!! ^VIX 被限速 (第 {attempt+1} 次),等待 {wait}s 後重試...")
+                time.sleep(wait)
+            else:
+                print(f"   !!! ^VIX 抓取失敗: {e}")
+                prev_files = sorted(CACHE_DIR.glob("vix_*.parquet"))
+                if prev_files and not path_for("vix").exists():
+                    try:
+                        pd.read_parquet(prev_files[-1]).to_parquet(path_for("vix"))
+                        cleanup_old_cache("vix")
+                        print("   -> 已用昨日 ^VIX 墊檔")
+                    except Exception as e2:
+                        print(f"   !!! 連墊檔都失敗: {e2}")
+                return
 
 
 fetch_vix_daily()
