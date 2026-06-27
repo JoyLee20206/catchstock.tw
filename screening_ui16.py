@@ -1274,7 +1274,7 @@ with _tab_margin:
         "算期貨的**保證金、槓桿、對應現股/指數本金**,評估「用期貨槓桿操作」要準備多少錢、槓桿多大。"
         "資料來自期交所(TAIFEX)。"
     )
-    _fmode = st.radio("類型", ["個股期貨", "ETF 期貨", "台指期(大/小/微台)"],
+    _fmode = st.radio("類型", ["台指期(微/小/大台)", "個股期貨", "ETF 期貨"],
                       horizontal=True, key="_margin_mode")
 
     if _fmode == "個股期貨":
@@ -1500,7 +1500,7 @@ with _tab_margin:
                         )
 
     else:
-        # ── 台指期(大/小/微台):保證金為期交所公告固定金額,契約值用加權指數 ──
+        # ── 台指期(微/小/大台):保證金為期交所公告固定金額,契約值用加權指數 ──
         _idx = _load_idx_margin_map()
         if not _idx:
             st.info("尚無台指期保證金快取——需 `fetch_cache.py` 抓過 TAIFEX 一次後才有(部署後跑一次即可)。")
@@ -1513,7 +1513,7 @@ with _tab_margin:
             except Exception:
                 pass
             _ic1, _ic2 = st.columns([2, 1])
-            _prod = _ic1.radio("商品", ["大台", "小台", "微台"], horizontal=True, key="_idx_prod")
+            _prod = _ic1.radio("商品", ["微台", "小台", "大台"], horizontal=True, key="_idx_prod")
             _ilots = _ic2.number_input("口數", min_value=1, max_value=1000, value=1, step=1, key="_idx_lots")
             _meta = _idx.get(_prod, {})
             _pv = _meta.get("pv") or {"大台": 200, "小台": 50, "微台": 10}[_prod]
