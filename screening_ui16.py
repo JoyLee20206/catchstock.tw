@@ -1922,6 +1922,45 @@ with _tab_perf:
                             f"{_eff_note}"
                             f" 提醒:抱越久樣本越少(最近的 pick 還沒滿天數),數字穩定度較低。"
                         )
+
+                    # ── 持有天數 Bar Chart ──────────────────────────────────────
+                    _bar_ns, _bar_exp, _bar_daily = [], [], []
+                    for _row in _cmp_rows:
+                        _n_str = _row["持有天數"]
+                        _exp_str = _row["淨期望值"]
+                        _daily_str = _row["日均報酬"]
+                        if _exp_str != "—" and "累積中" not in _row["勝率"]:
+                            try:
+                                _bar_ns.append(_n_str)
+                                _bar_exp.append(float(_exp_str.replace("%", "").replace("+", "")))
+                                _bar_daily.append(float(_daily_str.replace("%", "").replace("+", "")) if _daily_str != "—" else None)
+                            except ValueError:
+                                pass
+                    if len(_bar_ns) >= 2:
+                        _fig_bar = go.Figure()
+                        _bar_colors = [
+                            "#dc2626" if (_best_n is not None and _n == f"{_best_n} 日") else "#6b7280"
+                            for _n in _bar_ns
+                        ]
+                        _fig_bar.add_trace(go.Bar(
+                            x=_bar_ns, y=_bar_exp,
+                            marker_color=_bar_colors,
+                            text=[f"{v:+.2f}%" for v in _bar_exp],
+                            textposition="outside",
+                            name="淨期望值",
+                        ))
+                        _fig_bar.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+                        _fig_bar.update_layout(
+                            height=240,
+                            margin=dict(l=10, r=10, t=30, b=20),
+                            yaxis=dict(title="淨期望值 (%)", zeroline=True),
+                            xaxis=dict(title="持有天數"),
+                            plot_bgcolor="rgba(0,0,0,0.03)",
+                            showlegend=False,
+                            title=dict(text="各持有天數淨期望值比較(紅色 = 最佳)", font=dict(size=13)),
+                        )
+                        st.plotly_chart(_fig_bar, use_container_width=True)
+                    # ─────────────────────────────────────────────────────────────
                     st.divider()
 
                 # 各持有期詳細指標(收進 expander,預設收起;標題即帶關鍵數字)
@@ -2188,12 +2227,13 @@ with _tab_perf:
                 by_score = perf.get("by_score", {})
                 if by_score:
                     st.divider()
-                    st.markdown("**各分數區間 5 日勝率**")
+                    st.markdown("**各分數區間 5 日 vs 10 日報酬對照**")
                     st.caption(
                         "🔥 9 分以上 = 頂級(滿分 10 制:大戶↑/散戶↓各 2 分、券與技術面三合一停用;9 分必含雙籌碼共振)"
                         "｜ ✅ 8 分 = 合格(現行門檻,2026-06-13 起)｜ ⚠️ 7 分以下 = 舊門檻/降標紀錄。"
                         "　註:歷史紀錄跨越多次改制(舊 10 制→11 制→2026-06-19 起現行 10 制[技術面三合一停用]),跨期比較請留意。"
                         "　每次入選算一筆(同檔不同天分開計),故筆數比明細表的檔數多是正常的。"
+                        "　**右側 10 日欄**可看出高分股是否值得抱更久;「—」= 尚無足夠到期樣本。"
                     )
                     # 分數 → 標籤對映 (現行滿分 10 制、門檻 8,2026-06-19 技術面三合一停用後;
                     #                  更早為 11 制或舊 10 制的紀錄跨期僅供參考)
@@ -2204,6 +2244,13 @@ with _tab_perf:
                             return f"✅ 合格({score} 分)"
                         else:
                             return f"⚠️ {score} 分(低於現行門檻)"
+
+                    def _pf_fmt(val):
+                        if val is None:
+                            return "—"
+                        if val == float("inf"):
+                            return "∞"
+                        return f"{val:.2f}"
 
                     rows = []
                     for score in sorted(by_score.keys(), reverse=True):
@@ -2219,15 +2266,23 @@ with _tab_perf:
                         # 5 個交易日,報酬未到期。顯示「進行中」而非冷冰冰的 0,避免誤會沒記到。
                         # (常見於剛改制後新出現的等級,如 9 分頂級才剛開始選到)
                         _pending = "win_rate_5d" not in s and s.get("n_picks", 0) > 0
+                        # 10日欄位
+                        _pending10 = "win_rate_10d" not in s and s.get("n_picks", 0) > 0
+                        _wr10  = f"{s['win_rate_10d']*100:.0f}%" if "win_rate_10d" in s else ("待滿 10 日" if _pending10 else "—")
+                        _avg10 = f"{s['avg_return_10d']:+.2f}%" if "avg_return_10d" in s else "—"
+                        _pf10  = _pf_fmt(s.get("profit_factor_10d"))
                         rows.append({
                             "分級": _score_label(score),
                             # 整欄統一字串:未到期放提示字串、已到期放 str(n_5d)。
                             # 不可混 str 與 int,否則 st.dataframe 的 pyarrow 序列化會 ArrowTypeError。
-                            "樣本數": f"⏳ {s['n_picks']} 筆未到期" if _pending else str(s.get("n_5d", 0)),
-                            "勝率":   f"{s.get('win_rate_5d', 0)*100:.0f}%" if "win_rate_5d" in s else ("待滿 5 日" if _pending else "—"),
-                            "平均報酬": f"{s.get('avg_return_5d', 0):+.2f}%" if "avg_return_5d" in s else "—",
-                            "敗局均虧": f"{s.get('avg_loss_5d', 0):+.2f}%" if "avg_loss_5d" in s else "—",
-                            "損益比": _pf_str,
+                            "樣本(5日)": f"⏳ {s['n_picks']} 筆未到期" if _pending else str(s.get("n_5d", 0)),
+                            "5日勝率":   f"{s.get('win_rate_5d', 0)*100:.0f}%" if "win_rate_5d" in s else ("待滿 5 日" if _pending else "—"),
+                            "5日平均報酬": f"{s.get('avg_return_5d', 0):+.2f}%" if "avg_return_5d" in s else "—",
+                            "5日損益比": _pf_str,
+                            "樣本(10日)": str(s.get("n_10d", 0)) if "n_10d" in s else ("⏳" if _pending10 else "—"),
+                            "10日勝率":  _wr10,
+                            "10日平均報酬": _avg10,
+                            "10日損益比": _pf10,
                         })
                     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
