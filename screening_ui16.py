@@ -836,6 +836,10 @@ def show_market_banner(meta: dict) -> None:
     )
     if consolidating:
         msg += "\n\n⚠️ 此時 RS 不計分,需「大戶↑ 或 散戶↓」至少其一才入選"
+    # 空頭自動從嚴的明確確認:門檻被 +1 時講清楚「減碼機制正在運作」,讓使用者一眼確認有動作
+    if (not bullish) and base is not None and eff is not None and eff > base:
+        msg += (f"\n\n🛡️ **空頭減碼機制已啟動**:過關門檻自動 +1({base} → {eff}),"
+                f"少選、只留最強最抗跌的股(這就是大盤轉空時的自動防守,正在運作)。")
     if bullish and not consolidating:
         st.success(msg)
     else:
