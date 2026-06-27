@@ -4169,13 +4169,16 @@ with col_list:
                            f"與選股清單邏輯相反(找跌深+籌碼吃貨)→ 獨立呈現;當『觀察名單』,**別閉眼買**、進場等帶量、嚴設停損。")
 
         # 🛑 建議停損價(-5%):回測顯示 -5% 停損可把最慘單筆從 -31% 砍到 -13%、且效率(日均報酬)最高。
-        # 以現價為基準 ×0.95,插在「現價」欄右邊方便對照。抄底雷達用「最新價」欄、邏輯不同,故不加。
+        # 以現價為基準 ×0.95;放在「總分」欄右邊(表格最左、最顯眼,不必橫向捲動)。
+        # 抄底雷達用「最新價」欄、邏輯不同,故不加。
         if not filtered.empty and '現價' in filtered.columns:
             _stop_series = filtered['現價'].apply(
                 lambda p: round(p * 0.95, 2) if pd.notna(p) and p > 0 else None
             )
             if '🛑建議停損' not in filtered.columns:
-                _insert_at = list(filtered.columns).index('現價') + 1
+                # 優先插在「總分」後;若無總分欄則退回插在「現價」後
+                _anchor = '總分' if '總分' in filtered.columns else '現價'
+                _insert_at = list(filtered.columns).index(_anchor) + 1
                 filtered.insert(_insert_at, '🛑建議停損', _stop_series)
 
         filtered = filtered.reset_index(drop=True)
