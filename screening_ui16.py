@@ -1800,6 +1800,62 @@ with _tab_perf:
         else:
             st.info(_hmsg)   # insufficient → 累積中
 
+        # ── 📈 訊號品質趨勢圖(每入選日平均報酬走勢 + 滾動均線) ──────────────
+        _trend_dates   = _health.get("series_dates", [])
+        _trend_returns = _health.get("series_returns", [])
+        if len(_trend_dates) >= 3:
+            _ROLL = 7   # 滾動窗口(入選日)
+            _roll_avg = []
+            for _i in range(len(_trend_returns)):
+                _win = _trend_returns[max(0, _i - _ROLL + 1): _i + 1]
+                _roll_avg.append(sum(_win) / len(_win))
+            _all_mean = sum(_trend_returns) / len(_trend_returns)
+            _fig_trend = go.Figure()
+            # 每日報酬 bar(正=綠/負=紅)
+            _bar_c = ["#16a34a" if v >= 0 else "#dc2626" for v in _trend_returns]
+            _fig_trend.add_trace(go.Bar(
+                x=_trend_dates, y=_trend_returns,
+                marker_color=_bar_c,
+                name="當日平均報酬",
+                hovertemplate="<b>%{x}</b><br>均報酬: %{y:+.2f}%<extra></extra>",
+                opacity=0.6,
+            ))
+            # 滾動均線
+            _fig_trend.add_trace(go.Scatter(
+                x=_trend_dates, y=_roll_avg,
+                mode="lines",
+                line=dict(color="#f59e0b", width=2),
+                name=f"滾動 {_ROLL} 日均線",
+                hovertemplate="<b>%{x}</b><br>滾動均: %{y:+.2f}%<extra></extra>",
+            ))
+            # 全期均值基準線
+            _fig_trend.add_hline(
+                y=_all_mean, line_dash="dot", line_color="#6b7280", opacity=0.7,
+                annotation_text=f"全期均 {_all_mean:+.2f}%",
+                annotation_position="right",
+            )
+            _fig_trend.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.3)
+            _fig_trend.update_layout(
+                height=220,
+                margin=dict(l=10, r=80, t=28, b=20),
+                yaxis=dict(title="每入選日均報酬 (%)"),
+                xaxis=dict(title=""),
+                plot_bgcolor="rgba(0,0,0,0.03)",
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="top", y=-0.15),
+                title=dict(
+                    text=f"📈 訊號品質趨勢(每入選日均報酬 · 共 {len(_trend_dates)} 日 · 黃線=滾動{_ROLL}日均)",
+                    font=dict(size=13),
+                ),
+            )
+            st.plotly_chart(_fig_trend, use_container_width=True)
+            if len(_trend_dates) < 30:
+                st.caption(
+                    f"⏳ 目前 {len(_trend_dates)} 個入選日(未滿 30 日),趨勢圖先看**方向**——"
+                    f"黃色滾動均線往上代表近期有改善,往下代表走弱。"
+                )
+        # ─────────────────────────────────────────────────────────────────────
+
         # ── 📖 指標判讀小抄(預設收合,點開對照) ──
         with st.expander("📖 指標怎麼看?(判讀門檻小抄)", expanded=False):
             st.markdown(

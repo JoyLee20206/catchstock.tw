@@ -539,24 +539,13 @@ def backtest_exit_rules(history: list, cache_dir, max_hold: int = 10) -> dict:
                 return r, d
         return path[-1], len(path)
 
-    def _stop_tp(path, stop_pct, tp_pct):  # 停損 -stop_pct% 或停利 +tp_pct%,先到者出場,否則持滿
-        for d, r in enumerate(path, start=1):
-            if r <= -stop_pct:             # 同日以收盤判定,停損優先(保守)
-                return r, d
-            if r >= tp_pct:
-                return r, d
-        return path[-1], len(path)
-
     _STRATS = [
         (f"固定持有 {min(5, max_hold)} 日",  lambda p: _fixed(p, 5)),
         (f"固定持有 {max_hold} 日",          lambda p: _fixed(p, max_hold)),
         ("停損 -5%(否則持滿)",              lambda p: _stop(p, 5)),
         ("停損 -8%(否則持滿)",              lambda p: _stop(p, 8)),
         ("移動停損 8%(高點回落)",           lambda p: _trailing(p, 8)),
-        ("移動停損 5%(高點回落)",           lambda p: _trailing(p, 5)),
         ("停利 +10%(否則持滿)",             lambda p: _take_profit(p, 10)),
-        ("停損-5% + 停利+10%",              lambda p: _stop_tp(p, 5, 10)),
-        ("停損-8% + 停利+15%",              lambda p: _stop_tp(p, 8, 15)),
     ]
 
     strategies = []
@@ -571,18 +560,11 @@ def backtest_exit_rules(history: list, cache_dir, max_hold: int = 10) -> dict:
         avg = sum(rets) / n
         net_exp = avg - TRADE_COST_PCT
         avg_days = sum(days) / n
-        # 損益比 = 平均獲利 / |平均虧損|(對「提高損益比」最直接的對照指標)
-        pos = [r for r in rets if r > 0]
-        neg = [r for r in rets if r < 0]
-        avg_win  = sum(pos) / len(pos) if pos else 0.0
-        avg_loss = sum(neg) / len(neg) if neg else 0.0   # 負數,即「敗局均虧」
-        pl_ratio = (avg_win / abs(avg_loss)) if neg else float("inf")
         strategies.append({
             "name": name, "win_rate": wins / n, "avg": avg,
             "net_exp": net_exp, "avg_days": avg_days,
             "worst": min(rets),
             "daily": net_exp / avg_days if avg_days > 0 else 0.0,
-            "avg_win": avg_win, "avg_loss": avg_loss, "pl_ratio": pl_ratio,
         })
 
     return {"max_hold": max_hold, "n": len(paths), "strategies": strategies}
@@ -652,82 +634,6 @@ def attribute_signals(history: list, cache_dir, hold_days: int = 5) -> dict:
 
     return {"hold_days": hold_days, "n_eval": len(recs),
             "n_with_sig": n_with_sig, "per_signal": per_signal}
-
-
-def compare_chip_resonance(history: list, cache_dir, hold_days: int = 5) -> dict:
-    """共振 vs 非共振 前進報酬比較(B 方案「共振升級為計分/最高分層」的決策依據)。
-
-    把有 sig 記錄且已滿持有期的 pick,依籌碼狀態分三組比較後續 N 日報酬:
-      - 共振:  大戶↑ 且 散戶↓ 同時成立 (🔥高信心)
-      - 其一:  大戶↑ 或 散戶↓ 其中之一 (⭐中信心)
-      - 一般:  兩者皆無
-    若「共振組」的勝率/損益比明顯優於其餘組,才有理由把共振升級為計分 bonus 或最高分層。
-
-    Returns:
-        {"hold_days","n_eval","n_with_sig",
-         "groups":[{"name","n","win_rate","avg","median","pl_ratio"}, ...],
-         "edge_vs_rest": float|None}   # 共振 avg − 非共振(其一+一般) avg
-        無法讀快取回 {"error": ...}。
-    """
-    matrices = _load_price_matrices(cache_dir)
-    if matrices is None:
-        return {"error": "無法讀取 daily 快取"}
-
-    rec_res, rec_one, rec_none = [], [], []
-    n_with_sig = 0
-    for entry in history:
-        if entry.get("date") == "legacy":
-            continue
-        try:
-            entry_ts = pd.Timestamp(entry["date"])
-        except Exception:
-            continue
-        for pick in get_picks(entry):
-            sid = str(pick.get("sid", ""))
-            if not sid:
-                continue
-            sig = pick.get("sig")
-            if not isinstance(sig, dict):
-                continue
-            n_with_sig += 1
-            ret = _forward_return(matrices, sid, entry_ts, hold_days)
-            if ret is None:
-                continue
-            large = sig.get("大戶") == 1
-            small = sig.get("散戶") == 1
-            if large and small:
-                rec_res.append(ret)
-            elif large or small:
-                rec_one.append(ret)
-            else:
-                rec_none.append(ret)
-
-    def _agg(vals):
-        if not vals:
-            return None
-        wins = sum(1 for v in vals if v > 0)
-        pos = [v for v in vals if v > 0]
-        neg = [v for v in vals if v < 0]
-        avg_win  = sum(pos) / len(pos) if pos else 0.0
-        avg_loss = sum(neg) / len(neg) if neg else 0.0   # 負數
-        pl = (avg_win / abs(avg_loss)) if neg else float("inf")
-        return {"n": len(vals), "win_rate": wins / len(vals),
-                "avg": sum(vals) / len(vals),
-                "median": float(pd.Series(vals).median()), "pl_ratio": pl}
-
-    groups = []
-    for nm, vals in (("共振(大戶↑且散戶↓)", rec_res), ("其一", rec_one), ("一般", rec_none)):
-        g = _agg(vals)
-        if g:
-            groups.append({"name": nm, **g})
-
-    rest = rec_one + rec_none
-    edge_vs_rest = ((sum(rec_res) / len(rec_res)) - (sum(rest) / len(rest))
-                    if (rec_res and rest) else None)
-
-    n_eval = len(rec_res) + len(rec_one) + len(rec_none)
-    return {"hold_days": hold_days, "n_eval": n_eval, "n_with_sig": n_with_sig,
-            "groups": groups, "edge_vs_rest": edge_vs_rest}
 
 
 def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
@@ -966,19 +872,23 @@ def check_system_health(history: list, cache_dir, hold_days: int = 5,
         if rets:
             by_date[entry["date"]] = sum(rets) / len(rets)
 
-    series = [v for _, v in sorted(by_date.items())]   # 依日期排序的每日平均報酬
+    sorted_items = sorted(by_date.items())
+    series_dates = [d for d, _ in sorted_items]
+    series = [v for _, v in sorted_items]   # 依日期排序的每日平均報酬
     n_all = len(series)
     recent = series[-recent_window:] if recent_window > 0 else series
     n_recent = len(recent)
 
     base = {"n_all": n_all, "n_recent": n_recent, "hold_days": hold_days,
             "recent_net_exp": None, "all_net_exp": None,
-            "recent_win_rate": None, "mdd_recent": None}
+            "recent_win_rate": None, "mdd_recent": None,
+            "series_dates": series_dates, "series_returns": series}
 
     if n_all < MIN_ALL or n_recent < MIN_RECENT:
         base.update({"status": "insufficient", "label": "⏳ 累積中",
                      "reason": f"樣本不足(全期 {n_all}/{MIN_ALL} 入選日、近期 {n_recent}/{MIN_RECENT}),"
-                               f"暫不評估失效,避免年輕/全多頭資料誤報。"})
+                               f"暫不評估失效,避免年輕/全多頭資料誤報。",
+                     "series_dates": series_dates, "series_returns": series})
         return base
 
     all_net_exp    = sum(series) / n_all - TRADE_COST_PCT
