@@ -149,6 +149,7 @@ def main():
         twii_pct       = _safe_num(meta.get('twii_pct'))
         twii_bias      = _safe_num(meta.get('twii_bias'))
         score_note     = meta.get('score_note', "")
+        panic_note     = meta.get('panic_note', "")
         market_status  = meta.get('market_status', '未知')
         cache_max_date = meta.get('cache_max_date')
         twii_now       = twii_now_raw if pd.notna(twii_now_raw) else None
@@ -169,13 +170,16 @@ def main():
         # ── 4. 大盤戰情摘要 + 快取新鮮度警告 ────────────────
         header = (
             f"🚀 <b>台股戰情摘要 ({date_str})</b>\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"📈 指數:{twii_now_str} ({icon}{twii_pct_str})\n"
-            f"📐 乖離:{bias_icon}{twii_bias_str} (位階)\n"
-            f"🌡️ 盤勢:<b>{market_status}</b>\n"
+            f"─────────────────\n"
+            f"📊 指數　{twii_now_str}　{icon}{twii_pct_str}\n"
+            f"📐 乖離　{bias_icon}{twii_bias_str}（位階）\n"
+            f"🌡️ 盤勢　<b>{market_status}</b>\n"
         )
         if score_note:
-            header += f"❗ <b>{score_note}</b>\n"
+            header += f"─────────────────\n"
+            header += f"⚠️ {score_note}\n"
+        if panic_note:
+            header += f"<b>{panic_note}</b>\n"
 
         # 快取新鮮度:共用 data_health.cache_freshness,只在 warn/error/missing 等級才示警
         freshness = cache_freshness(cache_max_date)

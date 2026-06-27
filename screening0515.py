@@ -1150,10 +1150,10 @@ def run_screening(
         score_note = "⚠️ 大盤盤整修正中：RS 不計分，且需「大戶↑或散戶↓」至少其一才入選"
     elif not market_data_ok:
         score_note = "⚠️ 大盤數據取得失敗，門檻自動調整"
-    # 恐慌警示(不擋選股):疊加在既有 note 後面,推播標頭的 ❗ 行會一起顯示
+    # 恐慌警示(不擋選股):單獨存入 panic_note,讓推播分行渲染,避免 score_note 擠成一行
+    panic_note = ""
     if panic_warning:
-        _pw_note = "🛑 止跌判讀:高度恐慌——此階段歷史上入選股 5 日平均 -6.9%,部位請自行斟酌"
-        score_note = f"{score_note}；{_pw_note}" if score_note else _pw_note
+        panic_note = "🛑 止跌判讀:高度恐慌——此階段歷史上入選股 5 日平均 -6.9%,部位請自行斟酌"
 
     if not market_bullish:
         market_state, market_status = 'bear', "謹慎保守"
@@ -1173,6 +1173,7 @@ def run_screening(
         'twii_pct':              twii_pct,
         'twii_bias':             bias_ma60,
         'score_note':            score_note,
+        'panic_note':            panic_note,
         'base_pass_score':       pass_score,           # Bug 1 修正：原始門檻（調整前）
         'effective_pass_score':  effective_pass_score,
         'cache_max_date':        cache_max_date,
