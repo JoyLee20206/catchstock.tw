@@ -1,4 +1,4 @@
-streamlit>=1.30
+streamlit>=1.37          # 需 st.fragment(穩定版自 1.37):選股表用 fragment 隔離,拉滑桿不重畫全頁
 pandas>=2.1
 numpy>=1.24                # market_sentiment.py 計算實現波動率需要
 plotly>=5.0                # screening_ui16.py K 線圖 / 情緒指標 bar chart

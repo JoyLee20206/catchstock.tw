@@ -4187,7 +4187,10 @@ if _is_mobile:
 else:
     col_list, col_chart = st.columns([0.45, 0.55])
 
-with col_list:
+# 🧩 fragment 隔離:拉 RS 滑桿/篩選器時,只重跑這段選股表,不重畫右側 ~31 張圖與個股分析 → 互動順暢。
+# 點選不同列時,內部會呼叫 st.rerun() 觸發全頁重跑,讓右側個股分析(col_chart)同步切換。
+@st.fragment
+def _render_pick_list():
     if df is None: st.info("👈 請先按左側「開始選股」產生最新清單。")
     elif len(df) == 0: st.error("❌ 沒有標的達標")
     else:
@@ -4379,7 +4382,14 @@ with col_list:
         current_sel = event.selection.rows
         if current_sel != st.session_state.last_df_selection:
             st.session_state.last_df_selection = current_sel
-            if current_sel: st.session_state.target_sid = str(filtered.iloc[current_sel[0]]['代號'])
+            if current_sel:
+                st.session_state.target_sid = str(filtered.iloc[current_sel[0]]['代號'])
+            # fragment 隔離後,點列只會重跑本 fragment;呼叫全頁 rerun 讓右側個股分析(col_chart)同步更新
+            st.rerun()
+
+
+with col_list:
+    _render_pick_list()
 
 # ── K 線與技術圖表區 ────────────────────────────────────────────────────────
 # 若有選股結果但 target_sid 還沒設,預設指向第一檔(總分最高),讓使用者一進來就有東西看
