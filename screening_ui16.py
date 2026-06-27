@@ -1987,11 +1987,14 @@ with _tab_perf:
                         _daily_str = _row["日均報酬"]
                         if _exp_str != "—" and "累積中" not in _row["勝率"]:
                             try:
-                                _bar_ns.append(_n_str)
-                                _bar_exp.append(float(_exp_str.replace("%", "").replace("+", "")))
-                                _bar_daily.append(float(_daily_str.replace("%", "").replace("+", "")) if _daily_str != "—" else None)
+                                _exp_val = float(_exp_str.replace("%", "").replace("+", ""))
+                                _daily_val = (float(_daily_str.replace("%", "").replace("+", ""))
+                                              if _daily_str != "—" else None)
                             except ValueError:
-                                pass
+                                continue
+                            _bar_ns.append(_n_str)
+                            _bar_exp.append(_exp_val)
+                            _bar_daily.append(_daily_val)
                     if len(_bar_ns) >= 2:
                         _fig_bar = go.Figure()
                         _bar_colors = [
@@ -4870,7 +4873,8 @@ with _tab_quiet:
         st.markdown("##### 對照組回測")
         if _qbt and "meta" in _qbt:
             _bm = _qbt["meta"]
-            st.caption(f"{_bm['retail_msg']}　|　隔日開盤進場 + {_bm['slippage']}% 滑價　|　"
+            _slip = _bm.get('slippage', _bm.get('entry_cost', ''))
+            st.caption(f"{_bm['retail_msg']}　|　隔日開盤進場 + {_slip}% 滑價　|　"
                        f"樣本 {_bm['start']} ~ {_bm['asof']}({_bm['n_days']} 交易日)")
             for _h in _qbt["horizons"]:
                 _badge = "🟢 4關" if _h.get("retail_active") else "⚪ 3關"
