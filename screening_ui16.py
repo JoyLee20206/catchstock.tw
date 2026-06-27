@@ -907,6 +907,13 @@ if meta: show_market_banner(meta)
 HOT_WINDOW = 20  # 熱度榜只看最近 N 個交易日(歷史保留可達一年,但「熱度」只反映近期)
 
 @st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_history_cached():
+    """快取版歷史載入(10 分鐘):避免每次 rerun 都重讀/解析整份 picks_history JSON。
+    唯讀用途專用——呼叫端不可 mutate 回傳的 list(會污染快取)。"""
+    return load_history()
+
+
 def _load_hot_picks_cached(top_n: int = 10):
     """快取 5 分鐘,避免每次 rerun 都重讀 JSON。
 
@@ -959,6 +966,13 @@ def _load_system_health_cached(hold_days=5, recent_window=20):
     """系統失效監控(近期 edge 是否還在),快取 10 分鐘。"""
     return check_system_health(load_history(), CACHE_DIR,
                                hold_days=hold_days, recent_window=recent_window)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_equity_curve_cached(hold_days: int = 5):
+    """系統 picks vs 大盤 走勢(快取 10 分鐘,以 hold_days 為 key)。
+    原本每次 rerun 都重算(掃全歷史+逐筆前進報酬),改快取後切換持有天數才重算。"""
+    return compute_equity_curve(load_history(), CACHE_DIR, hold_days=hold_days)
 
 
 def _compute_sector_health(df_today, history, rs_col=None, lookback_days=6):
@@ -2217,7 +2231,7 @@ with _tab_perf:
                 _eq = None
                 _eq_error = None
                 try:
-                    _eq = compute_equity_curve(load_history(), CACHE_DIR, hold_days=_eq_hold)
+                    _eq = _load_equity_curve_cached(hold_days=_eq_hold)
                 except Exception as _e:
                     _eq_error = str(_e)
                     print(f"⚠ equity curve 計算失敗: {_e}")
@@ -4267,7 +4281,7 @@ with col_list:
 
         # 🏭 主流類股健康度警報:今日最集中的產業近期是否降溫?比季線濾網更早、專剋集中風險。
         # 用今日完整 picks(df)算主導產業與 RS;用 history 算該產業近期入選檔數趨勢。
-        _sh = _compute_sector_health(df, load_history(), rs_col=_rs_col)
+        _sh = _compute_sector_health(df, _load_history_cached(), rs_col=_rs_col)
         if _sh and _sh.get("status") not in (None, "n/a"):
             _dom = _sh["dom"]
             _bits = [f"今日 **{_sh['dom_share']*100:.0f}%** 集中在「{_dom}」"]
