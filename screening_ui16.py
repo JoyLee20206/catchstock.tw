@@ -2102,14 +2102,21 @@ with _tab_perf:
 
                 # ── 📊 系統 picks vs 大盤 後續報酬對照 ─────────────────────────
                 # 「跟著系統走 vs 直接買大盤」誰贏?這是現有勝率/平均報酬看不出來的關鍵問題。
-                # 每個點 = 該入選日所有 picks 的「5 日後平均報酬」vs 同期 ^TWII。
-                # 刻意不做複利(重疊的 5 日窗口複利累加會把報酬灌水),純比點報酬。
+                # 每個點 = 該入選日所有 picks 的「N 日後平均報酬」vs 同期 ^TWII。
+                # 刻意不做複利(重疊的 N 日窗口複利累加會把報酬灌水),純比點報酬。
                 st.divider()
-                st.markdown("**📊 跟著系統走 vs 直接買大盤(每點 = 當日入選股的 5 日後平均報酬)**")
+                _eq_hold = st.selectbox(
+                    "持有天數",
+                    options=[3, 5, 10, 20],
+                    index=1,
+                    key="_eq_hold_days",
+                    help="切換後圖表與 4 卡統計同步更新。建議對照上方「持有天數比較表」挑淨期望值最高的天數。",
+                )
+                st.markdown(f"**📊 跟著系統走 vs 直接買大盤(每點 = 當日入選股的 {_eq_hold} 日後平均報酬)**")
                 _eq = None
                 _eq_error = None
                 try:
-                    _eq = compute_equity_curve(load_history(), CACHE_DIR, hold_days=5)
+                    _eq = compute_equity_curve(load_history(), CACHE_DIR, hold_days=_eq_hold)
                 except Exception as _e:
                     _eq_error = str(_e)
                     print(f"⚠ equity curve 計算失敗: {_e}")
@@ -2119,9 +2126,9 @@ with _tab_perf:
                     st.error(f"❌ 累積曲線計算錯誤: {_eq_error}")
                 elif _eq is None:
                     st.info(
-                        "📊 累積績效曲線**資料不足**: 需要至少 8 個交易日的歷史,"
-                        "且 daily 快取要能對齊每個 pick 的日期。"
-                        "(每筆 pick 都要算進場後 5 個交易日,所以最近 5 天的 pick 都還沒算完)"
+                        f"📊 累積績效曲線**資料不足**: 需要至少 {_eq_hold + 3} 個交易日的歷史,"
+                        f"且 daily 快取要能對齊每個 pick 的日期。"
+                        f"(每筆 pick 都要算進場後 {_eq_hold} 個交易日,所以最近 {_eq_hold} 天的 pick 都還沒算完)"
                     )
                 elif _eq["n_days"] < 3:
                     st.info(
