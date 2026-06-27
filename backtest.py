@@ -14,8 +14,13 @@
 import pandas as pd
 import numpy as np
 
-# 市價單滑價估計(%):以訊號日隔日開盤掛市價,實際成交通常略高於開盤報價
-SLIPPAGE_PCT = 0.1
+# ── 方案 D:真實交易成本(台股來回約 0.55%) ─────────────────────────────
+# 買進:滑價 0.10% + 手續費六折 ~0.09%                              ≈ 0.20%
+# 賣出:手續費六折 ~0.09% + 證券交易稅 0.30%                        ≈ 0.35%
+# 原本 SLIPPAGE_PCT=0.1% 嚴重低估(漏掉手續費和交易稅),尤其傷短線策略
+ENTRY_COST_PCT = 0.20   # 進場成本(進場價乘以 1 + 此值)
+EXIT_COST_PCT  = 0.35   # 出場成本(出場收益乘以 1 - 此值)
+SLIPPAGE_PCT   = ENTRY_COST_PCT  # 向下相容:backtest_quiet.py 仍 import 此名
 
 # ── 訊號參數(與 screening0515.py 同步) ───────────────────────────────
 HIGH_BREAK_DAYS    = 60
@@ -236,6 +241,47 @@ def _load_large_holder_pct_matrix(cache_dir):
     except Exception as e:
         print(f"⚠ 讀取大戶 matrix 失敗: {e}")
         return None
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 方案 B & C:加權指數輔助函式
+# ══════════════════════════════════════════════════════════════════════
+def _load_twii_series(cache_dir):
+    """讀最新 twii parquet,回 DataFrame index=date, columns=[Close,...]。失敗回 None。"""
+    try:
+        files = sorted(cache_dir.glob('twii_*.parquet'))
+        if not files:
+            return None
+        df = pd.read_parquet(files[-1])
+        if df.empty or 'Close' not in df.columns:
+            return None
+        df['date'] = pd.to_datetime(df['date'])
+        return df.drop_duplicates(subset=['date']).set_index('date').sort_index()
+    except Exception:
+        return None
+
+
+def _build_twii_bull_mask(cache_dir, daily_index):
+    """方案 B:大盤多頭遮罩 — TAIEX Close > MA60 的日期為 True,否則 False。
+    用 ffill 對齊 daily_index;讀不到資料時保守回全 True(不過濾)。
+    """
+    twii = _load_twii_series(cache_dir)
+    if twii is None:
+        return pd.Series(True, index=daily_index)
+    ma60 = twii['Close'].rolling(60, min_periods=60).mean()
+    bull = (twii['Close'] > ma60).reindex(daily_index, method='ffill').fillna(False)
+    return bull
+
+
+def _build_twii_fwd_returns(cache_dir, hold_days, daily_index):
+    """方案 C:TAIEX N 日後報酬 Series(%, index=date),供計算超額報酬用。
+    讀不到資料回 None(alpha 欄位會缺失但不崩潰)。
+    """
+    twii = _load_twii_series(cache_dir)
+    if twii is None:
+        return None
+    fwd_pct = (twii['Close'].shift(-hold_days) / twii['Close'] - 1) * 100
+    return fwd_pct.reindex(daily_index, method='ffill')
 
 
 def _load_foreign_net_matrix(cache_dir):
@@ -751,18 +797,18 @@ def compute_signal_returns(signal_matrix, close_matrix, hold_days: int,
     if signal_matrix is None or signal_matrix.empty:
         return pd.DataFrame()
 
-    # exit = 持有後 N 個交易日的收盤
-    exit_close = close_matrix.shift(-hold_days)
+    # 方案 D:出場收益扣除出場成本(手續費六折 + 交易稅)
+    exit_close = close_matrix.shift(-hold_days) * (1 - EXIT_COST_PCT / 100)
 
     # 進場價:隔日開盤(shift(-1)) + 滑價;無開盤資料時用當日收盤
     if open_matrix is not None:
         entry_open_next = open_matrix.shift(-1)   # 把 T+1 的開盤對齊到 T 行
         # 有效性遮罩:開盤必須為正數才採用
         use_open = entry_open_next.notna() & (entry_open_next > 0)
-        entry_price_mat = entry_open_next.where(use_open, close_matrix) * (1 + SLIPPAGE_PCT / 100)
+        entry_price_mat = entry_open_next.where(use_open, close_matrix) * (1 + ENTRY_COST_PCT / 100)
     else:
-        # 無開盤資料(舊 daily 無 open 欄)→ 退回當日收盤進場,仍加滑價,與 performance.py 口徑一致
-        entry_price_mat = close_matrix * (1 + SLIPPAGE_PCT / 100)
+        # 無開盤資料(舊 daily 無 open 欄)→ 退回當日收盤進場,仍加進場成本
+        entry_price_mat = close_matrix * (1 + ENTRY_COST_PCT / 100)
 
     # 把訊號矩陣 stack 成長表
     sig_long = signal_matrix.stack()
@@ -812,7 +858,8 @@ def summarize(trades: pd.DataFrame, hold_days: int = 10) -> dict:
     """
     if trades is None or trades.empty:
         return {"n": 0}
-    rets = trades.sort_values('date')['return_pct'].values
+    _sorted = trades.sort_values('date')
+    rets = _sorted['return_pct'].values
     wins = (rets > 0).sum()
 
     # ── 最大回檔(MDD):假設等權部位、序列交易、複利累積 ──
@@ -829,6 +876,13 @@ def summarize(trades: pd.DataFrame, hold_days: int = 10) -> dict:
     else:
         sharpe = 0.0
 
+    # ── 方案 C:超額報酬(Alpha)──────────────────────────────────────
+    avg_alpha = None
+    if 'excess_return' in trades.columns:
+        excess = _sorted['excess_return'].dropna().values
+        if len(excess) > 0:
+            avg_alpha = float(excess.mean())
+
     return {
         "n":             len(trades),
         "win_rate":      wins / len(trades),
@@ -839,6 +893,7 @@ def summarize(trades: pd.DataFrame, hold_days: int = 10) -> dict:
         "std":           std,
         "mdd":           mdd,
         "sharpe":        sharpe,
+        "avg_alpha":     avg_alpha,  # 方案 C:相對 TAIEX 同期報酬的超額報酬;None = 無大盤資料
     }
 
 
@@ -902,6 +957,7 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
                  date_range: tuple = None, combine_mode: str = "and",
                  dedup_within_hold: bool = True,
                  stock_filter: str = None,
+                 market_filter: bool = True,
                  precomputed: dict = None) -> dict:
     """跑一次回測。
 
@@ -949,6 +1005,30 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
         sig_matrices = built["sig_matrices"]
         open_matrix  = built.get("open_matrix")
 
+    # ── 方案 B:大盤過濾 — 只保留 TAIEX > MA60 的交易日訊號 ──────────────
+    # 目的:讓回測結果反映「選股程式實際運作的市場條件」(選股在熊市門檻會提高)
+    # 避免把「大盤空頭進場」的賠錢交易混入統計,誤判訊號品質。
+    # 注意:從 precomputed 拿到的 sig_matrices 是 cache reference,
+    #       用 dict comprehension 建新 dict + where 確保不修改快取物件。
+    if market_filter:
+        bull_s = _build_twii_bull_mask(cache_dir, matrices['close'].index)
+        sig_matrices = {
+            k: mat.where(bull_s, other=False)
+            for k, mat in sig_matrices.items()
+        }
+
+    # ── 方案 C:大盤 Benchmark Forward Return ─────────────────────────
+    twii_fwd = _build_twii_fwd_returns(cache_dir, hold_days, matrices['close'].index)
+
+    def _add_alpha(trades_df):
+        """合併大盤同期報酬,計算 excess_return = return_pct - benchmark_return。"""
+        if twii_fwd is None or trades_df.empty:
+            return trades_df
+        t = trades_df.copy()
+        t['benchmark_return'] = t['date'].map(twii_fwd)
+        t['excess_return'] = t['return_pct'] - t['benchmark_return'].fillna(0)
+        return t
+
     # ── 個股回測過濾:若指定 stock_filter,只保留該股票欄位 ──
     if stock_filter:
         _sid = str(stock_filter).strip()
@@ -975,13 +1055,14 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
         start, end = date_range
         return mat.loc[(mat.index >= start) & (mat.index <= end)]
 
-    # 對每個訊號算交易與摘要(供對照圖)
+    # 對每個訊號算交易與摘要(供對照圖);加入 alpha 欄位
     all_signals_stats = {}
     for sig_name, sig_mat in sig_matrices.items():
         trades = compute_signal_returns(
             _slice_by_date(sig_mat), matrices['close'], hold_days,
             dedup_within_hold=dedup_within_hold, open_matrix=open_matrix,
         )
+        trades = _add_alpha(trades)
         all_signals_stats[sig_name] = summarize(trades, hold_days=hold_days)
 
     # 算「選定組合」的交易
@@ -999,6 +1080,7 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
         )
         if combined_mat is not None else pd.DataFrame()
     )
+    selected_trades = _add_alpha(selected_trades)
 
     return {
         "signal":            signal,
@@ -1008,4 +1090,5 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
         "trades":            selected_trades,
         "stats":             summarize(selected_trades, hold_days=hold_days),
         "all_signals_stats": all_signals_stats,
+        "market_filter":     market_filter,
     }

@@ -2654,7 +2654,8 @@ def _load_industry_name_map() -> dict:
 
 @st.cache_data(ttl=900, show_spinner="計算交易報酬中…")
 def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
-                         combine_mode: str, dedup: bool, stock_filter: str = ""):
+                         combine_mode: str, dedup: bool, stock_filter: str = "",
+                         market_filter: bool = True):
     """signals_tuple: 用 tuple 才能被 cache_data hash。stock_filter='' 視同全市場。"""
     if date_filter == "all":
         date_range = None
@@ -2667,12 +2668,14 @@ def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
     # cache key 帶結構/訊號版本:每次「改 build_signal_matrices 結構」或「新增/移除訊號」都要 bump,
     # 否則殘留舊 cache(只 Rerun 未 full reboot 時)會找不到新訊號 → 靜默回 0 觸發。
     # v2-nextopen:改隔日開盤結構;v3-tierR:新增反轉訊號(washout/kd_divergence/chip_accumulation)。
+    # v4-cost:修正交易成本、大盤過濾、alpha 計算。
     _cache_key = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "no_data"
-    _precomputed = _build_signal_matrices_cached(f"{_cache_key}|v3-tierR")
+    _precomputed = _build_signal_matrices_cached(f"{_cache_key}|v4-cost")
     return run_backtest(CACHE_DIR, signal=list(signals_tuple), hold_days=hold_days,
                         date_range=date_range, combine_mode=combine_mode,
                         dedup_within_hold=dedup,
                         stock_filter=stock_filter or None,
+                        market_filter=market_filter,
                         precomputed=_precomputed)
 
 
@@ -2924,12 +2927,17 @@ with _tab_bt:
         key="bt_period"
     )
 
-    bcc1, bcc2 = st.columns([1, 2])
+    bcc1, bcc2, bcc3 = st.columns([1, 1, 2])
     dedup_choice = bcc1.checkbox(
         "持倉鎖定期內不重複進場", value=True, key="bt_dedup",
         help="勾選後:同股票進場後在持有天數內的第二次訊號會被忽略,模擬真實「沒平倉前不再買」。\n關掉則是「每天逐日掃描」的原始統計,強勢股會被多次計入。"
     )
-    stock_filter_input = bcc2.text_input(
+    market_filter_choice = bcc2.checkbox(
+        "📊 只在多頭進場(大盤 > MA60)", value=True, key="bt_mkt_filter",
+        help="勾選後:只保留 TAIEX 站上季線(MA60)的交易日觸發的訊號,模擬選股程式「熊市提高門檻」的實際使用情境。\n"
+             "關掉:還原到不分多空的原始統計(通常勝率較低)。"
+    )
+    stock_filter_input = bcc3.text_input(
         "🎯 個股回測(留空 = 全市場)", value="", key="bt_stock_filter",
         placeholder="例:2330",
         help="輸入股票代號就只跑這一檔的歷史訊號績效,例如想看 2454 過去 KD 金叉進場是否能賺錢"
@@ -2940,7 +2948,8 @@ with _tab_bt:
         _bt = {"trades": pd.DataFrame(), "stats": {"n": 0}, "all_signals_stats": {}}
     else:
         _bt = _run_backtest_cached(tuple(sig_choice_multi), hold_choice, period_choice,
-                                   combine_mode_choice, dedup_choice, stock_filter_input)
+                                   combine_mode_choice, dedup_choice, stock_filter_input,
+                                   market_filter_choice)
         # 個股回測且查無資料時的友善提示
         if stock_filter_input and _bt['stats'].get('n', 0) == 0:
             st.warning(f"⚠ 個股 {stock_filter_input} 在所選期間/訊號下無觸發,試試擴大期間或換訊號組合。")
@@ -2955,6 +2964,13 @@ with _tab_bt:
         st.info("此訊號在所選期間內無觸發紀錄。試試擴大期間或換訊號。")
     else:
         stats = _bt['stats']
+
+        # ── 大盤過濾狀態提示 ──
+        _mf_on = _bt.get('market_filter', True)
+        if _mf_on:
+            st.caption("📊 大盤過濾：**開啟** — 僅計入 TAIEX > MA60 的多頭期間觸發，模擬實際使用情境")
+        else:
+            st.caption("📊 大盤過濾：關閉 — 包含多空全期間統計（含熊市進場）")
 
         # ── ⚠️ 樣本數不足警示:< 30 筆統計不顯著,易受極端值影響 ──
         if stats['n'] < 30:
@@ -2976,11 +2992,12 @@ with _tab_bt:
                   f"最佳 {stats['max_return']:+.2f}%",
                   delta_color="inverse")
 
-        # 第二列:風險指標(MDD / Sharpe / Std)
-        r1, r2, r3 = st.columns(3)
-        _mdd = stats.get('mdd', 0)
+        # 第二列:風險指標 + Alpha
+        r1, r2, r3, r4 = st.columns(4)
+        _mdd    = stats.get('mdd', 0)
         _sharpe = stats.get('sharpe', 0)
-        _std = stats.get('std', 0)
+        _std    = stats.get('std', 0)
+        _alpha  = stats.get('avg_alpha')
         # MDD 評級
         if _mdd >= -10:
             _mdd_eval = "✅ 低風險"
@@ -2997,6 +3014,15 @@ with _tab_bt:
             _sharpe_eval = "🟡 一般"
         else:
             _sharpe_eval = "🔴 不及格"
+        # Alpha 評級
+        if _alpha is None:
+            _alpha_str, _alpha_eval = "N/A", "需 twii 快取"
+        elif _alpha > 1:
+            _alpha_str, _alpha_eval = f"{_alpha:+.2f}%", "🌟 有顯著 Alpha"
+        elif _alpha > 0:
+            _alpha_str, _alpha_eval = f"{_alpha:+.2f}%", "✅ 小幅跑贏"
+        else:
+            _alpha_str, _alpha_eval = f"{_alpha:+.2f}%", "🔴 未跑贏大盤"
         r1.metric("📉 最大回檔(MDD)", f"{_mdd:+.2f}%", _mdd_eval,
                   delta_color="off",
                   help="累積資金曲線從高點到低點的最大跌幅。\n-10% 內算低風險;-20% 中等;-20%+ 高風險。")
@@ -3007,6 +3033,11 @@ with _tab_bt:
                   "波動大" if _std > 8 else "波動低",
                   delta_color="off",
                   help="單筆報酬的標準差。越小代表報酬越穩定。")
+        r4.metric("🎯 超額報酬(Alpha)", _alpha_str, _alpha_eval,
+                  delta_color="off",
+                  help="個股平均報酬 − 同期 TAIEX 報酬。\n"
+                       "> 0 代表訊號有真正 Alpha(不只是搭大盤順風車);\n"
+                       "< 0 代表跑輸指數,買 ETF 即可。")
 
         # ── 全訊號對照圖 ──
         st.divider()
@@ -3081,7 +3112,8 @@ with _tab_bt:
                     try:
                         _bt_s = _run_backtest_cached(
                             tuple(sig_choice_multi), _hd, period_choice,
-                            combine_mode_choice, dedup_choice, stock_filter_input
+                            combine_mode_choice, dedup_choice, stock_filter_input,
+                            market_filter_choice
                         )
                         _s = _bt_s.get('stats', {"n": 0})
                         if _s.get('n', 0) > 0:

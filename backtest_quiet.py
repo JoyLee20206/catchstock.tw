@@ -23,7 +23,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from backtest import _load_daily_matrix, compute_signal_returns, summarize, SLIPPAGE_PCT
+from backtest import (_load_daily_matrix, compute_signal_returns, summarize,
+                      SLIPPAGE_PCT, ENTRY_COST_PCT, EXIT_COST_PCT)
 
 CACHE = Path("cache")
 
@@ -212,7 +213,8 @@ def backtest(cache_dir=None):
         "asof": close.index.max().strftime("%Y-%m-%d"),
         "start": close.index.min().strftime("%Y-%m-%d"),
         "n_days": len(close.index),
-        "slippage": SLIPPAGE_PCT,
+        "entry_cost": ENTRY_COST_PCT,
+        "exit_cost":  EXIT_COST_PCT,
         "retail_any_active": any_active,
         "n_weeks": n_weeks,
         "retail_msg": retail_msg,
@@ -226,7 +228,7 @@ def run():
         print(res["error"]); sys.exit(1)
     mt = res["meta"]
     print(f">>> 籌碼沉澱規則 對照組回測(自適應) | daily {mt['start']} ~ {mt['asof']} "
-          f"({mt['n_days']} 交易日) | 滑價 {mt['slippage']}% | 隔日開盤進場")
+          f"({mt['n_days']} 交易日) | 進場 {mt['entry_cost']}% / 出場 {mt['exit_cost']}% | 隔日開盤進場")
     print(f">>> {mt['retail_msg']}\n")
     for h in res["horizons"]:
         print(f"━━━ 持有 {h['hold']} 交易日(≈{h['months']} 個月) | {h['retail_note']} ━━━")
