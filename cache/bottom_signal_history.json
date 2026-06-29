@@ -452,7 +452,7 @@
       "us_10y": false,
       "dxy_fall": true,
       "twd_stable": false,
-      "sox_no_low": true,
+      "sox_no_low": false,
       "news_dulled": false,
       "news_resolved": false
     }
