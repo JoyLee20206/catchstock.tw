@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 1.25 兆(0.90×均) +2.5%",
+   "value": "量 1.27 兆(0.91×均) +2.5%",
    "manual": false,
    "observe": false
   },
@@ -185,8 +185,8 @@
    "key": "dxy_fall",
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
-   "ok": false,
-   "value": "101.4 → 101.4",
+   "ok": true,
+   "value": "101.4 → 101.3",
    "manual": false,
    "observe": false
   },
@@ -234,6 +234,6 @@
  "level": 2,
  "level_label": "在打底",
  "level_icon": "🟠",
- "n_ok": 10,
- "generated_at": "2026-06-30 08:31"
+ "n_ok": 11,
+ "generated_at": "2026-06-30 11:20"
 }
