@@ -460,7 +460,7 @@
   {
     "date": "2026-06-30",
     "level": 2,
-    "n_ok": 11,
+    "n_ok": 12,
     "vixtwn": 38.55,
     "items": {
       "gate": true,
@@ -482,10 +482,10 @@
       "pc_falloff": false,
       "tsmc_no_low": true,
       "tsmc_ma": false,
-      "us_10y": false,
+      "us_10y": true,
       "dxy_fall": true,
       "twd_stable": true,
-      "sox_no_low": false,
+      "sox_no_low": true,
       "news_dulled": false,
       "news_resolved": false
     }
