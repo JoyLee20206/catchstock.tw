@@ -105,7 +105,7 @@
    "group": "04 信用與廣度",
    "name": "融資減幅收斂",
    "ok": true,
-   "value": "今 +13.4 萬張 / 近日均減 8.5 萬張",
+   "value": "今 +1.0 萬張 / 近日均減 8.5 萬張",
    "manual": false,
    "observe": true
   },
@@ -176,8 +176,8 @@
    "key": "us_10y",
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
-   "ok": false,
-   "value": "4.40% → 4.37%",
+   "ok": true,
+   "value": "4.39% → 4.46%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "101.1 → 101.4",
+   "value": "101.1 → 101.3",
    "manual": false,
    "observe": false
   },
@@ -204,7 +204,7 @@
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
    "ok": true,
-   "value": "今低 13,751 / 前10日低 12,783",
+   "value": "今低 13,454 / 前10日低 12,783",
    "manual": false,
    "observe": true
   },
@@ -234,6 +234,6 @@
  "level": 2,
  "level_label": "在打底",
  "level_icon": "🟠",
- "n_ok": 10,
- "generated_at": "2026-07-01 11:33"
+ "n_ok": 11,
+ "generated_at": "2026-07-01 16:03"
 }

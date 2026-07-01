@@ -493,7 +493,7 @@
   {
     "date": "2026-07-01",
     "level": 2,
-    "n_ok": 10,
+    "n_ok": 11,
     "vixtwn": 38.12,
     "items": {
       "gate": true,
@@ -515,7 +515,7 @@
       "pc_falloff": false,
       "tsmc_no_low": true,
       "tsmc_ma": true,
-      "us_10y": false,
+      "us_10y": true,
       "dxy_fall": false,
       "twd_stable": true,
       "sox_no_low": true,
