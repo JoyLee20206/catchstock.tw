@@ -2484,8 +2484,8 @@ with _tab_perf:
                     )
                 else:
                     st.caption(
-                        "每個計分條件「有觸發 vs 沒觸發」時,後續 5 日報酬的差異(edge)。"
-                        "edge 為正 = 該訊號確實加值;接近 0 或負 = 可能沒幫助甚至拖累,值得檢討權重。"
+                        "每個計分條件「有觸發 vs 沒觸發」時,後續 5 日報酬的差異(即下表的「報酬差」)。"
+                        "報酬差為正 = 該訊號確實加值;接近 0 或負 = 可能沒幫助甚至拖累,值得檢討權重。"
                     )
                     _MIN_RELIABLE_N = 20   # 觸發/未觸發任一組少於此值 → edge 由少數股票主導,標不可信
                     _has_unreliable = False
@@ -2504,25 +2504,36 @@ with _tab_perf:
                         else:
                             _edge_cell = f"{_edge:+.2f}% ⚠️"
                             _has_unreliable = True
+                        # 勝率差(百分點)= 有訊號勝率 − 沒訊號勝率。與報酬差交叉看:
+                        # 兩個都正 = 穩定;報酬差正但勝率差≈0/負 = edge 靠少數大賺撐、不穩。
+                        if _on and _off:
+                            _wr_cell = f"{(_on['win_rate'] - _off['win_rate']) * 100:+.0f}%"
+                        else:
+                            _wr_cell = "—"
                         _ar_rows.append({
                             "計分條件": _SIG_DISPLAY.get(_s["key"], _s["key"]),
                             "觸發樣本": _on_n,
                             "觸發平均報酬": f"{_on['avg']:+.2f}%" if _on else "—",
                             "未觸發樣本": _off_n,
                             "未觸發平均報酬": f"{_off['avg']:+.2f}%" if _off else "—",
-                            "edge(差)": _edge_cell,
+                            "報酬差": _edge_cell,
+                            "勝率差": _wr_cell,
                         })
                     st.dataframe(pd.DataFrame(_ar_rows), use_container_width=True, hide_index=True)
+                    st.caption(
+                        "📌 **報酬差 vs 勝率差 交叉看**:兩個都正 = 訊號穩定有效(常常小贏);"
+                        "報酬差正但勝率差 ≈0 或負 = 這個報酬差是靠少數幾檔大賺撐出來的,不穩定,別太依賴。"
+                    )
                     if _has_unreliable:
                         st.caption(
-                            f"⚠️ = 觸發或未觸發任一組樣本 < {_MIN_RELIABLE_N} 筆,該 edge 由少數股票主導、"
+                            f"⚠️ = 觸發或未觸發任一組樣本 < {_MIN_RELIABLE_N} 筆,該報酬差由少數股票主導、"
                             f"不可信(例:某訊號幾乎每檔都中,「未觸發」只剩 2~4 檔,那個差值是雜訊)。"
                             f"目前只有「券相關」「RS」兩邊樣本較足。"
                         )
                     if _attr["n_eval"] < 30:
                         st.caption(
                             f"📊 樣本 {_attr['n_eval']} 筆,且訊號彼此相關(多數 pick 同時觸發多個)——"
-                            f"edge 僅供方向參考,別據此改權重。"
+                            f"報酬差僅供方向參考,別據此改權重。"
                         )
 
                 # ── 🚪 出場規則回測(何時賣最賺?) ──
