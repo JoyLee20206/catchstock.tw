@@ -24,7 +24,10 @@ PREFERRED_AI = os.environ.get("PREFERRED_AI_MODEL", "").strip().lower()
 # 429 重試設定
 RETRY_429_WAIT  = 15   # 收到 429 等幾秒再 retry 同一支
 RETRY_429_TIMES = 1    # 同一支 429 最多 retry 次數 (1 = 等一次後再試一次)
-MAX_TOTAL_429   = 3    # 跨模型累計 429 上限,超過直接放棄(保護當日配額)
+MAX_TOTAL_429   = 6    # 跨模型累計 429 上限,超過直接放棄。
+                       # 設 6:實測每天僅用 ~3 次、離每日 50 次上限很遠,配額充足,
+                       # 故放寬到讓 auto→Qwen→Gemma→Llama 每支都有機會輪到(免費模型是全球共用、
+                       # 會臨時塞車,換一支常就通)。若哪天改用付費/額度吃緊,再調回小一點。
 
 # 503 重試設定(Service Unavailable 通常是平台短暫過載,等 3 秒再試大多會通)
 RETRY_503_WAIT  = 3    # 收到 503 等幾秒再 retry 同一支
