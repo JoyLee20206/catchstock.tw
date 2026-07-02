@@ -2615,13 +2615,21 @@ with _tab_perf:
                                    and v["avg_days"] >= 9), None)  # 拿最長固定持有當對照
                     if _stop5 and _fixed:
                         _worst_cut = _fixed["worst"] - _stop5["worst"]   # 正值 = 停損把虧損縮小
+                        _best_daily = max((s["daily"] for s in _ex["strategies"]), default=0)
+                        _stop5_top = _stop5["daily"] >= _best_daily - 1e-9   # -5% 停損是否仍為效率第一
+                        _eff_clause = (
+                            f"目前它的日均報酬 {_stop5['daily']:+.3f}% 也剛好是各策略最高(效率最好)。"
+                            if _stop5_top else
+                            f"目前日均報酬 {_stop5['daily']:+.3f}%(非最高——偏漲盤裡抱久一點反而效率好些)。"
+                        )
                         st.success(
-                            f"💡 **建議:替每檔設 −5% 停損**。"
+                            f"💡 **停損的核心價值是「控制風險」,不是提高報酬**。"
                             f"回測顯示固定抱滿時最慘單筆會賠 {_fixed['worst']:.1f}%,"
                             f"加上 −5% 停損後最慘只賠 {_stop5['worst']:.1f}%"
-                            f"(**少虧 {abs(_worst_cut):.1f} 個百分點**),"
-                            f"而且日均報酬 {_stop5['daily']:+.3f}% 還是各策略最高(效率最好)。"
-                            f"代價是勝率降到 {_stop5['win_rate']*100:.0f}%(常被洗出場),但換來大跌時的保護。"
+                            f"(**少虧 {abs(_worst_cut):.1f} 個百分點**——這個保護最穩定、不隨樣本跳動)。"
+                            f"{_eff_clause}"
+                            f"代價是勝率降到 {_stop5['win_rate']*100:.0f}%(常被洗出場)。"
+                            f"  \n⚠️ 各策略的報酬名次會隨樣本變動,別只追當下第一名;停損請以「防大跌」為目的採用。"
                             f"  \n選股表與每日推播已對每檔標出「🛑建議停損價(現價−5%)」,可直接照用。"
                         )
                     if _ex["n"] < 30:
@@ -4373,7 +4381,7 @@ def _render_pick_list():
         filtered = filtered.reset_index(drop=True)
         event = st.dataframe(filtered, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
         if '🛑建議停損' in filtered.columns:
-            st.caption("🛑 **建議停損 = 現價 −5%**:回測中最佳防守線(把最慘單筆從 -31% 砍到 -13%,效率也最高)。僅供參考,實際進場價不同請自行換算。")
+            st.caption("🛑 **建議停損 = 現價 −5%**:主要作用是防大跌(把最慘單筆從約 -31% 砍到約 -13%)——這個保護最穩定。報酬名次會隨樣本變動,故以「風險保護」為目的。僅供參考,實際進場價不同請自行換算。")
 
         st.divider()
         st.subheader("📥 下載匯入檔")
