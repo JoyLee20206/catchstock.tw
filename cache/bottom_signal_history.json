@@ -526,7 +526,7 @@
   {
     "date": "2026-07-02",
     "level": 2,
-    "n_ok": 11,
+    "n_ok": 13,
     "vixtwn": 37.82,
     "items": {
       "gate": true,
@@ -543,15 +543,15 @@
       "margin_calm": true,
       "breadth_falloff": false,
       "fut_basis": false,
-      "f_spot": false,
+      "f_spot": true,
       "fi_cover": false,
       "pc_falloff": true,
       "tsmc_no_low": true,
       "tsmc_ma": true,
-      "us_10y": false,
+      "us_10y": true,
       "dxy_fall": true,
-      "twd_stable": false,
-      "sox_no_low": true,
+      "twd_stable": true,
+      "sox_no_low": false,
       "news_dulled": false,
       "news_resolved": false
     }
