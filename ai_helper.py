@@ -31,18 +31,16 @@ RETRY_503_WAIT  = 3    # 收到 503 等幾秒再 retry 同一支
 RETRY_503_TIMES = 1    # 同一支 503 最多 retry 次數
 
 # 模型清單(依優先序排列,前面失敗就試下一個)
-# ⚠️ 免費模型可用性會變動,部署前建議到 https://openrouter.ai/models?max_price=0 確認
-# ⚠️ 維護要點:
-#   1. 每 1~2 個月回 https://openrouter.ai/models?max_price=0 確認此清單
-#   2. 中文語意能力概略順序:DeepSeek ≈ Qwen ≈ GLM > Llama > Mistral
-#   3. 第一位放 openrouter/auto:free 讓平台自選當下可用免費模型
+# ⚠️ 策略(2026-07):中文點評優先用 Qwen(中文最強);auto:free 當「不會 404」的穩定後備
+#    (具體免費代號常改名/下架、寫死會 404;auto:free 由平台自動挑當下可用免費模型)。
+#    → 免費額度用完(429)那天所有免費模型都會失敗,屬正常;AI 點評失敗不影響推播照發。
+# ⚠️ 免費代號會過期:失效就到 https://openrouter.ai/models?max_price=0 複製「當下」正確代號替換。
+#    想穩定不掉線 → 儲值 $10 改用便宜付費代號(如 deepseek/deepseek-chat)。
 AI_MODELS = [
-    {"id": "openrouter/auto:free",                       "name": "Auto Free Router"},
-    {"id": "deepseek/deepseek-chat-v3-0324:free",        "name": "DeepSeek V3"},
-    {"id": "qwen/qwen-2.5-72b-instruct:free",            "name": "Qwen 2.5"},
-    {"id": "google/gemini-2.0-flash-exp:free",           "name": "Gemini 2.0"},
-    {"id": "openai/gpt-oss-20b:free",                    "name": "GPT-OSS 20B"},
-    {"id": "meta-llama/llama-3.3-70b-instruct:free",     "name": "Llama 3.3"},
+    {"id": "qwen/qwen3-next-80b-a3b-instruct:free",  "name": "Qwen3 Next 80B"},   # 中文最強,優先
+    {"id": "openrouter/auto:free",                   "name": "Auto Free Router"}, # 穩定後備,不會 404
+    {"id": "google/gemma-4-31b-it:free",             "name": "Gemma 4 31B"},      # 多語(140+),中文佳
+    {"id": "meta-llama/llama-3.3-70b-instruct:free", "name": "Llama 3.3(備援)"},
 ]
 
 
@@ -129,7 +127,10 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
                 j = resp.json()
 
                 if "choices" in j and j["choices"]:
-                    text = j["choices"][0]["message"]["content"].strip()
+                    # 防禦:有些模型回傳 content=null(把答案放在 reasoning 欄)或缺 message,
+                    # 直接 .strip() 會噴 'NoneType' object has no attribute 'strip'
+                    _msg = j["choices"][0].get("message") or {}
+                    text = (_msg.get("content") or _msg.get("reasoning") or "").strip()
                     for tok in ("###", "##", "**", "*", "`"):
                         text = text.replace(tok, "")
                     text = text.strip()
