@@ -96,6 +96,8 @@ KD_HIGH_CAP_NOW  = 80    # 今日 K 上限:超過此值代表已超買,即使曾
 MARKET_INDEX_TICKER = "^TWII"  # 加權指數 (yfinance ticker)
 MARKET_MA_DAYS      = 60       # 大盤季線判斷 (大盤跌破則 PASS_SCORE 自動 +1)
 MARKET_MA_SHORT     = 20       # 大盤月線:站上季線但跌破月線 (或近 20 日下跌) → 視為「盤整/修正」
+MARKET_HOT_BIAS_PCT = 10.0     # 大盤「過熱」門檻:指數高出季線超過此 % 視為位階過熱(頭部風險)。
+                               # 過熱時,同分排序不再看「比大盤強(RS)」,避免把最延伸的股排到最前面。
 RS_LOOKBACK         = 20       # 個股 vs 大盤的 N 日漲幅比較 (RS 計分用)
 
 # 預篩條件 (不計分,未達標直接剔除)
@@ -456,6 +458,7 @@ def run_screening(
     print(">>> 抓取大盤指數 (^TWII) 用於 RS 與趨勢過濾...")
     market_bullish        = True
     market_consolidating  = False   # 站上季線但跌破月線/近 20 日下跌 → 盤整修正 (RS 關閉 + 籌碼硬門票)
+    market_overheated     = False   # 指數高出季線 > MARKET_HOT_BIAS_PCT → 位階過熱(排序不看 RS)
     twii_lookback_change  = 0.0
     market_data_ok        = False
     twii_close            = None    # Bug #3 修正:提到 try 外讓個股 RS 迴圈能用,做日期對齊查表
@@ -518,6 +521,8 @@ def run_screening(
             twii_now   = float(twii_close.iloc[-1])
             twii_ma    = float(twii_close.tail(MARKET_MA_DAYS).mean())
             market_bullish = twii_now > twii_ma
+            # 位階過熱:指數高出季線超過門檻 → 頭部風險,排序改不看 RS(避免追最延伸的股)
+            market_overheated = twii_ma > 0 and (twii_now - twii_ma) / twii_ma * 100 > MARKET_HOT_BIAS_PCT
             if len(twii_close) > RS_LOOKBACK:
                 ref = twii_close.iloc[-RS_LOOKBACK - 1]
                 if pd.notna(ref) and ref > 0:
@@ -1086,11 +1091,21 @@ def run_screening(
         })
 
     if results:
-        # 排序: 總分 → 籌碼共振 → RS → 外資淨額
-        df = pd.DataFrame(results).sort_values(
-            ["總分", "★籌碼共振(大戶↑散戶↓)", "RS優於大盤", "外資5日淨額(張)"],
-            ascending=[False, False, False, False]
-        )
+        df = pd.DataFrame(results)
+        # 主力吃貨強度 = 大戶累計增幅 −(散戶累計變化);散戶跑越兇(負越大)此值越大。缺值以 0 計。
+        df["·主力吃貨強度"] = (df["·大戶累計變化(%)"].fillna(0)
+                              - df["·散戶累計變化(%)"].fillna(0))
+        # 同分排序:總分 → 籌碼共振 →(大盤未過熱才看)RS → 主力吃貨強度
+        # 末層由「外資淨額(張)」改為「主力吃貨強度」:外資淨額無鑑別力且偏袒大型股;
+        # 大盤過熱時再拿掉 RS,避免頭部把最延伸(漲最多)的股排到最前面。
+        _sort_cols = ["總分", "★籌碼共振(大戶↑散戶↓)"]
+        _sort_asc  = [False, False]
+        if not market_overheated:
+            _sort_cols.append("RS優於大盤"); _sort_asc.append(False)
+        _sort_cols.append("·主力吃貨強度"); _sort_asc.append(False)
+        df = df.sort_values(_sort_cols, ascending=_sort_asc)
+        if market_overheated:
+            print("   [排序] 大盤位階過熱 → 同分排序不看 RS,改以「主力吃貨強度」優先")
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         out = output_dir / f"選股結果_{stamp}.xlsx"
         try:
