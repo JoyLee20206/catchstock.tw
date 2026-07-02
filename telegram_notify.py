@@ -212,6 +212,20 @@ def main():
 
         header += "━━━━━━━━━━━━━━\n\n"
 
+        # ── 5a. 先算大盤情緒溫度(AI prompt 語氣 + 下方推播檔數共用,只算一次)──
+        sentiment_section = ""
+        _temp = None            # 大盤溫度 0~100
+        _sent_label = ""        # 溫度標籤(略偏空/中性…)
+        try:
+            sentiment = compute_sentiment(CACHE_DIR)
+            _temp = sentiment.get("temperature")
+            _sent_label = sentiment.get("label", "")
+            _sent_text = format_sentiment_for_tg(sentiment)
+            if _sent_text:
+                sentiment_section = _sent_text + "━━━━━━━━━━━━━━\n"
+        except Exception as e:
+            print(f"⚠ 大盤情緒指標產生失敗(略過): {e}")
+
         # ── 5. AI 點評(模型輪替) ──────────────────────────
         ai_comment = ""
         if df is not None and not df.empty:
@@ -263,34 +277,51 @@ def main():
             except Exception as _e:
                 print(f"⚠ 熱度榜計算失敗,AI prompt 不含此項: {_e}")
 
+            # 溫度行:有算到才放(避免空行);backslash 不能進 f-string 運算式,故先組好
+            _temp_line = (
+                f"大盤溫度:{_temp}/100 {_sent_label}(高=偏熱,低=偏冷/頭部風險)\n"
+                if _temp is not None else ""
+            )
+            # 今日聚焦前 3 強(df 已依主力吃貨強度排序),含共振與吃貨強度供 AI 判讀
+            _top_lines = []
+            for _i, (_, _r) in enumerate(df.head(3).iterrows(), 1):
+                _seg = [f"{_i}. {_r['代號']} {_r['名稱']}({_r['總分']}分)"]
+                if _r.get("★籌碼共振(大戶↑散戶↓)") == 1:
+                    _seg.append("籌碼共振")
+                _st = _r.get("·主力吃貨強度")
+                if _st is not None and _st == _st:   # 非 None 且非 NaN
+                    _seg.append(f"吃貨強度{_st:+.1f}")
+                _top_lines.append("、".join(_seg))
+            _top_ctx = "\n".join(_top_lines)
+
             prompt = (
-                f"你是台灣股市的盤後資深分析師,用 70~100 繁體中文字寫今日盤後重點。\n"
+                f"你是台灣股市的盤後資深分析師,用 90~130 繁體中文字寫今日盤後重點。\n"
                 f"\n"
                 f"【今日盤勢】\n"
                 f"大盤:{market_status}({twii_pct_str})\n"
+                f"{_temp_line}"
                 f"達標:{len(df)} 檔"
                 f"{f',退場 {n_exit} 檔' if n_exit > 0 else ''}\n"
                 f"{industry_ctx}"
                 f"{hot_ctx}"
                 f"\n"
-                f"【冠軍標的】\n"
-                f"{sid_top} {name_top}(總分 {score_top}/11)"
-                f"{'、帶量突破' if is_breakout else ''}"
-                f"{'、籌碼共振(大戶增散戶減)' if is_sync else ''}\n"
+                f"【今日聚焦(依主力吃貨強度排序,前3強)】\n"
+                f"{_top_ctx}\n"
+                f"(吃貨強度=大戶增持−散戶減持,越高代表主力吸籌越明顯)\n"
                 f"\n"
                 f"【分數系統說明】\n"
-                f"滿分 11(大戶上升、散戶下降各佔 2 分,券相關停用不計分,其餘各 1 分),"
-                f"過關門檻 8,實務最高約 9~10 分。\n"
-                f"故 9 分以上視同冠軍級訊號(必含大戶+散戶雙籌碼),8 分為合格(現行門檻),"
-                f"7 分為邊緣(僅在大盤資料缺失自動降標時出現)。\n"
+                f"滿分 11(大戶上升、散戶下降各 2 分,其餘各 1 分),門檻 8,實務最高約 9~10 分。\n"
+                f"9 分以上=冠軍級(必含大戶+散戶雙籌碼),8 分=合格。\n"
                 f"\n"
                 f"【寫作規範】\n"
                 f"1. 先點出今日「最值得注意的 1 個現象」"
-                f"(例:產業集中度、退場潮、熱門股是否退場、冠軍特性)\n"
-                f"2. 接一句具體的「明日該觀察什麼」提醒\n"
-                f"3. 不要重複我給的數字。禁止使用以下廢話:"
-                f"「持續觀察」「值得關注」「動能強勁」「投資者情緒」「淨流入」「穩健向上」\n"
-                f"4. 簡單句,不堆疊形容詞,純文字無 Markdown\n"
+                f"(產業集中度、退場潮、熱門股去留、聚焦股的籌碼特性)\n"
+                f"2. 接一句「明日該觀察什麼」;若大盤溫度偏低或過熱,提醒控制部位、守停損、別追高\n"
+                f"3. 只做客觀盤後觀察,禁止喊買賣、禁止給進出場價位或目標價\n"
+                f"4. 不要重複我給的數字。禁用廢話:"
+                f"「持續觀察」「值得關注」「動能強勁」「投資者情緒」「淨流入」「穩健向上」"
+                f"「布局」「卡位」「補漲」「輪動」\n"
+                f"5. 簡單句,不堆疊形容詞,純文字無 Markdown\n"
             )
 
             model_name, ai_text = call_openrouter_ai(prompt, max_tokens=300)
@@ -314,18 +345,7 @@ def main():
                     f"━━━━━━━━━━━━━━\n"
                 )
 
-        # ── 5b. 大盤情緒指標 ──────────────────────────────
-        # 詳細區塊放在 AI 點評之後、個股清單之前(獨立區塊)
-        sentiment_section = ""
-        _temp = None   # 大盤溫度,供下方決定推播檔數
-        try:
-            sentiment = compute_sentiment(CACHE_DIR)
-            _temp = sentiment.get("temperature")
-            sentiment_text = format_sentiment_for_tg(sentiment)
-            if sentiment_text:
-                sentiment_section = sentiment_text + "━━━━━━━━━━━━━━\n"
-        except Exception as e:
-            print(f"⚠ 大盤情緒指標產生失敗(略過): {e}")
+        # ── 5b. 大盤情緒指標:已於 5a 提前計算(sentiment_section / _temp),此處不重算 ──
 
         # ── 6. 個股清單 + tags(新進 / 連 N 日 / 突破)+ 漲跌幅 ─
         change_pct_map = load_change_pct_map()  # {sid: pct}
