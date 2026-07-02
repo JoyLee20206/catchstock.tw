@@ -539,13 +539,24 @@ def backtest_exit_rules(history: list, cache_dir, max_hold: int = 10) -> dict:
                 return r, d
         return path[-1], len(path)
 
+    def _stop_tp(path, stop_pct, tp_pct):  # 停損 -stop_pct% 或停利 +tp_pct%,先到者出場,否則持滿
+        for d, r in enumerate(path, start=1):
+            if r <= -stop_pct:             # 同日以收盤判定,停損優先(保守)
+                return r, d
+            if r >= tp_pct:
+                return r, d
+        return path[-1], len(path)
+
     _STRATS = [
         (f"固定持有 {min(5, max_hold)} 日",  lambda p: _fixed(p, 5)),
         (f"固定持有 {max_hold} 日",          lambda p: _fixed(p, max_hold)),
         ("停損 -5%(否則持滿)",              lambda p: _stop(p, 5)),
         ("停損 -8%(否則持滿)",              lambda p: _stop(p, 8)),
         ("移動停損 8%(高點回落)",           lambda p: _trailing(p, 8)),
+        ("移動停損 5%(高點回落)",           lambda p: _trailing(p, 5)),
         ("停利 +10%(否則持滿)",             lambda p: _take_profit(p, 10)),
+        ("停損-5% + 停利+10%",              lambda p: _stop_tp(p, 5, 10)),
+        ("停損-8% + 停利+15%",              lambda p: _stop_tp(p, 8, 15)),
     ]
 
     strategies = []
@@ -939,9 +950,9 @@ def compare_chip_resonance(history: list, cache_dir, hold_days: int = 5) -> dict
     """籌碼共振 vs 非共振的前進報酬對照。
 
     把入選股依 sig 裡的籌碼訊號分三組:
-      - 共振組:投信+外資雙買(sig["雙買"]==1)
-      - 其一組:投信或外資其中一個買超(但非雙買)
-      - 一般組:投信/外資皆無觸發
+      - 共振組:大戶↑ 且 散戶↓ 同時成立(sig["大戶"]==1 且 sig["散戶"]==1)
+      - 其一組:大戶↑ 或 散戶↓ 其中之一
+      - 一般組:兩者皆無
 
     比較各組後續 N 日報酬,回傳結構供 UI 顯示。
 
@@ -957,7 +968,7 @@ def compare_chip_resonance(history: list, cache_dir, hold_days: int = 5) -> dict
     if matrices is None:
         return {"error": "無法讀取 daily 快取"}
 
-    recs = {"共振(投信+外資雙買)": [], "其一(投信或外資)": [], "一般(無法人)": []}
+    recs = {"共振(大戶↑且散戶↓)": [], "其一(大戶↑或散戶↓)": [], "一般(皆無)": []}
     n_with_sig = 0
     for entry in history:
         if entry.get("date") == "legacy":
@@ -977,12 +988,14 @@ def compare_chip_resonance(history: list, cache_dir, hold_days: int = 5) -> dict
             ret = _forward_return(matrices, sid, entry_ts, hold_days)
             if ret is None:
                 continue
-            if sig.get("雙買") == 1:
-                recs["共振(投信+外資雙買)"].append(ret)
-            elif sig.get("投信") == 1 or sig.get("外資") == 1:
-                recs["其一(投信或外資)"].append(ret)
+            _large = sig.get("大戶") == 1
+            _small = sig.get("散戶") == 1
+            if _large and _small:
+                recs["共振(大戶↑且散戶↓)"].append(ret)
+            elif _large or _small:
+                recs["其一(大戶↑或散戶↓)"].append(ret)
             else:
-                recs["一般(無法人)"].append(ret)
+                recs["一般(皆無)"].append(ret)
 
     n_eval = sum(len(v) for v in recs.values())
     if n_eval == 0:
@@ -1005,7 +1018,7 @@ def compare_chip_resonance(history: list, cache_dir, hold_days: int = 5) -> dict
 
     # edge = 共振組均報酬 − 其餘兩組合併均報酬
     resonance_avg = groups[0]["avg"] if groups[0]["n"] > 0 else None
-    rest_vals = recs["其一(投信或外資)"] + recs["一般(無法人)"]
+    rest_vals = recs["其一(大戶↑或散戶↓)"] + recs["一般(皆無)"]
     rest_avg = sum(rest_vals) / len(rest_vals) if rest_vals else None
     edge = (resonance_avg - rest_avg) if (resonance_avg is not None and rest_avg is not None) else None
 

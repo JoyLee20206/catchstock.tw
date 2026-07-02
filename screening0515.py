@@ -971,14 +971,21 @@ def run_screening(
     print(f"    · KD 漏斗: 可計算 {_kd_diag['eval']} → 今日仍金叉狀態 {_kd_diag['state_ok']} "
           f"→ 近{KD_LOOKBACK}日有發動金叉 {_kd_diag['cross_found']} "
           f"→ 其中屬低檔(K<{KD_LOW_FROM}) {_kd_diag['cross_low']}")
-    # 月營收模式分佈:卡在 資料不足/春節跳過/月份不連續/未達 哪一關
+    # 月營收模式分佈 + 快取覆蓋:區分「pipeline 壞了(空)」vs「只是月數還不夠(累積中)」
+    if not revenue_df.empty and {'revenue_year', 'revenue_month'}.issubset(revenue_df.columns):
+        _rev_months = revenue_df[['revenue_year', 'revenue_month']].drop_duplicates().shape[0]
+        _rev_cov = f"快取 {len(revenue_df):,} 筆 / 約 {_rev_months} 個月"
+    else:
+        _rev_cov = "快取 空或缺欄位 (pipeline 問題,非累積不足)"
     _rev_reasons = {}
     for _v in rev_mode_map.values():
         _rev_reasons[_v] = _rev_reasons.get(_v, 0) + 1
     if _rev_reasons:
-        print("    · 月營收模式分佈: " + ", ".join(f"{k}={v}" for k, v in sorted(_rev_reasons.items())))
+        print(f"    · 月營收: {_rev_cov};模式分佈: "
+              + ", ".join(f"{k}={v}" for k, v in sorted(_rev_reasons.items())))
     else:
-        print("    · 月營收模式分佈: (空 — revenue 快取可能無資料/月數不足/欄位缺漏)")
+        print(f"    · 月營收: {_rev_cov};模式分佈空 → 需 ≥{12 + REVENUE_MONTHS} 月(YoY) "
+              f"或 ≥{REVENUE_MOM_MONTHS + 1} 月(MoM) 才會觸發")
     # 盤整期籌碼硬門票:依分數區間實證 (8分勝率53%/+0.71% vs 7分43%/-0.35%),
     # 且大戶↑ edge +6.01%、散戶↓ +3.16% 為僅有的明顯正向訊號 → 盤整時升級為入場條件
     chip_gate_on = market_data_ok and market_consolidating
