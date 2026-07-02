@@ -17,7 +17,22 @@ from market_sentiment import compute_sentiment, format_sentiment_for_tg
 WATCHLIST_FILE = str(CACHE_DIR / "watchlist.json")  # 由 UI 寫入,TG 讀取做警示
 
 # ── 路徑與設定 ─────────────────────────────────────────────────────────
-TOP_N_DISPLAY = 15         # 訊息列出前 N 檔
+TOP_N_DISPLAY = 15         # 後備上限:大盤溫度取不到時,最多列前 N 檔
+
+# 依大盤溫度(0~100)決定推播檔數:溫度越低(越接近頭部/恐慌)推越少,
+# 集中在「主力吃貨最強」的前幾檔(df 已按 主力吃貨強度 排序,取前 N = 最強 N 檔)。
+# 用意:① 集中(別分散成大盤) ② 該空手時空手(過熱少推)。數字可自行調整。
+SENT_PUSH_CAPS = [(55, 8), (45, 5), (35, 3), (25, 2), (0, 1)]   # (溫度門檻, 推播檔數)
+
+
+def push_count_by_temp(temp):
+    """回傳今日該推幾檔:溫度越低越少。取不到溫度 → 用後備上限 TOP_N_DISPLAY。"""
+    if temp is None:
+        return TOP_N_DISPLAY
+    for _thresh, _n in SENT_PUSH_CAPS:
+        if temp >= _thresh:
+            return _n
+    return 1
 
 # Telegram 發送(HTML + 自動分段)已抽到 tg_common,與 bottom_push 共用同一份
 from tg_common import send_telegram_message
@@ -302,8 +317,10 @@ def main():
         # ── 5b. 大盤情緒指標 ──────────────────────────────
         # 詳細區塊放在 AI 點評之後、個股清單之前(獨立區塊)
         sentiment_section = ""
+        _temp = None   # 大盤溫度,供下方決定推播檔數
         try:
             sentiment = compute_sentiment(CACHE_DIR)
+            _temp = sentiment.get("temperature")
             sentiment_text = format_sentiment_for_tg(sentiment)
             if sentiment_text:
                 sentiment_section = sentiment_text + "━━━━━━━━━━━━━━\n"
@@ -317,11 +334,17 @@ def main():
             content = "💡 目前盤勢較嚴峻,沒有股票達標。"
             today_set = set()
         else:
-            content = f"🔥 <b>今日達標個股 (共 {len(df)} 檔)</b>\n"
+            _push_n = push_count_by_temp(_temp)   # 依大盤溫度決定推幾檔(集中在主力吃貨最強)
             breakout_col = f"·{HIGH_BREAK_DAYS}日量價齊揚突破"
-            today_set = set(df['代號'].astype(str).tolist())
+            today_set = set(df['代號'].astype(str).tolist())   # 全部達標股(退場追蹤用,不受推播檔數影響)
+            if _push_n < len(df):
+                _temp_txt = f",大盤溫度 {_temp}/100" if _temp is not None else ""
+                content = (f"🔥 <b>今日達標 {len(df)} 檔{_temp_txt} → 聚焦主力吃貨最強前 "
+                           f"{_push_n} 檔</b>\n")
+            else:
+                content = f"🔥 <b>今日達標個股 (共 {len(df)} 檔)</b>\n"
 
-            for _, row in df.head(TOP_N_DISPLAY).iterrows():
+            for _, row in df.head(_push_n).iterrows():
                 sid_str    = str(row['代號'])
                 # 滿分 11 制(大戶/散戶各 2 分,券停用):9 分以上必含籌碼共振,視同冠軍級訊號
                 score_icon = "🔥" if row['總分'] >= 9 else "•"
@@ -369,8 +392,9 @@ def main():
                         )
                     content += "\n"
 
-            if len(df) > TOP_N_DISPLAY:
-                content += f"\n<i>...等其餘 {len(df) - TOP_N_DISPLAY} 檔請至網頁查看完整分析</i>\n"
+            if len(df) > _push_n:
+                content += (f"\n<i>...其餘 {len(df) - _push_n} 檔(把握度較低,或大盤溫度偏低而未列入)"
+                            f"請至網頁看完整清單</i>\n")
 
         # 退場通知:昨在、今天沒了(history 空時跳過,避免首跑誤報)
         if history and yesterday_sids:
