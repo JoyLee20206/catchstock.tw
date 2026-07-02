@@ -31,14 +31,14 @@ RETRY_503_WAIT  = 3    # 收到 503 等幾秒再 retry 同一支
 RETRY_503_TIMES = 1    # 同一支 503 最多 retry 次數
 
 # 模型清單(依優先序排列,前面失敗就試下一個)
-# ⚠️ 策略(2026-07):中文點評優先用 Qwen(中文最強);auto:free 當「不會 404」的穩定後備
-#    (具體免費代號常改名/下架、寫死會 404;auto:free 由平台自動挑當下可用免費模型)。
+# ⚠️ 策略(2026-07):auto:free 擺第一(平台自動挑當下可用免費模型,較易產出、不會 404);
+#    其後接 Qwen(中文最強)等具名模型當品質備援。
 #    → 免費額度用完(429)那天所有免費模型都會失敗,屬正常;AI 點評失敗不影響推播照發。
 # ⚠️ 免費代號會過期:失效就到 https://openrouter.ai/models?max_price=0 複製「當下」正確代號替換。
 #    想穩定不掉線 → 儲值 $10 改用便宜付費代號(如 deepseek/deepseek-chat)。
 AI_MODELS = [
-    {"id": "qwen/qwen3-next-80b-a3b-instruct:free",  "name": "Qwen3 Next 80B"},   # 中文最強,優先
-    {"id": "openrouter/auto:free",                   "name": "Auto Free Router"}, # 穩定後備,不會 404
+    {"id": "openrouter/auto:free",                   "name": "Auto Free Router"}, # 第一順位:自動挑可用免費模型,較易產出、不會 404
+    {"id": "qwen/qwen3-next-80b-a3b-instruct:free",  "name": "Qwen3 Next 80B"},   # 中文最強(品質備援)
     {"id": "google/gemma-4-31b-it:free",             "name": "Gemma 4 31B"},      # 多語(140+),中文佳
     {"id": "meta-llama/llama-3.3-70b-instruct:free", "name": "Llama 3.3(備援)"},
 ]
