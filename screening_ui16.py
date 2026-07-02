@@ -2487,19 +2487,38 @@ with _tab_perf:
                         "每個計分條件「有觸發 vs 沒觸發」時,後續 5 日報酬的差異(edge)。"
                         "edge 為正 = 該訊號確實加值;接近 0 或負 = 可能沒幫助甚至拖累,值得檢討權重。"
                     )
+                    _MIN_RELIABLE_N = 20   # 觸發/未觸發任一組少於此值 → edge 由少數股票主導,標不可信
+                    _has_unreliable = False
                     _ar_rows = []
                     for _s in sorted(_attr["per_signal"],
                                      key=lambda x: (x["edge"] is not None, x["edge"] or 0),
                                      reverse=True):
                         _on, _off, _edge = _s["on"], _s["off"], _s["edge"]
+                        _on_n  = _on["n"] if _on else 0
+                        _off_n = _off["n"] if _off else 0
+                        # edge 可信度:兩組都要 ≥ 門檻才算數;任一組太少 → 標 ⚠️(數字由少數股撐出來)
+                        if _edge is None:
+                            _edge_cell = "—"
+                        elif _on_n >= _MIN_RELIABLE_N and _off_n >= _MIN_RELIABLE_N:
+                            _edge_cell = f"{_edge:+.2f}%"
+                        else:
+                            _edge_cell = f"{_edge:+.2f}% ⚠️"
+                            _has_unreliable = True
                         _ar_rows.append({
                             "計分條件": _SIG_DISPLAY.get(_s["key"], _s["key"]),
-                            "觸發樣本": _on["n"] if _on else 0,
+                            "觸發樣本": _on_n,
                             "觸發平均報酬": f"{_on['avg']:+.2f}%" if _on else "—",
+                            "未觸發樣本": _off_n,
                             "未觸發平均報酬": f"{_off['avg']:+.2f}%" if _off else "—",
-                            "edge(差)": f"{_edge:+.2f}%" if _edge is not None else "—",
+                            "edge(差)": _edge_cell,
                         })
                     st.dataframe(pd.DataFrame(_ar_rows), use_container_width=True, hide_index=True)
+                    if _has_unreliable:
+                        st.caption(
+                            f"⚠️ = 觸發或未觸發任一組樣本 < {_MIN_RELIABLE_N} 筆,該 edge 由少數股票主導、"
+                            f"不可信(例:某訊號幾乎每檔都中,「未觸發」只剩 2~4 檔,那個差值是雜訊)。"
+                            f"目前只有「券相關」「RS」兩邊樣本較足。"
+                        )
                     if _attr["n_eval"] < 30:
                         st.caption(
                             f"📊 樣本 {_attr['n_eval']} 筆,且訊號彼此相關(多數 pick 同時觸發多個)——"
