@@ -2543,10 +2543,24 @@ with _tab_perf:
                     st.dataframe(pd.DataFrame(_cr_rows), use_container_width=True, hide_index=True)
                     if _cr.get("edge_vs_rest") is not None:
                         _e = _cr["edge_vs_rest"]
-                        _verdict = ("✅ 共振明顯較優,可考慮升級 B 方案" if _e >= 1.0
-                                    else "⚠️ 共振優勢不明顯,先維持 A 觀察" if _e >= 0
-                                    else "❌ 共振反而較差,先別升級")
-                        st.caption(f"共振 vs 非共振(其一+一般)前進報酬差 = **{_e:+.2f}%** → {_verdict}")
+                        _res_n  = next((g["n"] for g in _cr["groups"]
+                                        if g["name"].startswith("共振")), 0)
+                        _rest_n = _cr["n_eval"] - _res_n
+                        _res_pct = (_res_n / _cr["n_eval"] * 100) if _cr["n_eval"] else 0
+                        if _rest_n < 20:
+                            # 對照組太小 → 不給方向結論,改說明真相:共振已是實質門檻
+                            st.warning(
+                                f"⚠️ 共振 vs 非共振報酬差 {_e:+.2f}%,但**對照組僅 {_rest_n} 筆,不足以判定**"
+                                f"(此差幾乎由少數非共振樣本左右,屬雜訊)。\n\n"
+                                f"更關鍵的事實:入選股 {_res_n}/{_cr['n_eval']} 已是共振(≈{_res_pct:.0f}%)"
+                                f"——系統**已實質內建共振門檻**,B 方案頂多砍掉那 {_rest_n} 筆非共振股,"
+                                f"影響面極小。請改看上方「共振組」本身的絕對勝率/損益比是否夠好。"
+                            )
+                        else:
+                            _verdict = ("✅ 共振明顯較優,可考慮升級 B 方案" if _e >= 1.0
+                                        else "⚠️ 共振優勢不明顯,先維持 A 觀察" if _e >= 0
+                                        else "❌ 共振反而較差,先別升級")
+                            st.caption(f"共振 vs 非共振(其一+一般)前進報酬差 = **{_e:+.2f}%** → {_verdict}")
                     if _cr["n_eval"] < 30:
                         st.caption(f"📊 樣本僅 {_cr['n_eval']} 筆,方向參考用;累積至 30+ 筆再據此決策 B 方案。")
 
