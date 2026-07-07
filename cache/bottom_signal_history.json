@@ -639,7 +639,7 @@
       "vol_spike_down": false,
       "vol_shrink": false,
       "vol_up": false,
-      "margin_calm": true,
+      "margin_calm": false,
       "breadth_falloff": false,
       "fut_basis": true,
       "f_spot": false,
@@ -650,7 +650,7 @@
       "us_10y": true,
       "dxy_fall": false,
       "twd_stable": false,
-      "sox_no_low": true,
+      "sox_no_low": false,
       "news_dulled": false,
       "news_resolved": false
     }
