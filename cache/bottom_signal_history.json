@@ -658,7 +658,7 @@
   {
     "date": "2026-07-08",
     "level": 2,
-    "n_ok": 10,
+    "n_ok": 11,
     "vixtwn": 38.15,
     "items": {
       "gate": true,
@@ -672,10 +672,10 @@
       "vol_spike_down": false,
       "vol_shrink": true,
       "vol_up": false,
-      "margin_calm": false,
+      "margin_calm": true,
       "breadth_falloff": true,
       "fut_basis": false,
-      "f_spot": false,
+      "f_spot": true,
       "fi_cover": false,
       "pc_falloff": false,
       "tsmc_no_low": true,
@@ -683,7 +683,7 @@
       "us_10y": true,
       "dxy_fall": false,
       "twd_stable": false,
-      "sox_no_low": false,
+      "sox_no_low": true,
       "news_dulled": false,
       "news_resolved": false
     }
