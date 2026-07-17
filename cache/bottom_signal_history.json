@@ -889,7 +889,7 @@
   {
     "date": "2026-07-17",
     "level": 1,
-    "n_ok": 4,
+    "n_ok": 3,
     "vixtwn": 38.79,
     "items": {
       "gate": true,
@@ -903,10 +903,10 @@
       "vol_spike_down": false,
       "vol_shrink": false,
       "vol_up": false,
-      "margin_calm": true,
+      "margin_calm": false,
       "breadth_falloff": false,
       "fut_basis": true,
-      "f_spot": true,
+      "f_spot": false,
       "fi_cover": false,
       "pc_falloff": false,
       "tsmc_no_low": false,
