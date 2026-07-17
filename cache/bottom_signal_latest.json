@@ -1,12 +1,12 @@
 {
- "asof": "2026-07-16",
+ "asof": "2026-07-17",
  "items": [
   {
    "key": "gate",
    "group": "01 恐慌指數",
    "name": "跌破 40 ★閘門",
    "ok": true,
-   "value": "今 34.7(已開,守住 42 以下)",
+   "value": "今 38.8(已開,守住 42 以下)",
    "manual": false,
    "observe": false
   },
@@ -14,8 +14,8 @@
    "key": "vix_fall",
    "group": "01 恐慌指數",
    "name": "續降 38",
-   "ok": true,
-   "value": "今 34.7",
+   "ok": false,
+   "value": "今 38.8",
    "manual": false,
    "observe": false
   },
@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 18.0 / 5日均 20.2(美VIX升所致,不算)",
+   "value": "差 20.8 / 5日均 19.5",
    "manual": false,
    "observe": false
   },
@@ -32,8 +32,8 @@
    "key": "vix_spike",
    "group": "01 恐慌指數",
    "name": "爆衝後急殺",
-   "ok": true,
-   "value": "日高 39.7 收 34.7(回落 12.6%)",
+   "ok": false,
+   "value": "日高 39.7 收 38.8(回落 2.4%)",
    "manual": false,
    "observe": false
   },
@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 1.32 兆(1.06×均) -6.5%",
+   "value": "量 1.33 兆(1.07×均) -6.5%",
    "manual": false,
    "observe": false
   },
@@ -105,7 +105,7 @@
    "group": "04 信用與廣度",
    "name": "融資減幅收斂",
    "ok": true,
-   "value": "今 -0.5 萬張 / 近日均減 9.2 萬張",
+   "value": "今 -0.5 萬張 / 近日均減 9.6 萬張",
    "manual": false,
    "observe": true
   },
@@ -114,7 +114,7 @@
    "group": "04 信用與廣度",
    "name": "跌家比從極端回落",
    "ok": false,
-   "value": "跌家比 16% → 65%",
+   "value": "跌家比 65% → 93%",
    "manual": false,
    "observe": true
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "100.5 → 100.7",
+   "value": "100.5 → 100.8",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 32.13 → 32.34",
+   "value": "USDTWD 32.13 → 32.35",
    "manual": false,
    "observe": true
   },
@@ -227,15 +227,13 @@
    "observe": false
   }
  ],
- "alerts": [
-  "台美恐慌差距縮小,但是「美股 VIX 上升」造成的,不是台灣恐慌在退——這不是止跌好訊號,反而要留意本地利空開始外溢到全球的可能。"
- ],
+ "alerts": [],
  "manual_flags": {},
- "vixtwn": 34.74,
+ "vixtwn": 38.79,
  "fi_net_today": -86189,
  "level": 1,
  "level_label": "剛降溫",
  "level_icon": "🟡",
- "n_ok": 6,
- "generated_at": "2026-07-17 07:42"
+ "n_ok": 4,
+ "generated_at": "2026-07-17 10:09"
 }
