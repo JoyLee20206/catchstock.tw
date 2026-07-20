@@ -479,7 +479,13 @@ def main():
             h for h in history
             if h.get("date") not in (today_str, "legacy")
         ]
-        history.append({"date": today_str, "picks": picks_today})
+        entry_today = {"date": today_str, "picks": picks_today}
+        # 影子清單(過原始門檻但被空頭/盤整從嚴擋下):只寫歷史供大盤濾網回測,不進推播
+        shadow_today = build_picks_from_df(meta.get('shadow_df'))
+        if shadow_today:
+            entry_today["shadow_picks"] = shadow_today
+            print(f"👻 影子清單 {len(shadow_today)} 檔已寫入歷史(僅供回測,未推播)")
+        history.append(entry_today)
         save_history(history)
 
     except Exception as e:

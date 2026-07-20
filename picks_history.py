@@ -1,7 +1,12 @@
 """多日入選歷史共用模組(v2)
 
-Schema v2:[{"date": "YYYY-MM-DD", "picks": [{"sid", "score", "close", "industry", "sig"?}, ...]}]
+Schema v2:[{"date": "YYYY-MM-DD", "picks": [{"sid", "score", "close", "industry", "sig"?}, ...],
+            "shadow_picks"?: [...同 picks 結構...]}]
            "sig" (選用):{投信,外資,雙買,券,大戶,散戶,技術,KD,營收,RS} 各 0/1,供訊號歸因分析
+           "shadow_picks"(選用):影子清單——過原始門檻但被空頭/盤整從嚴機制擋下的股,
+           只記錄不推薦(紙上交易),專供大盤濾網實證累積空頭對照組。
+           ⚠️ get_picks/get_sids 刻意「不」回傳影子:熱度榜/績效/輪動/推播全部只看真實推薦;
+           需要影子時明確呼叫 get_shadow_picks()。
 Schema v1:[{"date": "YYYY-MM-DD", "sids": ["2330", ...]}]  ← 向下相容
 Legacy:   ["2330", ...]                                    ← 向下相容
 
@@ -40,6 +45,13 @@ def get_picks(entry: dict) -> list:
         return entry["picks"]
     return [{"sid": str(s), "score": None, "close": None, "industry": None}
             for s in entry.get("sids", [])]
+
+
+def get_shadow_picks(entry: dict) -> list:
+    """從 entry 提取影子清單(過原始門檻但被空頭/盤整從嚴機制擋下、只記錄不推薦的股)。
+    舊 entry 沒有此欄 → 回空 list。僅大盤濾網實證等「需要空頭對照組」的回測該用它。
+    """
+    return entry.get("shadow_picks", [])
 
 
 # ══════════════════════════════════════════════════════════════════════

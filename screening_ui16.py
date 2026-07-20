@@ -2350,6 +2350,11 @@ with _tab_perf:
                             _mf_rows.append({"進場條件": _sc["name"], "樣本": 0,
                                              "勝率": "—", "平均報酬": "—", "淨期望值": "—"})
                     st.dataframe(pd.DataFrame(_mf_rows), use_container_width=True, hide_index=True)
+                    st.caption(
+                        "👻 本表含**影子清單**樣本:空頭/盤整從嚴機制擋下的「過原始門檻」股,"
+                        "只記錄不推薦(紙上交易)——否則空頭從嚴幾乎必 0 檔,空頭列永遠等不到對照組。"
+                        "其他績效統計皆不含影子,僅此表用它評估濾網。"
+                    )
 
                     # 自動解讀:先處理「單一 regime、無對照」的退化情況,再比較淨期望值差
                     _base = _mf["scenarios"][0]["stat"]

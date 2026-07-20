@@ -6,7 +6,7 @@
 提供 UI「策略績效」分頁需要的 dataframe。
 """
 import pandas as pd
-from picks_history import get_picks
+from picks_history import get_picks, get_shadow_picks
 
 # 台股來回交易成本估計(%):手續費買賣各 ~0.1425% + 賣出交易稅 0.3%,約 0.5%
 TRADE_COST_PCT = 0.5
@@ -390,7 +390,11 @@ def backtest_market_filter(history: list, cache_dir, hold_days: int = 5, ma_days
             continue
         bullish = _regime_at(entry_ts)
         temp = temp_by_date.get(entry["date"])
-        for pick in get_picks(entry):
+        # 含影子清單(過原始門檻但被空頭/盤整從嚴擋下、只記錄不推薦的紙上交易):
+        # 沒有影子,空頭列永遠 0 筆(空頭從嚴幾乎必 0 檔),濾網實證等不到對照組。
+        # 納入後「基準」列的語意 = 「若完全不用大盤濾網,原始門檻選出的全部股」,
+        # 正是評估濾網該用的基準;其他統計(績效總表/熱度/歸因)仍只看真實推薦。
+        for pick in get_picks(entry) + get_shadow_picks(entry):
             sid = str(pick.get("sid", ""))
             if not sid:
                 continue

@@ -991,6 +991,10 @@ def run_screening(
     chip_gate_on = market_data_ok and market_consolidating
     chip_gate_rejected = 0
     results = []
+    # 影子清單:過「原始門檻」但被空頭 +1 / 盤整籌碼門票擋下的股 → 只記錄、不推薦。
+    # 目的:空頭時實際推薦幾乎必為 0 檔(RS 關閉 + 死分讓實務滿分僅 7,門檻卻是 8),
+    # 大盤濾網實證永遠等不到空頭對照組;影子清單= 紙上交易,讓回測有資料、實際操作照樣空手。
+    shadow_rows = []
     for sid in all_ids:
         if sid in reject_set:
             continue
@@ -1043,16 +1047,20 @@ def run_screening(
                  2 * l + 2 * sd +
                  kd + rv + rs)
 
+        # 影子判定:沒過「生效門檻」但過「原始門檻」→ 進影子清單(僅當從嚴機制啟動時)
+        _is_shadow = False
         if score < effective_pass_score:
-            continue
-
+            if effective_pass_score > pass_score and score >= pass_score:
+                _is_shadow = True
+            else:
+                continue
         # 盤整期硬門票:達分數門檻後,還需「大戶↑ 或 散戶↓」至少其一 (⭐中信心以上)。
         # 只在盤整 regime 啟用;多頭/空頭維持原邏輯 (標籤不影響入選),保留對照組可持續回測。
-        if chip_gate_on and not (l == 1 or sd == 1):
+        elif chip_gate_on and not (l == 1 or sd == 1):
             chip_gate_rejected += 1
-            continue
+            _is_shadow = True
 
-        results.append({
+        (shadow_rows if _is_shadow else results).append({
             "代號": sid, "名稱": name_map.get(sid, ""), "總分": score,
             "籌碼信心": chip_tier,    # 方案 C 分級標籤 (🔥高信心=共振 / ⭐中信心=其一 / 一般);不影響入選
             # 法人三大訊號
@@ -1184,7 +1192,14 @@ def run_screening(
     else:
         market_state, market_status = 'bull', "偏多操作"
 
+    # 影子清單 → meta(由 telegram_notify 寫入歷史的 shadow_picks 欄;UI/推播不顯示)
+    shadow_df = pd.DataFrame(shadow_rows)
+    if not shadow_df.empty:
+        print(f"👻 影子清單:{len(shadow_df)} 檔過原始門檻({pass_score} 分)但被從嚴機制擋下"
+              f"——只記錄供大盤濾網回測,不推薦、不顯示。")
+
     meta = {
+        'shadow_df':             shadow_df,
         'market_data_ok':        market_data_ok,
         'market_bullish':        market_bullish,
         'market_consolidating':  market_consolidating,
