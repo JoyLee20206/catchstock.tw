@@ -4176,7 +4176,36 @@ else:
 @st.fragment
 def _render_pick_list():
     if df is None: st.info("👈 請先按左側「開始選股」產生最新清單。")
-    elif len(df) == 0: st.error("❌ 沒有標的達標")
+    elif len(df) == 0:
+        st.error("❌ 沒有標的達標")
+        # 0 檔時抄底雷達獨立提供(修:原本藏在結果表內,0 檔就點不到——
+        # 偏偏空頭門檻從嚴最容易 0 檔,而空頭跌深正是雷達「找反轉」的主場)。
+        st.caption("💡 空頭/盤整門檻從嚴時 0 檔是防守常態;此時可改看抄底雷達,累積反彈觀察名單。")
+        if st.checkbox(
+            "🎯 開啟籌碼抄底雷達(資減券增＋大戶逆勢增持)",
+            value=False, key="_dip_on",
+            help="全市場掃「今天同時觸發兩個籌碼底部訊號」的股(找跌深+籌碼吃貨,與『追強勢』選股相反邏輯)。\n"
+                 "④回測:78 筆、勝率 46%、平均 +3.95%、夏普 1.35(全多頭資料、中位數偏負)→ 當『觀察名單』,"
+                 "別當閉眼買;進場等帶量確認、嚴設停損。第一次勾選需建訊號矩陣約 5 秒。",
+        ):
+            _radar_key = f"{_cache_date.strftime('%Y-%m-%d') if _cache_date is not None else 'no_data'}|v3-tierR"
+            _dip_set, _dip_date = _load_dip_radar(_radar_key)
+            _dstr = f"(依 {_dip_date} 融資券資料)" if _dip_date else "(暫無資料)"
+            if not _dip_set:
+                st.info(f"🎯 抄底雷達:今日全市場 **0** 檔命中 {_dstr}——此組合很挑,常整天 0~數檔,屬正常。")
+            else:
+                _close_map = _load_latest_close_map()
+                _ind_map   = _load_industry_name_map()
+                _rows = [{
+                    "代號":   sid,
+                    "名稱":   ui_name_map.get(sid, ""),
+                    "最新價": round(_close_map.get(sid), 2) if _close_map.get(sid) is not None else None,
+                    "產業":   _ind_map.get(sid, ""),
+                } for sid in sorted(_dip_set)]
+                st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+                st.success(f"🎯 抄底雷達命中 **{len(_dip_set)}** 檔 {_dstr}。"
+                           f"當『觀察名單』,**別閉眼買**、進場等帶量、嚴設停損。"
+                           f"(想看乖離欄位與 K 線點選,等有達標股的日子用選股表內的雷達切換)")
     else:
         st.subheader(f"📋 結果({len(df)} 檔)")
         # 籌碼信心分級概覽(欄位由 screening0515 產生;舊結果無此欄時跳過,避免 KeyError)
