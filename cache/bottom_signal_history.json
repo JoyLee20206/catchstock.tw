@@ -1045,7 +1045,7 @@
       "tsmc_ma": true,
       "us_10y": true,
       "dxy_fall": false,
-      "twd_stable": true,
+      "twd_stable": false,
       "sox_no_low": true,
       "news_dulled": false,
       "news_resolved": false
