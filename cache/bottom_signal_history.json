@@ -1087,7 +1087,7 @@
   {
     "date": "2026-07-27",
     "level": 2,
-    "n_ok": 10,
+    "n_ok": 9,
     "vixtwn": 37.25,
     "items": {
       "gate": true,
@@ -1101,7 +1101,7 @@
       "vol_spike_down": false,
       "vol_shrink": true,
       "vol_up": false,
-      "margin_calm": true,
+      "margin_calm": false,
       "breadth_falloff": false,
       "fut_basis": true,
       "f_spot": true,
@@ -1109,7 +1109,7 @@
       "pc_falloff": false,
       "tsmc_no_low": true,
       "tsmc_ma": false,
-      "us_10y": true,
+      "us_10y": false,
       "dxy_fall": false,
       "twd_stable": true,
       "sox_no_low": true,
