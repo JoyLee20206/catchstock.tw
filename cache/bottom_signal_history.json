@@ -1137,15 +1137,15 @@
       "margin_calm": false,
       "breadth_falloff": false,
       "fut_basis": true,
-      "f_spot": true,
+      "f_spot": false,
       "fi_cover": false,
       "pc_falloff": false,
       "tsmc_no_low": false,
       "tsmc_ma": false,
       "us_10y": false,
-      "dxy_fall": false,
+      "dxy_fall": true,
       "twd_stable": false,
-      "sox_no_low": true,
+      "sox_no_low": false,
       "news_dulled": false,
       "news_resolved": false
     }
