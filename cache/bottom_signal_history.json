@@ -1186,7 +1186,7 @@
   {
     "date": "2026-07-30",
     "level": 0,
-    "n_ok": 7,
+    "n_ok": 8,
     "vixtwn": 44.31,
     "items": {
       "gate": false,
@@ -1200,7 +1200,7 @@
       "vol_spike_down": false,
       "vol_shrink": true,
       "vol_up": false,
-      "margin_calm": false,
+      "margin_calm": true,
       "breadth_falloff": true,
       "fut_basis": true,
       "f_spot": true,
@@ -1208,10 +1208,10 @@
       "pc_falloff": false,
       "tsmc_no_low": true,
       "tsmc_ma": false,
-      "us_10y": false,
+      "us_10y": true,
       "dxy_fall": true,
       "twd_stable": false,
-      "sox_no_low": false,
+      "sox_no_low": true,
       "news_dulled": false,
       "news_resolved": false
     }
