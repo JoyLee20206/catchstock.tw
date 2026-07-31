@@ -105,7 +105,7 @@
    "group": "04 信用與廣度",
    "name": "融資減幅收斂",
    "ok": true,
-   "value": "今 -9.7 萬張 / 近日均減 11.1 萬張",
+   "value": "今 +12.7 萬張 / 近日均減 11.0 萬張",
    "manual": false,
    "observe": true
   },
@@ -132,7 +132,7 @@
    "group": "05 期貨與大戶",
    "name": "外資現貨賣超收斂",
    "ok": true,
-   "value": "今 +1 億 / 近5日均賣 1 億",
+   "value": "今 +6 億 / 近5日均賣 1 億",
    "manual": false,
    "observe": false
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": true,
-   "value": "4.60% → 4.66%",
+   "value": "4.62% → 4.73%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": true,
-   "value": "100.8 → 100.2",
+   "value": "100.8 → 100.1",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": true,
-   "value": "USDTWD 32.36 → 32.29",
+   "value": "USDTWD 32.36 → 32.27",
    "manual": false,
    "observe": true
   },
@@ -204,7 +204,7 @@
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
    "ok": true,
-   "value": "今低 10,964 / 前10日低 10,445",
+   "value": "今低 11,232 / 前10日低 10,445",
    "manual": false,
    "observe": true
   },
@@ -235,5 +235,5 @@
  "level_label": "高度恐慌",
  "level_icon": "🔴",
  "n_ok": 9,
- "generated_at": "2026-07-31 10:49"
+ "generated_at": "2026-07-31 15:36"
 }
