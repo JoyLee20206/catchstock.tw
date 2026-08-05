@@ -1,12 +1,12 @@
 {
- "asof": "2026-08-04",
+ "asof": "2026-08-05",
  "items": [
   {
    "key": "gate",
    "group": "01 恐慌指數",
    "name": "跌破 40 ★閘門",
    "ok": true,
-   "value": "今 38.9(已開,守住 42 以下)",
+   "value": "今 35.4(已開,守住 42 以下)",
    "manual": false,
    "observe": false
   },
@@ -14,8 +14,8 @@
    "key": "vix_fall",
    "group": "01 恐慌指數",
    "name": "續降 38",
-   "ok": false,
-   "value": "今 38.9",
+   "ok": true,
+   "value": "今 35.4",
    "manual": false,
    "observe": false
   },
@@ -23,8 +23,8 @@
    "key": "vix_spread",
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
-   "ok": false,
-   "value": "差 23.2 / 5日均 22.8",
+   "ok": true,
+   "value": "差 19.5 / 5日均 23.9",
    "manual": false,
    "observe": false
   },
@@ -33,7 +33,7 @@
    "group": "01 恐慌指數",
    "name": "爆衝後急殺",
    "ok": false,
-   "value": "日高 40.3 收 38.9(回落 3.5%)",
+   "value": "日高 37.3 收 35.4(回落 5.1%)",
    "manual": false,
    "observe": false
   },
@@ -42,7 +42,7 @@
    "group": "02 股價走勢",
    "name": "未破前低",
    "ok": true,
-   "value": "今低 42,896 / 前10日低 39,385",
+   "value": "今低 43,810 / 前10日低 39,385",
    "manual": false,
    "observe": false
   },
@@ -60,7 +60,7 @@
    "group": "02 股價走勢",
    "name": "強K守收盤",
    "ok": true,
-   "value": "收 43,361(紅K,下影 46%)",
+   "value": "收 44,612(紅K,下影 68%)",
    "manual": false,
    "observe": false
   },
@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 1.09 兆(1.07×均) -0.1%",
+   "value": "量 1.20 兆(1.18×均) +2.9%",
    "manual": false,
    "observe": false
   },
@@ -87,7 +87,7 @@
    "group": "03 成交量",
    "name": "量縮止穩",
    "ok": false,
-   "value": "量增 -0.1%",
+   "value": "量增 +2.9%",
    "manual": false,
    "observe": false
   },
@@ -95,8 +95,8 @@
    "key": "vol_up",
    "group": "03 成交量",
    "name": "帶量上漲",
-   "ok": false,
-   "value": "量增 -0.1%",
+   "ok": true,
+   "value": "量增 +2.9%",
    "manual": false,
    "observe": false
   },
@@ -114,7 +114,7 @@
    "group": "04 信用與廣度",
    "name": "跌家比從極端回落",
    "ok": false,
-   "value": "跌家比 32% → 33%",
+   "value": "跌家比 33% → 28%",
    "manual": false,
    "observe": true
   },
@@ -123,7 +123,7 @@
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
    "ok": false,
-   "value": "價差 -4",
+   "value": "價差 -98",
    "manual": false,
    "observe": false
   },
@@ -141,7 +141,7 @@
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
    "ok": true,
-   "value": "淨額 -90,038 → -87,858 口",
+   "value": "淨額 -87,858 → -87,199 口",
    "manual": false,
    "observe": false
   },
@@ -150,7 +150,7 @@
    "group": "05 期貨與大戶",
    "name": "P/C比從極端回落",
    "ok": false,
-   "value": "98% → 103%",
+   "value": "103% → 112%",
    "manual": false,
    "observe": false
   },
@@ -159,7 +159,7 @@
    "group": "06 台積電",
    "name": "台積止穩不破低",
    "ok": true,
-   "value": "今低 2,310 / 前10日低 2,180",
+   "value": "今低 2,370 / 前10日低 2,180",
    "manual": false,
    "observe": false
   },
@@ -167,8 +167,8 @@
    "key": "tsmc_ma",
    "group": "06 台積電",
    "name": "台積翻紅站MA5",
-   "ok": false,
-   "value": "收 2,320 / MA5 2,304",
+   "ok": true,
+   "value": "收 2,405 / MA5 2,345",
    "manual": false,
    "observe": false
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": false,
-   "value": "4.74% → 4.64%",
+   "value": "4.74% → 4.63%",
    "manual": false,
    "observe": false
   },
@@ -185,8 +185,8 @@
    "key": "dxy_fall",
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
-   "ok": false,
-   "value": "99.8 → 99.9",
+   "ok": true,
+   "value": "100.0 → 99.8",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 32.40 → 32.40",
+   "value": "USDTWD 32.29 → 32.32",
    "manual": false,
    "observe": true
   },
@@ -229,11 +229,11 @@
  ],
  "alerts": [],
  "manual_flags": {},
- "vixtwn": 38.9,
- "fi_net_today": -87858,
- "level": 1,
- "level_label": "剛降溫",
- "level_icon": "🟡",
- "n_ok": 7,
- "generated_at": "2026-08-04 15:44"
+ "vixtwn": 35.36,
+ "fi_net_today": -87199,
+ "level": 2,
+ "level_label": "在打底",
+ "level_icon": "🟠",
+ "n_ok": 12,
+ "generated_at": "2026-08-05 10:45"
 }
