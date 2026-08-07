@@ -1,12 +1,12 @@
 {
- "asof": "2026-08-06",
+ "asof": "2026-08-07",
  "items": [
   {
    "key": "gate",
    "group": "01 恐慌指數",
    "name": "跌破 40 ★閘門",
    "ok": true,
-   "value": "今 36.1(已開,守住 42 以下)",
+   "value": "今 35.5(已開,守住 42 以下)",
    "manual": false,
    "observe": false
   },
@@ -15,7 +15,7 @@
    "group": "01 恐慌指數",
    "name": "續降 38",
    "ok": true,
-   "value": "今 36.1",
+   "value": "今 35.5",
    "manual": false,
    "observe": false
   },
@@ -23,8 +23,8 @@
    "key": "vix_spread",
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
-   "ok": false,
-   "value": "差 20.2 / 5日均 23.5(美VIX升所致,不算)",
+   "ok": true,
+   "value": "差 20.2 / 5日均 22.3",
    "manual": false,
    "observe": false
   },
@@ -33,7 +33,7 @@
    "group": "01 恐慌指數",
    "name": "爆衝後急殺",
    "ok": false,
-   "value": "日高 36.8 收 36.1(回落 2.0%)",
+   "value": "日高 37.5 收 35.5(回落 5.5%)",
    "manual": false,
    "observe": false
   },
@@ -42,7 +42,7 @@
    "group": "02 股價走勢",
    "name": "未破前低",
    "ok": true,
-   "value": "今低 44,024 / 前10日低 39,385",
+   "value": "今低 43,942 / 前10日低 39,385",
    "manual": false,
    "observe": false
   },
@@ -60,7 +60,7 @@
    "group": "02 股價走勢",
    "name": "強K守收盤",
    "ok": false,
-   "value": "收 44,397(黑K,下影 65%)",
+   "value": "收 44,226(黑K,下影 32%)",
    "manual": false,
    "observe": false
   },
@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 0.97 兆(0.96×均) -0.5%",
+   "value": "量 0.84 兆(0.83×均) -0.4%",
    "manual": false,
    "observe": false
   },
@@ -87,7 +87,7 @@
    "group": "03 成交量",
    "name": "量縮止穩",
    "ok": true,
-   "value": "量縮 -0.5%",
+   "value": "量縮 -0.4%",
    "manual": false,
    "observe": false
   },
@@ -96,7 +96,7 @@
    "group": "03 成交量",
    "name": "帶量上漲",
    "ok": false,
-   "value": "量縮 -0.5%",
+   "value": "量縮 -0.4%",
    "manual": false,
    "observe": false
   },
@@ -114,7 +114,7 @@
    "group": "04 信用與廣度",
    "name": "跌家比從極端回落",
    "ok": false,
-   "value": "跌家比 28% → 44%",
+   "value": "跌家比 44% → 54%",
    "manual": false,
    "observe": true
   },
@@ -123,7 +123,7 @@
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
    "ok": false,
-   "value": "價差 -117",
+   "value": "價差 +123",
    "manual": false,
    "observe": false
   },
@@ -131,8 +131,8 @@
    "key": "f_spot",
    "group": "05 期貨與大戶",
    "name": "外資現貨賣超收斂",
-   "ok": true,
-   "value": "今 -0 億 / 近5日均賣 0 億",
+   "ok": false,
+   "value": "今 -1 億 / 近5日均賣 0 億",
    "manual": false,
    "observe": false
   },
@@ -140,8 +140,8 @@
    "key": "fi_cover",
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
-   "ok": false,
-   "value": "淨額 -87,199 → -89,383 口",
+   "ok": true,
+   "value": "淨額 -89,383 → -87,911 口",
    "manual": false,
    "observe": false
   },
@@ -149,8 +149,8 @@
    "key": "pc_falloff",
    "group": "05 期貨與大戶",
    "name": "P/C比從極端回落",
-   "ok": false,
-   "value": "112% → 110%",
+   "ok": true,
+   "value": "110% → 106%",
    "manual": false,
    "observe": false
   },
@@ -159,7 +159,7 @@
    "group": "06 台積電",
    "name": "台積止穩不破低",
    "ok": true,
-   "value": "今低 2,360 / 前10日低 2,180",
+   "value": "今低 2,355 / 前10日低 2,180",
    "manual": false,
    "observe": false
   },
@@ -168,7 +168,7 @@
    "group": "06 台積電",
    "name": "台積翻紅站MA5",
    "ok": false,
-   "value": "收 2,365 / MA5 2,377",
+   "value": "收 2,370 / MA5 2,366",
    "manual": false,
    "observe": false
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": true,
-   "value": "4.63% → 4.65%",
+   "value": "4.63% → 4.67%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "99.9 → 100.0",
+   "value": "99.7 → 99.9",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": true,
-   "value": "USDTWD 32.40 → 32.25",
+   "value": "USDTWD 32.40 → 32.26",
    "manual": false,
    "observe": true
   },
@@ -227,15 +227,13 @@
    "observe": false
   }
  ],
- "alerts": [
-  "台美恐慌差距縮小,但是「美股 VIX 上升」造成的,不是台灣恐慌在退——這不是止跌好訊號,反而要留意本地利空開始外溢到全球的可能。"
- ],
+ "alerts": [],
  "manual_flags": {},
- "vixtwn": 36.07,
- "fi_net_today": -89383,
+ "vixtwn": 35.46,
+ "fi_net_today": -87911,
  "level": 2,
  "level_label": "在打底",
  "level_icon": "🟠",
- "n_ok": 8,
- "generated_at": "2026-08-06 15:43"
+ "n_ok": 10,
+ "generated_at": "2026-08-07 09:13"
 }
