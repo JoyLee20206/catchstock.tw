@@ -1417,7 +1417,7 @@
   {
     "date": "2026-08-10",
     "level": 2,
-    "n_ok": 11,
+    "n_ok": 12,
     "vixtwn": 35.19,
     "items": {
       "gate": true,
@@ -1434,7 +1434,7 @@
       "margin_calm": true,
       "breadth_falloff": false,
       "fut_basis": true,
-      "f_spot": false,
+      "f_spot": true,
       "fi_cover": false,
       "pc_falloff": false,
       "tsmc_no_low": true,
