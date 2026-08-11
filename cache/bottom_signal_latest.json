@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 0.90 兆(0.90×均) +0.4%",
+   "value": "量 0.90 兆(0.91×均) +0.4%",
    "manual": false,
    "observe": false
   },
@@ -105,7 +105,7 @@
    "group": "04 信用與廣度",
    "name": "融資減幅收斂",
    "ok": true,
-   "value": "今 +4.1 萬張 / 近日均減 11.6 萬張",
+   "value": "今 -2.4 萬張 / 近日均減 11.6 萬張",
    "manual": false,
    "observe": true
   },
@@ -131,8 +131,8 @@
    "key": "f_spot",
    "group": "05 期貨與大戶",
    "name": "外資現貨賣超收斂",
-   "ok": true,
-   "value": "今 +3 億 / 近5日均賣 1 億",
+   "ok": false,
+   "value": "今 -1 億 / 近5日均賣 1 億",
    "manual": false,
    "observe": false
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": true,
-   "value": "4.67% → 4.70%",
+   "value": "4.66% → 4.68%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "99.6 → 99.9",
+   "value": "99.6 → 99.8",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 32.21 → 32.25",
+   "value": "USDTWD 32.21 → 32.22",
    "manual": false,
    "observe": true
   },
@@ -204,7 +204,7 @@
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
    "ok": true,
-   "value": "今低 11,993 / 前10日低 10,445",
+   "value": "今低 12,072 / 前10日低 10,445",
    "manual": false,
    "observe": true
   },
@@ -234,6 +234,6 @@
  "level": 2,
  "level_label": "在打底",
  "level_icon": "🟠",
- "n_ok": 12,
- "generated_at": "2026-08-11 09:11"
+ "n_ok": 11,
+ "generated_at": "2026-08-11 14:35"
 }
