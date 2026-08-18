@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 1.00 兆(1.03×均) -1.2%",
+   "value": "量 1.01 兆(1.04×均) -1.2%",
    "manual": false,
    "observe": false
   },
@@ -105,7 +105,7 @@
    "group": "04 信用與廣度",
    "name": "融資減幅收斂",
    "ok": true,
-   "value": "今 +0.2 萬張 / 近日均減 11.3 萬張",
+   "value": "今 -2.5 萬張 / 近日均減 11.3 萬張",
    "manual": false,
    "observe": true
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": true,
-   "value": "4.68% → 4.70%",
+   "value": "4.64% → 4.72%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": true,
-   "value": "100.0 → 99.7",
+   "value": "100.0 → 99.6",
    "manual": false,
    "observe": false
   },
@@ -204,7 +204,7 @@
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
    "ok": true,
-   "value": "今低 12,269 / 前10日低 10,922",
+   "value": "今低 11,986 / 前10日低 10,922",
    "manual": false,
    "observe": true
   },
@@ -237,5 +237,5 @@
  "level_label": "剛降溫",
  "level_icon": "🟡",
  "n_ok": 8,
- "generated_at": "2026-08-18 08:51"
+ "generated_at": "2026-08-18 14:05"
 }
