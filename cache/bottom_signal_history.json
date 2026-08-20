@@ -1681,7 +1681,7 @@
   {
     "date": "2026-08-20",
     "level": 2,
-    "n_ok": 8,
+    "n_ok": 9,
     "vixtwn": 30.03,
     "items": {
       "gate": true,
@@ -1698,15 +1698,15 @@
       "margin_calm": true,
       "breadth_falloff": false,
       "fut_basis": false,
-      "f_spot": false,
+      "f_spot": true,
       "fi_cover": false,
       "pc_falloff": false,
       "tsmc_no_low": true,
       "tsmc_ma": false,
       "us_10y": false,
       "dxy_fall": true,
-      "twd_stable": false,
-      "sox_no_low": false,
+      "twd_stable": true,
+      "sox_no_low": true,
       "news_dulled": false,
       "news_resolved": false
     }
