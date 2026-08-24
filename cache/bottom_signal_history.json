@@ -1747,7 +1747,7 @@
   {
     "date": "2026-08-24",
     "level": 1,
-    "n_ok": 9,
+    "n_ok": 8,
     "vixtwn": 29.83,
     "items": {
       "gate": true,
@@ -1769,7 +1769,7 @@
       "pc_falloff": false,
       "tsmc_no_low": true,
       "tsmc_ma": false,
-      "us_10y": true,
+      "us_10y": false,
       "dxy_fall": false,
       "twd_stable": false,
       "sox_no_low": false,
