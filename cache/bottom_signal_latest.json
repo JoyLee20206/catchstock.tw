@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": true,
-   "value": "4.67% → 4.78%",
+   "value": "4.67% → 4.79%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "99.2 → 99.6",
+   "value": "99.2 → 99.7",
    "manual": false,
    "observe": false
   },
@@ -203,8 +203,8 @@
    "key": "sox_no_low",
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
-   "ok": true,
-   "value": "今低 11,444 / 前10日低 11,263",
+   "ok": false,
+   "value": "今低 11,173 / 前10日低 11,263",
    "manual": false,
    "observe": true
   },
@@ -237,5 +237,5 @@
  "level_label": "在打底",
  "level_icon": "🟠",
  "n_ok": 11,
- "generated_at": "2026-09-01 13:28"
+ "generated_at": "2026-09-01 17:22"
 }
