@@ -1,12 +1,12 @@
 {
- "asof": "2026-09-01",
+ "asof": "2026-09-02",
  "items": [
   {
    "key": "gate",
    "group": "01 恐慌指數",
    "name": "跌破 40 ★閘門",
    "ok": true,
-   "value": "今 24.9(已開,守住 42 以下)",
+   "value": "今 26.1(已開,守住 42 以下)",
    "manual": false,
    "observe": false
   },
@@ -15,7 +15,7 @@
    "group": "01 恐慌指數",
    "name": "續降 38",
    "ok": true,
-   "value": "今 24.9",
+   "value": "今 26.1",
    "manual": false,
    "observe": false
   },
@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 9.8 / 5日均 12.0(美VIX升所致,不算)",
+   "value": "差 9.6 / 5日均 11.6(美VIX升所致,不算)",
    "manual": false,
    "observe": false
   },
@@ -33,7 +33,7 @@
    "group": "01 恐慌指數",
    "name": "爆衝後急殺",
    "ok": false,
-   "value": "日高 25.1 收 24.9(回落 1.0%)",
+   "value": "日高 26.2 收 26.1(回落 0.5%)",
    "manual": false,
    "observe": false
   },
@@ -42,7 +42,7 @@
    "group": "02 股價走勢",
    "name": "未破前低",
    "ok": true,
-   "value": "今低 46,081 / 前10日低 44,210",
+   "value": "今低 46,165 / 前10日低 44,210",
    "manual": false,
    "observe": false
   },
@@ -59,8 +59,8 @@
    "key": "px_strong_k",
    "group": "02 股價走勢",
    "name": "強K守收盤",
-   "ok": true,
-   "value": "收 46,949(紅K,下影 100%)",
+   "ok": false,
+   "value": "收 46,165(黑K,下影 0%)",
    "manual": false,
    "observe": false
   },
@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 1.19 兆(1.25×均) +1.8%",
+   "value": "量 0.98 兆(1.02×均) -1.7%",
    "manual": false,
    "observe": false
   },
@@ -86,8 +86,8 @@
    "key": "vol_shrink",
    "group": "03 成交量",
    "name": "量縮止穩",
-   "ok": true,
-   "value": "量縮 +1.8%",
+   "ok": false,
+   "value": "量縮 -1.7%",
    "manual": false,
    "observe": false
   },
@@ -96,7 +96,7 @@
    "group": "03 成交量",
    "name": "帶量上漲",
    "ok": false,
-   "value": "量縮 +1.8%",
+   "value": "量縮 -1.7%",
    "manual": false,
    "observe": false
   },
@@ -105,7 +105,7 @@
    "group": "04 信用與廣度",
    "name": "融資減幅收斂",
    "ok": true,
-   "value": "今 +5.1 萬張 / 近日均減 11.3 萬張",
+   "value": "今 +5.1 萬張 / 近日均減 11.7 萬張",
    "manual": false,
    "observe": true
   },
@@ -114,7 +114,7 @@
    "group": "04 信用與廣度",
    "name": "跌家比從極端回落",
    "ok": false,
-   "value": "跌家比 67% → 40%",
+   "value": "跌家比 40% → 61%",
    "manual": false,
    "observe": true
   },
@@ -122,8 +122,8 @@
    "key": "fut_basis",
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
-   "ok": false,
-   "value": "價差 +260",
+   "ok": true,
+   "value": "價差 +24",
    "manual": false,
    "observe": false
   },
@@ -131,8 +131,8 @@
    "key": "f_spot",
    "group": "05 期貨與大戶",
    "name": "外資現貨賣超收斂",
-   "ok": true,
-   "value": "今 +1 億 / 近5日均賣 0 億",
+   "ok": false,
+   "value": "今 -1 億 / 近5日均賣 0 億",
    "manual": false,
    "observe": false
   },
@@ -140,8 +140,8 @@
    "key": "fi_cover",
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
-   "ok": true,
-   "value": "淨額 -82,970 → -78,706 口",
+   "ok": false,
+   "value": "淨額 -78,706 → -85,329 口",
    "manual": false,
    "observe": false
   },
@@ -149,8 +149,8 @@
    "key": "pc_falloff",
    "group": "05 期貨與大戶",
    "name": "P/C比從極端回落",
-   "ok": false,
-   "value": "96% → 110%",
+   "ok": true,
+   "value": "110% → 84%",
    "manual": false,
    "observe": false
   },
@@ -159,7 +159,7 @@
    "group": "06 台積電",
    "name": "台積止穩不破低",
    "ok": true,
-   "value": "今低 2,390 / 前10日低 2,335",
+   "value": "今低 2,385 / 前10日低 2,335",
    "manual": false,
    "observe": false
   },
@@ -167,8 +167,8 @@
    "key": "tsmc_ma",
    "group": "06 台積電",
    "name": "台積翻紅站MA5",
-   "ok": true,
-   "value": "收 2,440 / MA5 2,418",
+   "ok": false,
+   "value": "收 2,385 / MA5 2,412",
    "manual": false,
    "observe": false
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": true,
-   "value": "4.67% → 4.79%",
+   "value": "4.76% → 4.78%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "99.2 → 99.7",
+   "value": "99.4 → 99.8",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 31.66 → 31.69",
+   "value": "USDTWD 31.63 → 31.72",
    "manual": false,
    "observe": true
   },
@@ -231,11 +231,11 @@
   "台美恐慌差距縮小,但是「美股 VIX 上升」造成的,不是台灣恐慌在退——這不是止跌好訊號,反而要留意本地利空開始外溢到全球的可能。"
  ],
  "manual_flags": {},
- "vixtwn": 24.91,
- "fi_net_today": -78706,
- "level": 2,
- "level_label": "在打底",
- "level_icon": "🟠",
- "n_ok": 11,
- "generated_at": "2026-09-01 17:22"
+ "vixtwn": 26.1,
+ "fi_net_today": -85329,
+ "level": 1,
+ "level_label": "剛降溫",
+ "level_icon": "🟡",
+ "n_ok": 8,
+ "generated_at": "2026-09-02 12:44"
 }
