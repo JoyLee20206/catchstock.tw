@@ -2069,7 +2069,7 @@
       "us_10y": false,
       "dxy_fall": true,
       "twd_stable": true,
-      "sox_no_low": false,
+      "sox_no_low": true,
       "news_dulled": false,
       "news_resolved": false
     }
