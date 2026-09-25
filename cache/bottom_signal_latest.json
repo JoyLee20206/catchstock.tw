@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 31.68 → 31.76",
+   "value": "USDTWD 31.68 → 31.72",
    "manual": false,
    "observe": true
   },
@@ -204,7 +204,7 @@
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
    "ok": true,
-   "value": "今低 12,558 / 前10日低 11,110",
+   "value": "今低 12,550 / 前10日低 11,110",
    "manual": false,
    "observe": true
   },
@@ -235,5 +235,5 @@
  "level_label": "在打底",
  "level_icon": "🟠",
  "n_ok": 10,
- "generated_at": "2026-09-25 13:42"
+ "generated_at": "2026-09-25 18:01"
 }
