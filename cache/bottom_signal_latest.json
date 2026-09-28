@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": true,
-   "value": "5.16% → 5.21%",
+   "value": "5.16% → 5.24%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": true,
-   "value": "101.3 → 101.1",
+   "value": "101.3 → 101.2",
    "manual": false,
    "observe": false
   },
@@ -235,5 +235,5 @@
  "level_label": "在打底",
  "level_icon": "🟠",
  "n_ok": 10,
- "generated_at": "2026-09-28 16:44"
+ "generated_at": "2026-09-28 20:10"
 }
