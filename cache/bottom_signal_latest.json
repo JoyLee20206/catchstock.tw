@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": true,
-   "value": "5.24% → 5.33%",
+   "value": "5.24% → 5.31%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "102.1 → 102.2",
+   "value": "102.1 → 102.1",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": true,
-   "value": "USDTWD 31.87 → 31.72",
+   "value": "USDTWD 31.87 → 31.71",
    "manual": false,
    "observe": true
   },
@@ -235,5 +235,5 @@
  "level_label": "在打底",
  "level_icon": "🟠",
  "n_ok": 12,
- "generated_at": "2026-10-05 17:06"
+ "generated_at": "2026-10-05 21:21"
 }
