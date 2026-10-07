@@ -1,12 +1,12 @@
 {
- "asof": "2026-10-06",
+ "asof": "2026-10-07",
  "items": [
   {
    "key": "gate",
    "group": "01 恐慌指數",
    "name": "跌破 40 ★閘門",
    "ok": true,
-   "value": "今 23.5(已開,守住 42 以下)",
+   "value": "今 23.3(已開,守住 42 以下)",
    "manual": false,
    "observe": false
   },
@@ -15,7 +15,7 @@
    "group": "01 恐慌指數",
    "name": "續降 38",
    "ok": true,
-   "value": "今 23.5",
+   "value": "今 23.3",
    "manual": false,
    "observe": false
   },
@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 8.1 / 5日均 7.2",
+   "value": "差 8.0 / 5日均 7.2",
    "manual": false,
    "observe": false
   },
@@ -33,7 +33,7 @@
    "group": "01 恐慌指數",
    "name": "爆衝後急殺",
    "ok": false,
-   "value": "日高 23.7 收 23.5(回落 0.7%)",
+   "value": "日高 23.7 收 23.3(回落 1.6%)",
    "manual": false,
    "observe": false
   },
@@ -42,7 +42,7 @@
    "group": "02 股價走勢",
    "name": "未破前低",
    "ok": true,
-   "value": "今低 49,480 / 前10日低 46,450",
+   "value": "今低 49,568 / 前10日低 47,207",
    "manual": false,
    "observe": false
   },
@@ -59,8 +59,8 @@
    "key": "px_strong_k",
    "group": "02 股價走勢",
    "name": "強K守收盤",
-   "ok": true,
-   "value": "收 49,823(紅K,下影 70%)",
+   "ok": false,
+   "value": "收 49,806(黑K,下影 60%)",
    "manual": false,
    "observe": false
   },
@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 1.03 兆(1.17×均) +0.2%",
+   "value": "量 0.99 兆(1.12×均) -0.0%",
    "manual": false,
    "observe": false
   },
@@ -87,7 +87,7 @@
    "group": "03 成交量",
    "name": "量縮止穩",
    "ok": true,
-   "value": "量縮 +0.2%",
+   "value": "量縮 -0.0%",
    "manual": false,
    "observe": false
   },
@@ -96,7 +96,7 @@
    "group": "03 成交量",
    "name": "帶量上漲",
    "ok": false,
-   "value": "量縮 +0.2%",
+   "value": "量縮 -0.0%",
    "manual": false,
    "observe": false
   },
@@ -114,7 +114,7 @@
    "group": "04 信用與廣度",
    "name": "跌家比從極端回落",
    "ok": false,
-   "value": "跌家比 64% → 57%",
+   "value": "跌家比 57% → 44%",
    "manual": false,
    "observe": true
   },
@@ -123,7 +123,7 @@
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
    "ok": true,
-   "value": "價差 +237",
+   "value": "價差 +173",
    "manual": false,
    "observe": false
   },
@@ -132,7 +132,7 @@
    "group": "05 期貨與大戶",
    "name": "外資現貨賣超收斂",
    "ok": true,
-   "value": "今 -1 億 / 近5日均賣 3 億",
+   "value": "今 +2 億 / 近5日均賣 3 億",
    "manual": false,
    "observe": false
   },
@@ -140,8 +140,8 @@
    "key": "fi_cover",
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
-   "ok": false,
-   "value": "淨額 -77,004 → -79,517 口",
+   "ok": true,
+   "value": "淨額 -79,517 → -79,101 口",
    "manual": false,
    "observe": false
   },
@@ -149,8 +149,8 @@
    "key": "pc_falloff",
    "group": "05 期貨與大戶",
    "name": "P/C比從極端回落",
-   "ok": false,
-   "value": "92% → 95%",
+   "ok": true,
+   "value": "95% → 82%",
    "manual": false,
    "observe": false
   },
@@ -159,7 +159,7 @@
    "group": "06 台積電",
    "name": "台積止穩不破低",
    "ok": true,
-   "value": "今低 2,565 / 前10日低 2,435",
+   "value": "今低 2,560 / 前10日低 2,445",
    "manual": false,
    "observe": false
   },
@@ -168,7 +168,7 @@
    "group": "06 台積電",
    "name": "台積翻紅站MA5",
    "ok": true,
-   "value": "收 2,585 / MA5 2,530",
+   "value": "收 2,585 / MA5 2,551",
    "manual": false,
    "observe": false
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": false,
-   "value": "5.28% → 5.27%",
+   "value": "5.31% → 5.31%",
    "manual": false,
    "observe": false
   },
@@ -185,8 +185,8 @@
    "key": "dxy_fall",
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
-   "ok": true,
-   "value": "101.9 → 101.9",
+   "ok": false,
+   "value": "102.2 → 102.3",
    "manual": false,
    "observe": false
   },
@@ -194,8 +194,8 @@
    "key": "twd_stable",
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
-   "ok": true,
-   "value": "USDTWD 31.89 → 31.78",
+   "ok": false,
+   "value": "USDTWD 31.83 → 31.85",
    "manual": false,
    "observe": true
   },
@@ -204,7 +204,7 @@
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
    "ok": true,
-   "value": "今低 13,218 / 前10日低 12,258",
+   "value": "今低 12,865 / 前10日低 12,258",
    "manual": false,
    "observe": true
   },
@@ -229,11 +229,11 @@
  ],
  "alerts": [],
  "manual_flags": {},
- "vixtwn": 23.53,
- "fi_net_today": -79517,
+ "vixtwn": 23.29,
+ "fi_net_today": -79101,
  "level": 2,
  "level_label": "在打底",
  "level_icon": "🟠",
  "n_ok": 12,
- "generated_at": "2026-10-06 18:58"
+ "generated_at": "2026-10-07 15:31"
 }
