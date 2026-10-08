@@ -60,9 +60,12 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add cache/bottom_signal_history.json cache/bottom_signal_latest.json cache/fi_futures_history.json
+          # 逐檔 add:任一檔不存在時,寫在同一行的 git add 會整行失敗、整步中止,
+          # 連其他檔都存不回去(fi_futures_history 要外資期貨抓成功過一次才會產生)。
+          git add cache/bottom_signal_history.json || true
+          git add cache/bottom_signal_latest.json || true
+          git add cache/fi_futures_history.json || true
           # 推播去重狀態:必須存回 repo,否則下次 CI 全新 checkout 讀不到上次分級 → 去重失效。
-          # 首次執行可能尚未生成,用 || true 讓缺檔不擋流程。
           git add cache/bottom_push_state.json || true
           git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update bottom signal history"
           git pull --rebase origin main || true
