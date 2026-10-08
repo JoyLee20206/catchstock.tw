@@ -7,7 +7,7 @@
 - 每日 50 次請求 (帳號內儲值 ≥$10 升級為 1000 次/日)
 - 全帳號每分鐘 20 RPM (requests per minute)
 策略:
-1. 第一順位用 `openrouter/auto:free` 自動路由,讓 OpenRouter 自己挑可用免費模型
+1. 依 AI_MODELS 順序嘗試,最後用 `openrouter/free` 自動路由保底
 2. 收到 429 (rate limit) 時 retry 同一支等 RPM 恢復,不立刻換下一支耗額度
 3. 累計 N 次 429 後直接放棄,避免一次燒光當日配額
 """
@@ -27,7 +27,7 @@ RETRY_429_WAIT  = 15   # 收到 429 等幾秒再 retry 同一支
 RETRY_429_TIMES = 1    # 同一支 429 最多 retry 次數 (1 = 等一次後再試一次)
 MAX_TOTAL_429   = 6    # 跨模型累計 429 上限,超過直接放棄。
                        # 設 6:實測每天僅用 ~3 次、離每日 50 次上限很遠,配額充足,
-                       # 故放寬到讓 auto→Qwen→Gemma→Llama 每支都有機會輪到(免費模型是全球共用、
+                       # 故放寬到讓清單裡每支模型都有機會輪到(免費模型是全球共用、
                        # 會臨時塞車,換一支常就通)。若哪天改用付費/額度吃緊,再調回小一點。
 
 # 503 重試設定(Service Unavailable 通常是平台短暫過載,等 3 秒再試大多會通)
@@ -35,17 +35,22 @@ RETRY_503_WAIT  = 3    # 收到 503 等幾秒再 retry 同一支
 RETRY_503_TIMES = 1    # 同一支 503 最多 retry 次數
 
 # 模型清單(依優先序排列,前面失敗就試下一個)
-# ⚠️ 策略(2026-07):Qwen 擺第一(中文最強、點評品質優先);其後接 auto:free(平台自動挑可用免費
-#    模型、不會 404)+ Gemma/Llama 備援。MAX_TOTAL_429 已放寬到 6,4 支都有機會輪到,兼顧品質與產出率。
+# ⚠️ 2026-10 更新:原 Qwen3 Next / auto:free / Llama 3.3 免費代號皆已下架(只剩 Gemma),
+#    依當時 OpenRouter 免費清單重排;最後接 openrouter/free(舊 auto:free 的新代號)保底。
 #    → 免費額度用完(429)那天所有免費模型都會失敗,屬正常;AI 點評失敗不影響推播照發。
 # ⚠️ 免費代號會過期:失效就到 https://openrouter.ai/models?max_price=0 複製「當下」正確代號替換。
 #    想穩定不掉線 → 儲值 $10 改用便宜付費代號(如 deepseek/deepseek-chat)。
 AI_MODELS = [
-    {"id": "qwen/qwen3-next-80b-a3b-instruct:free",  "name": "Qwen3 Next 80B"},   # 第一順位:中文最強
-    {"id": "openrouter/auto:free",                   "name": "Auto Free Router"}, # 自動挑可用免費模型、不會 404
-    {"id": "google/gemma-4-31b-it:free",             "name": "Gemma 4 31B"},      # 多語(140+),中文佳
-    {"id": "meta-llama/llama-3.3-70b-instruct:free", "name": "Llama 3.3(備援)"},
+    {"id": "google/gemma-4-31b-it:free",             "name": "Gemma 4 31B"},            # 多語(140+),中文佳
+    {"id": "nvidia/nemotron-3-super-120b-a12b:free", "name": "Nemotron 3 Super 120B"},  # 大型、分析強
+    {"id": "inclusionai/ling-3.0-flash-sante:free",  "name": "Ling 3.0 Flash"},         # 螞蟻集團,中文強項
+    {"id": "google/gemma-4-26b-a4b-it:free",         "name": "Gemma 4 26B"},            # 較輕、回應快
+    {"id": "openrouter/free",                        "name": "OpenRouter Free Router"}, # 平台自動挑,保底
 ]
+
+# 2026-10 起免費模型全是「推理型」:先思考再回答,思考也吃 max_tokens 額度且回應較慢。
+# 呼叫端傳的 max_tokens 是「答案」長度;實際送出時另加這筆思考預算,避免答案沒寫完就被截斷。
+REASONING_TOKEN_BUDGET = 2000
 
 
 def get_api_key():
@@ -102,13 +107,14 @@ def _clean_answer(raw: str) -> str:
     return text
 
 
-def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, models: list = None):
+def call_openrouter_ai(prompt: str, timeout: int = 60, max_tokens: int = 250, models: list = None):
     """依序嘗試模型清單,回傳 (model_name, ai_text);全部失敗回傳 (None, None)。
 
     Args:
         prompt: 餵給 AI 的內容
-        timeout: 單次 API 呼叫的逾時(秒)
-        max_tokens: 限制輸出長度。Telegram 簡短點評建議 250,個股深度分析建議 400
+        timeout: 單次 API 呼叫的逾時(秒);推理型模型較慢,預設 60
+        max_tokens: 答案長度上限。Telegram 簡短點評建議 250,個股深度分析建議 400
+                    (送出時會再加 REASONING_TOKEN_BUDGET 給模型思考用)
         models: 自訂模型清單(預設使用 AI_MODELS 並套用 PREFERRED_AI 排序)。
                 呼叫端可傳入單一模型 [{"id":..., "name":...}] 達成「強制指定」效果。
 
@@ -142,7 +148,7 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
             "model": m["id"],
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
-            "max_tokens": max_tokens,
+            "max_tokens": max_tokens + REASONING_TOKEN_BUDGET,
             # 要求推理型模型別回傳推理內容(不支援此參數的模型會忽略)
             "reasoning": {"exclude": True},
         }

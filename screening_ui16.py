@@ -3838,12 +3838,12 @@ with _tab_sent:
                 "🤖 產生 AI 建議",
                 type="primary",
                 use_container_width=True,
-                help=("呼叫 OpenRouter 免費模型(10~20 秒)。同一 session 結果會快取,"
+                help=("呼叫 OpenRouter 免費模型(約 20~60 秒)。同一 session 結果會快取,"
                       "可手動重新產生。"),
             )
 
         if _gen_advice_clicked:
-            with st.spinner("AI 分析中(預計 10~20 秒)..."):
+            with st.spinner("AI 分析中(推理型模型,約 20~60 秒)..."):
                 _model_name_adv, _ai_advice_text = call_openrouter_ai(
                     _ai_market_prompt, max_tokens=500
                 )
@@ -3878,7 +3878,7 @@ with _tab_sent:
                 unsafe_allow_html=True,
             )
         else:
-            st.info("👆 點上方按鈕產生今日操作建議(免費模型,10~20 秒)")
+            st.info("👆 點上方按鈕產生今日操作建議(免費模型,約 20~60 秒)")
 
         # ── 📚 各指標完整說明 ──
         with st.expander("📚 各指標完整說明 / FAQ", expanded=False):
