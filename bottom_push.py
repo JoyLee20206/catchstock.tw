@@ -130,8 +130,11 @@ def main() -> int:
         if level >= TARGET_LEVEL and (prev_level is None or prev_level < TARGET_LEVEL):
             text = (f"🎯 首次達到『{result['level_label']}』{result['level_icon']}"
                     f"(已達目標分級)\n" + text)
-        send_telegram(text)
-        _save_last_pushed_level(level)
+        # 只有發送成功才記「已推過這一級」;失敗不記,下次排程會再推,不會永久漏掉提醒
+        if send_telegram(text):
+            _save_last_pushed_level(level)
+        else:
+            print("   ⚠ 推播失敗,不記錄已推分級,下次排程會重推")
     else:
         print("🔕 本次不發 Telegram(已達標且分級未變;UI/歷史仍照常更新)")
 

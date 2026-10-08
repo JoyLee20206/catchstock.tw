@@ -156,6 +156,18 @@ def main():
         # ✅ 修改為（透過 get_sids 函式安全提取，自動兼容新舊格式）：
         yesterday_sids = set(get_sids(history[-1])) if history else set()
 
+        # ── 2b. 選股完立刻寫歷史(v2 schema:picks 含 score/close/industry + 影子清單) ──
+        # 放在所有排版/推播之前:後面任何一步出錯,當日紀錄都已保存,
+        # 不會讓隔天的連續天數、退場名單與回測資料少一天。
+        # 記憶體中的 history 刻意維持「不含今日」,compute_streak 等函式以此為前提。
+        entry_today = {"date": today_str, "picks": build_picks_from_df(df)}
+        # 影子清單(過原始門檻但被空頭/盤整從嚴擋下):只寫歷史供大盤濾網回測,不進推播
+        shadow_today = build_picks_from_df(meta.get('shadow_df'))
+        if shadow_today:
+            entry_today["shadow_picks"] = shadow_today
+            print(f"👻 影子清單 {len(shadow_today)} 檔已寫入歷史(僅供回測,未推播)")
+        save_history([h for h in history if h.get("date") != "legacy"] + [entry_today])
+
         def _safe_num(v, default=0.0):
             return float(v) if pd.notna(v) else default
 
@@ -471,22 +483,6 @@ def main():
             print(f"✅ 推播完成!今日共 {n_hit} 檔達標。")
         else:
             print(f"⚠️ 推播失敗或部分失敗(已寫入歷史),今日 {n_hit} 檔達標。")
-
-        # ── 8. 更新歷史(v2 schema:寫入完整 picks 含 score/close/industry) ─
-        picks_today = build_picks_from_df(df)
-        # 同一天重跑會覆蓋(取最後一次),legacy 也順便清掉
-        history = [
-            h for h in history
-            if h.get("date") not in (today_str, "legacy")
-        ]
-        entry_today = {"date": today_str, "picks": picks_today}
-        # 影子清單(過原始門檻但被空頭/盤整從嚴擋下):只寫歷史供大盤濾網回測,不進推播
-        shadow_today = build_picks_from_df(meta.get('shadow_df'))
-        if shadow_today:
-            entry_today["shadow_picks"] = shadow_today
-            print(f"👻 影子清單 {len(shadow_today)} 檔已寫入歷史(僅供回測,未推播)")
-        history.append(entry_today)
-        save_history(history)
 
     except Exception as e:
         safe_error = html.escape(str(e))

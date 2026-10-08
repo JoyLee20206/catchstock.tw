@@ -892,9 +892,29 @@ def fetch_yfinance_daily(info_df, default_start_date, chunk_size=400):
     df_new['date']     = pd.to_datetime(df_new['date']).dt.strftime('%Y-%m-%d')
     df_new['stock_id'] = df_new['yf_ticker'].map(ticker_map)
     df_new = df_new.dropna(subset=['close', 'stock_id'])
+
+    # 全量覆蓋前的保護:某一批下載失敗/中途中止/個股被限速回空時,那些股票不在 df_new 裡。
+    # 若直接覆蓋再 cleanup,它們的整段歷史就會消失(data_health 也察覺不到,因為每天都缺)。
+    # → 從舊檔把缺的股票補回來;它們的最新日期會停在舊日,data_health 的「卡在舊日期」檢查會示警。
+    _prev_daily = sorted(CACHE_DIR.glob("daily_*.parquet"))
+    if _prev_daily:
+        try:
+            _old = pd.read_parquet(_prev_daily[-1])
+            _old['stock_id'] = _old['stock_id'].astype(str)
+            # 只補「這次有要抓卻沒抓到」的;已下市/移出清單的股不補,避免舊股永遠殘留
+            _requested = {str(s) for s in ticker_map.values()}
+            _missing = (set(_old['stock_id']) & _requested) - set(df_new['stock_id'].astype(str))
+            if _missing:
+                _fill = _old[_old['stock_id'].isin(_missing)]
+                _fill = _fill[[c for c in df_new.columns if c in _fill.columns]]
+                df_new = pd.concat([df_new, _fill], ignore_index=True)
+                print(f"   ⚠ 本次有 {len(_missing)}/{len(_requested)} 檔未抓到(批次失敗或限速),"
+                      f"已從舊檔 {_prev_daily[-1].name} 補回其歷史(最新日期停在舊日)")
+        except Exception as _e:
+            print(f"   ⚠ 讀舊 daily 補缺失敗(略過,僅寫入本次抓到的部分): {_e}")
+
     df_new = df_new.sort_values(by=['stock_id', 'date']).reset_index(drop=True)
-    
-    # 直接存檔，無需與舊檔合併
+
     df_new.to_parquet(path_for("daily"))
     print(f"   -> 價量快取全量建置完成! (總庫存: {len(df_new):,} 筆)")
     cleanup_old_cache("daily")  # <--- 補上這行

@@ -371,9 +371,9 @@ def detect_resonance_signals(matrices, retail_matrix):
         return pd.DataFrame(False, index=close.index, columns=close.columns)
     delta = retail_matrix.diff()           # 週對週變化
     weekly_signal = delta < 0              # 散戶比例下降即觸發
-    daily_signal = weekly_signal.reindex(
-        index=close.index, columns=close.columns, method='ffill'
-    )
+    # 先對齊股票欄、再對日期 ffill:index/columns 同時帶 method 時 ffill 也會套到欄軸,
+    # 沒籌碼資料的股會沿用代號排在前一檔的訊號
+    daily_signal = weekly_signal.reindex(columns=close.columns).reindex(close.index, method='ffill')
     return daily_signal.fillna(False).astype(bool)
 
 
@@ -722,8 +722,9 @@ def detect_chip_accumulation_signals(matrices, large_matrix, min_weekly_rise: fl
         return pd.DataFrame(False, index=close.index, columns=close.columns)
     delta = large_matrix.diff()               # 週對週大戶%變化
     accumulating = delta > min_weekly_rise    # 大戶逆勢增持(週)
-    daily = accumulating.reindex(
-        index=close.index, columns=close.columns, method='ffill'
+    # 先對齊股票欄、再對日期 ffill(同 detect_resonance_signals,避免 ffill 跨到隔壁股票)
+    daily = accumulating.reindex(columns=close.columns).reindex(
+        close.index, method='ffill'
     ).fillna(False).astype(bool)
     ma20 = close.rolling(20, min_periods=20).mean()
     weak = (close < ma20).fillna(False)       # 股價還沒起漲(低檔)
@@ -1031,6 +1032,9 @@ def run_backtest(cache_dir, signal="breakout", hold_days: int = 10,
 
     # ── 個股回測過濾:若指定 stock_filter,只保留該股票欄位 ──
     if stock_filter:
+        # 未開大盤濾網時 sig_matrices 仍是 precomputed 的快取本體;不先複製,
+        # 下方逐鍵覆寫會讓之後的全市場回測只剩這一檔
+        sig_matrices = dict(sig_matrices)
         _sid = str(stock_filter).strip()
         if _sid in matrices['close'].columns:
             for k in list(sig_matrices.keys()):
