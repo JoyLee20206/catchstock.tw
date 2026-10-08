@@ -1,0 +1,217 @@
+"""OpenRouter AI 共用模組(多模型 fallback)
+
+供 telegram_notify.py 與 screening_ui16.py 共用,
+避免兩邊各維護一份模型清單與呼叫邏輯。
+
+⚠️ OpenRouter 免費帳號限制 (2026):
+- 每日 50 次請求 (帳號內儲值 ≥$10 升級為 1000 次/日)
+- 全帳號每分鐘 20 RPM (requests per minute)
+策略:
+1. 依 AI_MODELS 順序嘗試,最後用 `openrouter/free` 自動路由保底
+2. 收到 429 (rate limit) 時 retry 同一支等 RPM 恢復,不立刻換下一支耗額度
+3. 累計 N 次 429 後直接放棄,避免一次燒光當日配額
+"""
+import os
+import re
+import time
+import requests
+
+
+# ── 可調設定 ───────────────────────────────────────────────────────────
+# 環境變數 PREFERRED_AI_MODEL 填關鍵字即可指定優先模型,例如 "deepseek" / "qwen" / "gemini"
+# 不設定就照 AI_MODELS 預設順序跑。
+PREFERRED_AI = os.environ.get("PREFERRED_AI_MODEL", "").strip().lower()
+
+# 429 重試設定
+RETRY_429_WAIT  = 15   # 收到 429 等幾秒再 retry 同一支
+RETRY_429_TIMES = 1    # 同一支 429 最多 retry 次數 (1 = 等一次後再試一次)
+MAX_TOTAL_429   = 6    # 跨模型累計 429 上限的「下限值」,超過直接放棄。
+                       # 實際上限 = max(此值, 模型數 × 每支嘗試次數),確保清單裡每支(含最後的
+                       # 保底 openrouter/free)都輪得到;固定 6 時每支 429 吃 2 次,只夠試前 3 支。
+                       # 實測每天僅用 ~3 次、離每日 50 次上限很遠,配額充足。
+
+# 503 重試設定(Service Unavailable 通常是平台短暫過載,等 3 秒再試大多會通)
+RETRY_503_WAIT  = 3    # 收到 503 等幾秒再 retry 同一支
+RETRY_503_TIMES = 1    # 同一支 503 最多 retry 次數
+
+# 模型清單(依優先序排列,前面失敗就試下一個)
+# ⚠️ 2026-10 更新:原 Qwen3 Next / auto:free / Llama 3.3 免費代號皆已下架(只剩 Gemma),
+#    依當時 OpenRouter 免費清單重排;最後接 openrouter/free(舊 auto:free 的新代號)保底。
+#    → 免費額度用完(429)那天所有免費模型都會失敗,屬正常;AI 點評失敗不影響推播照發。
+# ⚠️ 免費代號會過期:失效就到 https://openrouter.ai/models?max_price=0 複製「當下」正確代號替換。
+#    想穩定不掉線 → 儲值 $10 改用便宜付費代號(如 deepseek/deepseek-chat)。
+AI_MODELS = [
+    {"id": "google/gemma-4-31b-it:free",             "name": "Gemma 4 31B"},            # 多語(140+),中文佳
+    {"id": "nvidia/nemotron-3-super-120b-a12b:free", "name": "Nemotron 3 Super 120B"},  # 大型、分析強
+    {"id": "inclusionai/ling-3.0-flash-sante:free",  "name": "Ling 3.0 Flash"},         # 螞蟻集團,中文強項
+    {"id": "google/gemma-4-26b-a4b-it:free",         "name": "Gemma 4 26B"},            # 較輕、回應快
+    {"id": "openrouter/free",                        "name": "OpenRouter Free Router"}, # 平台自動挑,保底
+]
+
+# 2026-10 起免費模型全是「推理型」:先思考再回答,思考也吃 max_tokens 額度且回應較慢。
+# 呼叫端傳的 max_tokens 是「答案」長度;實際送出時另加這筆思考預算,避免答案沒寫完就被截斷。
+REASONING_TOKEN_BUDGET = 2000
+
+
+def get_api_key():
+    """讀 OpenRouter API Key:
+    優先順序 = 環境變數 > Streamlit secrets(只有在 streamlit 環境才會讀)。
+
+    寫成函式而非常數,是為了讓非 streamlit 環境(例如 GitHub Actions 跑 telegram)
+    匯入時不會 crash。
+    """
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if key:
+        return key
+    try:
+        import streamlit as st  # 延遲匯入,避免非 streamlit 環境噴 ModuleNotFoundError
+        return st.secrets.get("OPENROUTER_API_KEY")
+    except Exception:
+        return None
+
+
+def _is_rate_limit_error(exc) -> bool:
+    """判斷 exception 是不是 429 rate limit。"""
+    msg = str(exc).lower()
+    return "429" in msg or "too many requests" in msg or "rate limit" in msg
+
+
+def _is_service_unavailable(exc) -> bool:
+    """判斷 exception 是不是 503 service unavailable(暫時性過載,值得 retry)。"""
+    msg = str(exc).lower()
+    return "503" in msg or "service unavailable" in msg
+
+
+_THINK_BLOCK = re.compile(r"<think>.*?(</think>|$)", re.DOTALL | re.IGNORECASE)
+_REASONING_HEAD = re.compile(r"^\s*(thinking process|thought process|let me think|okay,? (so|let)|"
+                             r"analy[sz]e the request)", re.IGNORECASE)
+
+
+def _clean_answer(raw: str) -> str:
+    """清掉推理殘留與 Markdown,回傳可顯示的答案;判定為「思考過程」時回空字串。
+
+    推理型模型(auto:free 有時會路由到)會把英文思考過程放進 content,或
+    content 被 max_tokens 截在思考半途 → 這種內容絕不能當答案顯示。
+    """
+    text = raw or ""
+    # 有些模型只輸出結尾的 </think>(開頭標籤被省略)→ 只取最後一個 </think> 之後的正文
+    if "</think>" in text.lower():
+        text = text[text.lower().rfind("</think>") + len("</think>"):]
+    text = _THINK_BLOCK.sub("", text).strip()
+    for tok in ("###", "##", "**", "*", "`"):
+        text = text.replace(tok, "")
+    text = text.strip()
+    if not text or _REASONING_HEAD.match(text):
+        return ""
+    # 所有呼叫端都要求繁中輸出:英文小寫字母比中文字還多 → 幾乎必是外漏的英文推理。
+    # 只數小寫:合法答案裡的英文多是大寫縮寫/代號(HBM、MA60、NVIDIA),不該被算成「英文很多」
+    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
+    latin = sum(1 for ch in text if "a" <= ch <= "z")
+    if latin > cjk:
+        return ""
+    return text
+
+
+def call_openrouter_ai(prompt: str, timeout: int = 60, max_tokens: int = 250, models: list = None):
+    """依序嘗試模型清單,回傳 (model_name, ai_text);全部失敗回傳 (None, None)。
+
+    Args:
+        prompt: 餵給 AI 的內容
+        timeout: 單次 API 呼叫的逾時(秒);推理型模型較慢,預設 60
+        max_tokens: 答案長度上限。Telegram 簡短點評建議 250,個股深度分析建議 400
+                    (送出時會再加 REASONING_TOKEN_BUDGET 給模型思考用)
+        models: 自訂模型清單(預設使用 AI_MODELS 並套用 PREFERRED_AI 排序)。
+                呼叫端可傳入單一模型 [{"id":..., "name":...}] 達成「強制指定」效果。
+
+    Notes:
+        - 函式內會把 Markdown 殘留(**、##、###、*、`)清掉,避免破壞 HTML/UI 顯示
+        - 失敗會吞掉例外、改用 print log,呼叫端不必再包 try
+        - 收到 429 時會等 RETRY_429_WAIT 秒後 retry 同一支(等 RPM 恢復)
+    """
+    api_key = get_api_key()
+    if not api_key:
+        return None, None
+
+    # 預設清單套用 PREFERRED_AI 排序;呼叫端傳入的自訂清單則保持順序不動
+    if models is None:
+        models = sorted(
+            AI_MODELS,
+            key=lambda m: 0 if PREFERRED_AI and PREFERRED_AI in m["id"].lower() else 1
+        )
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    total_429 = 0   # 跨模型累計 429 數,達 max_total_429 直接放棄
+    max_total_429 = max(MAX_TOTAL_429, len(models) * (RETRY_429_TIMES + 1))
+    # 同一支內最多嘗試次數 = 429 retry + 503 retry + 1(首次):兩種錯誤先後各發生一次時,
+    # 等完 503 的那次才有機會真的重試(用 max() 會等完就沒次數了)
+    max_attempts = RETRY_429_TIMES + RETRY_503_TIMES + 1
+
+    for m in models:
+        payload = {
+            "model": m["id"],
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": max_tokens + REASONING_TOKEN_BUDGET,
+            # 要求推理型模型別回傳推理內容(不支援此參數的模型會忽略)
+            "reasoning": {"exclude": True},
+        }
+        attempt_429 = 0
+        attempt_503 = 0
+        for _attempt in range(max_attempts):
+            try:
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers, json=payload, timeout=timeout
+                )
+                resp.raise_for_status()
+                j = resp.json()
+
+                if "choices" in j and j["choices"]:
+                    # 只認 content。reasoning 欄是模型的思考草稿(常是英文、且被 max_tokens 截斷),
+                    # 絕不能拿來當答案;content 空或只有思考殘留 → 視為失敗、換下一支模型。
+                    _msg = j["choices"][0].get("message") or {}
+                    text = _clean_answer(_msg.get("content"))
+                    if text:
+                        print(f"   ✅ AI 模型 {m['name']} 回應成功")
+                        return m["name"], text
+                    print(f"   ⚠ {m['name']} 只回了思考過程/空內容"
+                          f"(finish={j['choices'][0].get('finish_reason')}),換下一支")
+                elif "error" in j:
+                    print(f"   ⚠ {m['name']} 拒絕: {j['error'].get('message', '')[:120]}")
+                break   # 非 429/503 失敗 → 換下一支
+            except requests.exceptions.Timeout:
+                print(f"   ⚠ {m['name']} 逾時,換下一個")
+                break
+            except Exception as e:
+                if _is_rate_limit_error(e):
+                    total_429 += 1
+                    if total_429 >= max_total_429:
+                        print(f"   ⛔ 累計 {total_429} 次 429,放棄以保護當日配額")
+                        return None, None
+                    if attempt_429 < RETRY_429_TIMES:
+                        attempt_429 += 1
+                        print(f"   ⚠ {m['name']} 429 限速,等 {RETRY_429_WAIT}s 再 retry...")
+                        time.sleep(RETRY_429_WAIT)
+                        continue
+                    else:
+                        print(f"   ⚠ {m['name']} 429 retry 後仍失敗,換下一支")
+                        break
+                elif _is_service_unavailable(e):
+                    if attempt_503 < RETRY_503_TIMES:
+                        attempt_503 += 1
+                        print(f"   ⚠ {m['name']} 503 服務暫時不可用,等 {RETRY_503_WAIT}s 再 retry...")
+                        time.sleep(RETRY_503_WAIT)
+                        continue
+                    else:
+                        print(f"   ⚠ {m['name']} 503 retry 後仍失敗,換下一支")
+                        break
+                else:
+                    print(f"   ⚠ {m['name']} 失敗: {str(e)[:120]}")
+                    break
+
+    print("   ❌ 所有 AI 模型皆失敗")
+    return None, None
