@@ -553,14 +553,15 @@ if _freshness["level"] != "missing":
                 except Exception:
                     pass
                 if _is_fallback:
-                    _suffix += " ⚠️ <span style='color:#d97706'>**本次抓取失敗,仍為前次資料**</span>"
+                    _suffix += " ⚠️ **本次抓取失敗,仍為前次資料**"   # st.caption 不解析 HTML,不可放 <span>
                 _caption_parts.append(f"🕐 抓取於 **{_fetch_ts}**{_suffix}")
         except Exception:
             pass
         st.caption(" · ".join(_caption_parts))
 
         # ── 盤中提醒:< 14:00 抓的是即時價,警告使用者 ──
-        _now = datetime.now()
+        # 用台灣時間:Streamlit Cloud 主機是 UTC,datetime.now() 會差 8 小時
+        _now = pd.Timestamp.now(tz="Asia/Taipei")
         _is_market_hours = (
             _now.weekday() < 5 and
             ((_now.hour == 9 and _now.minute >= 0) or
@@ -709,7 +710,7 @@ with st.sidebar:
 * **預設**:最通用,平常就用這個。
 * **多頭寬鬆**:大盤明顯在漲時用 → 條件放寬,才不會漏掉剛起漲的股。
 * **空頭嚴格**:大盤在跌/亂時用 → 條件變嚴,只挑最強、最抗跌的股。
-* **低檔發動**:**抄底向**,跟上面三個「追強勢」相反。專找「KD 從**很深的超賣**剛翻揚、而且**今日還在低檔**(還沒漲上去)」的股,門檻 6 分、日均量 ≥ 500 張(濾掉冷門股)。適合抓**跌深翻揚的轉折**。
+* **低檔發動**:**抄底向**,跟上面三個「追強勢」相反。專找「KD 從**很深的超賣**剛翻揚、而且**今日還在低檔**(還沒漲上去)」的股,門檻 7 分、日均量 ≥ 500 張(濾掉冷門股)。適合抓**跌深翻揚的轉折**。
     > 💡 還是覺得選太多?把上方「過關門檻」滑桿再往上調(7、8)就會更精;或改用「🔬 訊號回測」裡更精準的反轉組合(大戶增持 + 資減券增)。
     > ⚠️ 抄底天生勝率較低、容易接刀子 → **進場要等帶量紅K確認、嚴設停損**;先用訊號回測驗證有沒有 edge 再實戰。
 
@@ -721,7 +722,7 @@ with st.sidebar:
 這區決定「一檔股票**及不及格**」。
 
 * **過關門檻(滿分 10 分)**:系統幫每檔股票**打分數**,**達到門檻才會被選出來**。
-    * 分數怎麼來:法人有沒有買、大戶有沒有增加(2 分)、散戶有沒有在跑(2 分)、營收有沒有成長、技術面強不強…等加總。大戶/散戶配重最高,因為歷史數據證明它們最會挑到贏家。(「券相關」歷史數據反而扣分,已暫停計分、僅記錄觀察)
+    * 分數怎麼來:法人有沒有買、大戶有沒有增加(2 分)、散戶有沒有在跑(2 分)、營收有沒有成長、KD 是否低檔金叉、是否強過大盤…等加總。大戶/散戶配重最高,因為歷史數據證明它們最會挑到贏家。(「券相關」與「技術面三合一」歷史數據沒有加分效果,已暫停計分、僅記錄觀察)
     * 門檻**調高=更嚴**(選出來少而精)、**調低=更寬鬆**(選出來多)。
     * 🛡️ 大盤轉弱(跌破季線)時,系統會**自動把門檻 +1 分**,幫你變謹慎、避開容易跟跌的弱股。
 * **KD 是什麼?** 一個常見技術指標,簡單看股價是「便宜被低估」還是「太貴被高估」。
@@ -751,7 +752,7 @@ with st.sidebar:
     st.button("多頭寬鬆", on_click=apply_preset, args=('bull',),      use_container_width=True)
     st.button("空頭嚴格", on_click=apply_preset, args=('bear',),      use_container_width=True)
     st.button("低檔發動", on_click=apply_preset, args=('low_launch',), use_container_width=True,
-              help="抄底向:找 KD 從深超賣剛翻揚、今日仍在低檔(還沒漲上去)的股;門檻 6 分、日均量 ≥ 500 張。"
+              help="抄底向:找 KD 從深超賣剛翻揚、今日仍在低檔(還沒漲上去)的股;門檻 7 分、日均量 ≥ 500 張。"
                    "選太多可再把門檻往上調;與其他偏追強勢的組合互補,先用訊號回測驗證再用。")
 
     st.divider()
@@ -891,14 +892,20 @@ if run_clicked or _auto_rerun:
         st.session_state.atr_max_pct,
     )
     _cache_key_str = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "no_data"
-    df, files_bytes, meta = _run_screening_cached(_params_tuple, _cache_key_str)
-    st.session_state.result_df = df
-    st.session_state.result_files = files_bytes
-    st.session_state.result_meta = meta
-    if _auto_rerun:
-        st.success("✅ 資料已更新,選股結果自動重跑完成")
-    else:
-        st.success("✅ 完成，看下方結果")
+    try:
+        df, files_bytes, meta = _run_screening_cached(_params_tuple, _cache_key_str)
+    except SystemExit:
+        # 選股程式缺必要快取時會 sys.exit;Streamlit 攔不到 SystemExit,頁面會停在半空白
+        df = None
+        st.error("❌ 找不到必要的資料快取(股價/法人/融資券/股票清單),請先按上方「資料更新」抓取資料再選股。")
+    if df is not None:
+        st.session_state.result_df = df
+        st.session_state.result_files = files_bytes
+        st.session_state.result_meta = meta
+        if _auto_rerun:
+            st.success("✅ 資料已更新,選股結果自動重跑完成")
+        else:
+            st.success("✅ 完成，看下方結果")
 
 # ── 結果顯示區 ─────────────────────────────────────────────────────────────
 df = st.session_state.result_df
@@ -910,7 +917,6 @@ if meta: show_market_banner(meta)
 # ── 7 日入選熱度榜(資料來自 cache/previous_picks.json,由 Telegram 每日推播寫入) ──
 HOT_WINDOW = 20  # 熱度榜只看最近 N 個交易日(歷史保留可達一年,但「熱度」只反映近期)
 
-@st.cache_data(ttl=300, show_spinner=False)
 @st.cache_data(ttl=600, show_spinner=False)
 def _load_history_cached():
     """快取版歷史載入(10 分鐘):避免每次 rerun 都重讀/解析整份 picks_history JSON。
@@ -918,6 +924,7 @@ def _load_history_cached():
     return load_history()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def _load_hot_picks_cached(top_n: int = 10):
     """快取 5 分鐘,避免每次 rerun 都重讀 JSON。
 
@@ -996,15 +1003,12 @@ def _compute_sector_health(df_today, history, rs_col=None, lookback_days=6):
     if dom_share < 0.4:
         return {"status": "n/a", "dom": dom, "dom_share": dom_share}
 
-    # 1) 主導產業近期每日入選檔數(從 history;排除今日那筆當基準)
-    daily = []
-    for entry in (history or [])[-(lookback_days + 1):]:
-        if entry.get("date") == "legacy":
-            continue
-        picks = entry.get("picks") or []
-        c = sum(1 for p in picks if (p.get("industry") or "其他") == dom)
-        daily.append(c)
-    prior = daily[:-1] if len(daily) >= 2 else []
+    # 1) 主導產業近期每日入選檔數(從 history;排除「日期是今天」那筆當基準)
+    # 依日期排除而非固定丟最後一筆:今天推播寫入前就開 UI 時,最後一筆其實是昨天
+    _today_str = pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d")
+    _past = [e for e in (history or []) if e.get("date") not in ("legacy", _today_str)]
+    prior = [sum(1 for p in (e.get("picks") or []) if (p.get("industry") or "其他") == dom)
+             for e in _past[-lookback_days:]]
     prior_avg = (sum(prior) / len(prior)) if prior else None
     drop = ((prior_avg - dom_today) / prior_avg) if (prior_avg and prior_avg > 0) else None
 
@@ -1344,8 +1348,11 @@ with _tab_margin:
                         _mult_in = int(_mults[0])
                         _p2.metric("契約乘數(股/口)", f"{_mult_in:,}")
                     # 官方逐檔原始保證金比例(有 stock_margin 快取時自動帶入,否則退回 13.5)
+                    # NaN 一律視為「無資料」(NaN 在 if 判斷裡是 True,會讓後面的計算與格式化出錯)
                     _off_init  = _info.get("init_rate")
+                    _off_init  = _off_init if (_off_init is not None and pd.notna(_off_init) and _off_init > 0) else None
                     _off_maint = _info.get("maint_rate")
+                    _off_maint = _off_maint if (_off_maint is not None and pd.notna(_off_maint) and _off_maint > 0) else None
                     _tier      = _info.get("tier") or ""
                     _rate_default = float(_off_init) if _off_init else 13.5
                     _rate_help = (
@@ -1393,7 +1400,8 @@ with _tab_margin:
                         if _off_init:
                             st.caption(
                                 f"✅ 保證金比例已自動帶入 **TAIFEX 官方**逐檔資料"
-                                f"({_tier}:原始 {_off_init:.2f}% / 維持 {_off_maint:.2f}%)。"
+                                f"({_tier}:原始 {_off_init:.2f}% / 維持 "
+                                f"{f'{_off_maint:.2f}%' if _off_maint else '—(官方未提供,以約 77% 估算)'})。"
                                 f"期交所會依波動不定期調整,本頁每週更新;"
                                 f"[查官網最新](https://www.taifex.com.tw/cht/5/stockMarginingDetail)。"
                             )
@@ -2841,6 +2849,13 @@ with _tab_perf:
 # ── 訊號回測:對 daily/法人 parquet 掃描全部技術訊號歷史報酬 ─────────────
 # 設計:把「最重的全部訊號矩陣建構」拆出來獨立 cache,讓改變 hold_days /
 # date_filter / combine_mode / stock_filter 等「輕」參數不必重算 5-7 秒。
+# 訊號矩陣的 cache 版本:訊號回測與抄底雷達共用同一份(用同一個 key 才不會建兩次)。
+# 每次改 build_signal_matrices 的結構或訊號算法都要 bump,否則線上殘留舊結果。
+# v2-nextopen:隔日開盤;v3-tierR:反轉訊號;v4-cost:交易成本/大盤過濾/alpha;
+# v5-fix:週訊號 ffill 不再跨股、散戶 % 去符號、大盤對照改 T+1 開盤
+_SIGMAT_VER = "v5-fix"
+
+
 @st.cache_data(ttl=1800, show_spinner="第一次建構訊號矩陣 (全市場掃描 180 天,~5 秒)…")
 def _build_signal_matrices_cached(cache_date_str: str):
     """全部訊號矩陣 cache。
@@ -2903,8 +2918,9 @@ def _load_industry_name_map() -> dict:
 @st.cache_data(ttl=900, show_spinner="計算交易報酬中…")
 def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
                          combine_mode: str, dedup: bool, stock_filter: str = "",
-                         market_filter: bool = True):
-    """signals_tuple: 用 tuple 才能被 cache_data hash。stock_filter='' 視同全市場。"""
+                         market_filter: bool = True, data_date: str = ""):
+    """signals_tuple: 用 tuple 才能被 cache_data hash。stock_filter='' 視同全市場。
+    data_date:資料日期,只用來當快取鍵(外部排程更新資料後,不必等 15 分鐘 TTL 才看到新結果)。"""
     if date_filter == "all":
         date_range = None
     else:
@@ -2913,12 +2929,9 @@ def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
         start = end - pd.Timedelta(days=ndays)
         date_range = (start, end)
     # 取得已 cache 的訊號矩陣(第一次需 5-7s,之後秒切)
-    # cache key 帶結構/訊號版本:每次「改 build_signal_matrices 結構」或「新增/移除訊號」都要 bump,
-    # 否則殘留舊 cache(只 Rerun 未 full reboot 時)會找不到新訊號 → 靜默回 0 觸發。
-    # v2-nextopen:改隔日開盤結構;v3-tierR:新增反轉訊號(washout/kd_divergence/chip_accumulation)。
-    # v4-cost:修正交易成本、大盤過濾、alpha 計算。
+    # cache key 帶結構/訊號版本(_SIGMAT_VER):殘留舊 cache 會找不到新訊號 → 靜默回 0 觸發。
     _cache_key = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "no_data"
-    _precomputed = _build_signal_matrices_cached(f"{_cache_key}|v4-cost")
+    _precomputed = _build_signal_matrices_cached(f"{_cache_key}|{_SIGMAT_VER}")
     return run_backtest(CACHE_DIR, signal=list(signals_tuple), hold_days=hold_days,
                         date_range=date_range, combine_mode=combine_mode,
                         dedup_within_hold=dedup,
@@ -2927,11 +2940,13 @@ def _run_backtest_cached(signals_tuple: tuple, hold_days: int, date_filter: str,
                         precomputed=_precomputed)
 
 
+_BT_DATA_DATE = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "no_data"
+
 with _tab_bt:
     st.caption(
         "用**過去的歷史資料**驗證「某個買進條件,照著做到底會不會賺」。"
         "下面可勾一個或多個條件做組合測試。"
-        "  \n⚙️ **進場假設:訊號日隔日開盤 + 0.1% 滑價**(去除前視偏誤);出場:持有 N 日後收盤。"
+        "  \n⚙️ **進場假設:訊號日隔日開盤進場**(去除前視偏誤);出場:持有 N 日後收盤;已扣進場 0.20% + 出場 0.35% 成本。"
     )
 
     # ── 📖 使用說明 / FAQ(摺疊,整頁全寬;放在選擇訊號上方)──
@@ -3197,7 +3212,7 @@ with _tab_bt:
     else:
         _bt = _run_backtest_cached(tuple(sig_choice_multi), hold_choice, period_choice,
                                    combine_mode_choice, dedup_choice, stock_filter_input,
-                                   market_filter_choice)
+                                   market_filter_choice, data_date=_BT_DATA_DATE)
         # 個股回測且查無資料時的友善提示
         if stock_filter_input and _bt['stats'].get('n', 0) == 0:
             st.warning(f"⚠ 個股 {stock_filter_input} 在所選期間/訊號下無觸發,試試擴大期間或換訊號組合。")
@@ -3361,7 +3376,7 @@ with _tab_bt:
                         _bt_s = _run_backtest_cached(
                             tuple(sig_choice_multi), _hd, period_choice,
                             combine_mode_choice, dedup_choice, stock_filter_input,
-                            market_filter_choice
+                            market_filter_choice, data_date=_BT_DATA_DATE
                         )
                         _s = _bt_s.get('stats', {"n": 0})
                         if _s.get('n', 0) > 0:
@@ -3764,7 +3779,9 @@ with _tab_sent:
             _bull = meta.get('market_bullish', None)
             _twii_pct = meta.get('twii_pct')
             if _bull is not None:
-                if not _bull:
+                if not meta.get('market_data_ok', True):
+                    _state_desc = "大盤資料缺(本次無大盤狀態判斷)"
+                elif not _bull:
                     _state_desc = "空頭(跌破季線)"
                 elif meta.get('market_consolidating'):
                     _state_desc = "盤整修正(站上季線但跌破月線/近20日下跌,RS 不計分、籌碼門票啟用)"
@@ -4193,7 +4210,7 @@ def _render_pick_list():
                  "④回測:78 筆、勝率 46%、平均 +3.95%、夏普 1.35(全多頭資料、中位數偏負)→ 當『觀察名單』,"
                  "別當閉眼買;進場等帶量確認、嚴設停損。第一次勾選需建訊號矩陣約 5 秒。",
         ):
-            _radar_key = f"{_cache_date.strftime('%Y-%m-%d') if _cache_date is not None else 'no_data'}|v3-tierR"
+            _radar_key = f"{_cache_date.strftime('%Y-%m-%d') if _cache_date is not None else 'no_data'}|{_SIGMAT_VER}"
             _dip_set, _dip_date = _load_dip_radar(_radar_key)
             _dstr = f"(依 {_dip_date} 融資券資料)" if _dip_date else "(暫無資料)"
             if not _dip_set:
@@ -4223,7 +4240,11 @@ def _render_pick_list():
             _cc2.metric("⭐ 中信心", f"{_mid} 檔", help="大戶↑ 或 散戶↓ 其一成立")
             _cc3.metric("一般", f"{len(df) - _hi - _mid} 檔")
         score_min, score_max = int(df['總分'].min()), int(df['總分'].max())
-        industries = sorted([i for i in df['產業'].dropna().unique() if i])
+        # 產業空白(查不到產業)的股要歸到「未分類」選項;直接排除的話,
+        # 即使產業全選,下方 isin 過濾也會把它們刷掉,標題 N 檔與表格對不上
+        _IND_NONE = "未分類"
+        _ind_col = df['產業'].fillna('').astype(str).str.strip().replace('', _IND_NONE)
+        industries = sorted(_ind_col.unique())
         if score_min != score_max:
             # 分數有高低 → 左滑桿 + 右產業篩選 並排
             fc1, fc2 = st.columns(2)
@@ -4246,7 +4267,7 @@ def _render_pick_list():
                 help="只留籌碼共振的股 — 訊號歸因中 edge 最高的組合;當『優先觀察』,不代表自動買進。",
             )
 
-        filtered = df[(df['總分'] >= score_threshold) & (df['產業'].isin(selected_industries))].copy()
+        filtered = df[(df['總分'] >= score_threshold) & (_ind_col.isin(selected_industries))].copy()
         if _only_hi and "籌碼信心" in filtered.columns:
             filtered = filtered[filtered["籌碼信心"] == "🔥 高信心"]
 
@@ -4337,7 +4358,7 @@ def _render_pick_list():
                  "別當閉眼買;進場等帶量確認、嚴設停損。第一次勾選需建訊號矩陣約 5 秒。",
         )
         if _dip_on:
-            _radar_key = f"{_cache_date.strftime('%Y-%m-%d') if _cache_date is not None else 'no_data'}|v3-tierR"
+            _radar_key = f"{_cache_date.strftime('%Y-%m-%d') if _cache_date is not None else 'no_data'}|{_SIGMAT_VER}"
             _dip_set, _dip_date = _load_dip_radar(_radar_key)
             _dstr = f"(依 {_dip_date} 融資券資料)" if _dip_date else "(暫無資料)"
             if not _dip_set:
@@ -4851,21 +4872,22 @@ with col_chart:
 
                         # 分級語意:讓 AI 知道分數高低的實際意義
                         _score = row_data['總分']
-                        if _score >= 8:
-                            _score_tier = "🔥 頂級(本系統實務最高分)"
+                        # 與「各分數區間」表的 _score_label 同口徑(滿分 10、門檻 8)
+                        if _score >= 9:
+                            _score_tier = "🔥 頂級(大戶↑+散戶↓雙籌碼共振)"
+                        elif _score == 8:
+                            _score_tier = "✅ 合格(達現行門檻)"
                         elif _score == 7:
-                            _score_tier = "✅ 合格"
-                        elif _score == 6:
-                            _score_tier = "⚠️ 邊緣(大盤資料缺失自動降標)"
+                            _score_tier = "⚠️ 邊緣(大盤資料缺失時門檻自動降 1)"
                         else:
                             _score_tier = ""
 
                         # 用 textwrap.dedent 清掉每行開頭的縮排,避免 24 spaces 進入 prompt
                         # 浪費 token 並可能影響 AI 對結構的理解
-                        # ──「進場節奏」分析:本系統選出的標的本質上都是偏多的(已通過 10 項正向篩選)
+                        # ──「進場節奏」分析:本系統選出的標的本質上都是偏多的(已通過多項正向篩選)
                         # 因此判斷的維度是「現在該不該動手」,而非「多空方向」
                         prompt = textwrap.dedent(f"""\
-                            你是台灣股市量化分析師。以下個股已通過本系統 10 項正向篩選(法人買、大戶增、KD 起漲、量價突破、營收成長等),基本面已偏多。
+                            你是台灣股市量化分析師。以下個股已通過本系統多項正向篩選(法人買超、大戶增持、散戶減少、KD 低檔金叉、營收成長、相對大盤強勢等),籌碼面已偏多。
                             請根據「技術位階」與「籌碼成熟度」判斷『進場節奏』,用繁體中文寫出約 120 字的進場建議。
                             不要使用 Markdown 語法,以純文字順暢表達。
 
@@ -4873,7 +4895,7 @@ with col_chart:
                             股票標的:{sid} {sname}
                             當前股價:{row_data['現價']} 元
                             綜合量化總分:{row_data['總分']} / 10 分  ({_score_tier})
-                            註:本系統雖以 10 分為滿分,但實務最高僅見 8 分(9~10 分要求法人雙買+大戶散戶共振+RS強+月營收YoY同時成立,極罕見),故 8 分即冠軍級訊號。
+                            註:滿分 10 分(大戶上升、散戶下降各 2 分,其餘各 1 分),過關門檻 8 分;9 分以上必含大戶散戶雙籌碼共振,屬最強等級。
                             產業板塊:{row_data['產業']}
                             20日均成交量:{row_data['20日均量(張)']} 張
                             歷史波動度 (ATR%):{row_data['ATR%']}%
@@ -5057,7 +5079,7 @@ with col_chart:
 
 **讀懂建議部位**
 
-- **{max_lots if use_default_lot else int(max_shares)} 張**:在你的紀律內最多能買的量
+- **{f"{max_lots} 張" if use_default_lot else f"{int(max_shares)} 股"}**:在你的紀律內最多能買的量
 - **動用資金 {actual_position:,.0f} 元**:這筆要花多少錢
 - **最大虧損 {actual_risk:,.0f} 元**:最壞情況虧多少(就是 {risk_pct}% 總資金)
 
@@ -5082,7 +5104,9 @@ def _run_quiet_backtest_cached(cache_date_str: str):
 
 with _tab_quiet:
     st.subheader("🧹 籌碼沉澱 / 冷門股篩選")
-    _q_key = globals().get("_cache_key_str", "quiet")
+    # 用資料日期當快取鍵:_cache_key_str 只在按「開始選股」那次執行存在,平常會退回固定字串,
+    # 資料換日後最多 1 小時仍顯示舊結果
+    _q_key = _cache_date.strftime('%Y-%m-%d') if _cache_date is not None else "no_data"
     try:
         _qdf, _qmeta = _run_quiet_screen_cached(_q_key)
         _qbt = _run_quiet_backtest_cached(_q_key)

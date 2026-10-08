@@ -340,7 +340,7 @@ def main():
             if ai_text:
                 ai_comment = (
                     f"🧠 <b>AI 分析師({model_name}):</b>\n"
-                    f"<i>「{html.escape(ai_text)}」</i>\n"
+                    f"<i>「{html.escape(' '.join(ai_text.split()))}」</i>\n"
                     f"━━━━━━━━━━━━━━\n"
                 )
             else:
@@ -416,7 +416,7 @@ def main():
                     top_industry = valid_industries.value_counts().idxmax()
                     top_count = int(valid_industries.value_counts().max())
                     concentration = top_count / len(df)
-                    content += f"\n📊 <b>今日主流群聚:</b> {top_industry} ({top_count}檔)"
+                    content += f"\n📊 <b>今日主流群聚:</b> {html.escape(str(top_industry))} ({top_count}檔)"
                     if concentration > 0.5:
                         content += (
                             f" ⚠️ <i>高度集中 ({concentration*100:.0f}%),"
@@ -452,7 +452,7 @@ def main():
         except Exception as e:
             print(f"⚠ 自選股警示產生失敗(略過): {e}")
 
-        # ── 6c. 近 30 日策略績效摘要(在 history 累積足夠後才會有數字) ──
+        # ── 6c. 累計策略績效摘要(全部歷史;在 history 累積足夠後才會有數字) ──
         try:
             # 用「不含今日」的 history 算,避免今日資料尚未有後續報酬干擾
             perf = compute_performance(history, CACHE_DIR, n_days_list=(5,))
@@ -466,7 +466,7 @@ def main():
         try:
             sysh = check_system_health(history, CACHE_DIR, hold_days=5, recent_window=20)
             if sysh.get("status") in ("warn", "fail"):
-                content += f"\n🚨 <b>{sysh.get('label','')}</b>:{sysh.get('reason','')}\n"
+                content += f"\n🚨 <b>{html.escape(str(sysh.get('label','')))}</b>:{html.escape(str(sysh.get('reason','')))}\n"
         except Exception as e:
             print(f"⚠ 系統失效監控產生失敗(略過): {e}")
 

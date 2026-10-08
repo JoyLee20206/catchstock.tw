@@ -1,5 +1,5 @@
 import os, sys, warnings
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import pandas as pd
 
@@ -32,13 +32,13 @@ CACHE_DIR = Path("cache")
 #   - 大盤 ^TWII 抓取失敗 → PASS_SCORE 自動 -1 (RS 訊號失效補償)
 #
 # 籌碼共振 (大戶↑+散戶↓):「不再額外計分」,但作為排序優先序
-# (大戶與散戶各自獨立 1 分;同時成立自然累積到 2 分)
+# (大戶與散戶各自獨立 2 分;同時成立自然累積到 4 分)
 # ──────────────────────────────────────────────────────────────
 PASS_SCORE = 8             # 滿分 10 的過關門檻 (大盤空頭時自動 +1;RS 失效時自動 -1)
                            # 2026-06-13 由 7 調高(當時 11 制,7 分一天選出 83 檔太寬)。
                            # 2026-06-19 技術面三合一停用計分後滿分降為 10,門檻維持 8 → 實質收緊
                            # (凡原本含技術面的股少 1 分,弱股掉出)。寧缺勿濫;若某日選出太少可降回 7。
-                           # 空頭自動 +1 變 9:基本盤 4(RS 關)+雙籌碼 4=8 仍不足,需再加 KD/營收——空頭幾乎不選股,屬刻意設計
+                           # 空頭自動 +1 變 9:法人基本盤 3(RS 關)+雙籌碼 4=7,需再加 KD 與營收各 1 才達 9——空頭幾乎不選股,屬刻意設計
 
 # 法人 / 籌碼
 LOOKBACK_DAYS = 5          # 投信/外資觀察天數
@@ -138,7 +138,8 @@ def _load_bottom_panic_level(max_age_days=PANIC_GUARD_MAX_AGE_DAYS):
             return None, None
         data = json.loads(f.read_text(encoding="utf-8"))
         gen = str(data.get("generated_at", ""))[:10]
-        age = (datetime.now().date() - datetime.strptime(gen, "%Y-%m-%d").date()).days
+        age = (datetime.now(timezone(timedelta(hours=8))).date()   # 台灣日期,與 bottom_signal 寫入口徑一致
+               - datetime.strptime(gen, "%Y-%m-%d").date()).days
         if age > max_age_days:
             print(f"   [恐慌警示] 止跌判讀檔已 {age} 天未更新,視為未知、不警示")
             return None, age
@@ -458,6 +459,7 @@ def run_screening(
     print(">>> 抓取大盤指數 (^TWII) 用於 RS 與趨勢過濾...")
     market_bullish        = True
     market_consolidating  = False   # 站上季線但跌破月線/近 20 日下跌 → 盤整修正 (RS 關閉 + 籌碼硬門票)
+    twii_stale_msg        = ""      # 指數落後個股時的說明(供 meta score_note)
     market_overheated     = False   # 指數高出季線 > MARKET_HOT_BIAS_PCT → 位階過熱(排序不看 RS)
     twii_lookback_change  = 0.0
     market_data_ok        = False
@@ -505,6 +507,13 @@ def run_screening(
                 twii.index = twii.index.tz_localize(None)
             daily_max_date = daily_df["date"].max()
             twii = twii[twii.index <= daily_max_date]
+            # 指數落後個股(fetch_cache 官方源失敗時會保留舊檔):RS 會拿「個股到今天」比
+            # 「大盤到前一天」、大盤狀態也是舊的 → 比照「大盤資料失效」處理,不默默用舊值
+            if not twii.empty and twii.index.max().normalize() < daily_max_date.normalize():
+                twii_stale_msg = (f"加權指數只到 {twii.index.max():%Y-%m-%d},"
+                                  f"落後個股資料({daily_max_date:%Y-%m-%d})")
+                print(f"   [警告] {twii_stale_msg} → 視為大盤資料失效,跳過大盤過濾與 RS 計分")
+                twii = twii.iloc[0:0]
         twii_candidate = None
         if not twii.empty and 'Close' in twii.columns and len(twii) >= MARKET_MA_DAYS:
             twii_candidate = twii['Close']
@@ -630,9 +639,9 @@ def run_screening(
                 sm_ratio_map[sid] = round(ratio * 100, 1)
 
     # --- 訊號 5+6: 400張大戶 + 散戶下降 (各自獨立計分;共振僅作排序優先序) ---
-    print(f">>> [4/9] 400張大戶近 {LARGE_HOLDER_WEEKS-1} 週累計 ≥ {LARGE_HOLDER_3W_CHANGE_MIN}% (1 分)")
-    print(f">>> [5/9] 散戶 1~15 張近 {LARGE_HOLDER_WEEKS-1} 週累計變化 ≤ {SMALL_HOLDER_3W_CHANGE_MAX}% (1 分)")
-    print(f"    註:大戶↑+散戶↓ 共振 → 自然累積 2 分,並作為排序優先序 (不再額外加分)")
+    print(f">>> [4/9] 400張大戶近 {LARGE_HOLDER_WEEKS-1} 週累計 ≥ {LARGE_HOLDER_3W_CHANGE_MIN}% (2 分)")
+    print(f">>> [5/9] 散戶 1~15 張近 {LARGE_HOLDER_WEEKS-1} 週累計變化 ≤ {SMALL_HOLDER_3W_CHANGE_MAX}% (2 分)")
+    print(f"    註:大戶↑+散戶↓ 共振 → 自然累積 4 分,並作為排序優先序 (不再額外加分)")
     large_sig = {}
     large_change_map = {}
     large_pct_map = {}
@@ -826,8 +835,11 @@ def run_screening(
 
                             if crossed_today:
                                 _kd_diag["cross_found"] += 1
+                                # 這次金叉之後要一路維持 K>D 到今天,才是「決定現在狀態」的發動點;
+                                # 中間死叉過、今天又重新金叉的,今日狀態其實來自今天那次(掃描刻意不含今日)
+                                _held = all(k_list[j] > d_list[j] for j in range(i, last_idx + 1))
                                 # 找到了「最近一次」發動的金叉，立刻判定是不是低檔
-                                if k_list[i] < KD_LOW_FROM:
+                                if _held and k_list[i] < KD_LOW_FROM:
                                     _kd_diag["cross_low"] += 1
                                     kd_sig[sid] = 1
                                     kd_cross_k_map[sid] = round(k_list[i], 1)
@@ -883,14 +895,19 @@ def run_screening(
         revenue_df['revenue_month'] = pd.to_numeric(revenue_df['revenue_month'], errors='coerce').astype('Int64')
         revenue_df = revenue_df.dropna(subset=['revenue', 'revenue_year', 'revenue_month'])
         for sid, g in revenue_df.groupby('stock_id'):
-            g = g.sort_values(['revenue_year', 'revenue_month']).reset_index(drop=True)
+            # 同月重複(OpenAPI/舊 MOPS 快取混用)只留最後一筆,否則 tail(N) 可能只涵蓋 2 個不同月份
+            g = (g.sort_values(['revenue_year', 'revenue_month'])
+                  .drop_duplicates(subset=['revenue_year', 'revenue_month'], keep='last')
+                  .reset_index(drop=True))
             yoy_done = False  # 標記:YoY 路徑是否成功計算 (即使結果是 0 分也算成功)
 
             # --- 路徑 A: YoY (需 12 + REVENUE_MONTHS 個月) ---
             if len(g) >= 12 + REVENUE_MONTHS:
                 last_n = g.tail(REVENUE_MONTHS)
                 yoys = []
-                ok = True
+                # 「連 N 月」要求月份相鄰(同 MoM 路徑);中間缺月不算連續
+                _ym_n = list(zip(last_n['revenue_year'].astype(int), last_n['revenue_month'].astype(int)))
+                ok = all(_ym_n[i] == _next_ym(*_ym_n[i-1]) for i in range(1, len(_ym_n)))
                 for _, row in last_n.iterrows():
                     base = g[(g['revenue_year'] == row['revenue_year'] - 1) &
                              (g['revenue_month'] == row['revenue_month'])]
@@ -1017,8 +1034,8 @@ def run_screening(
         margin_with_trend = int(margin_raw == 1 and ma20 is not None and price_now is not None and price_now > ma20)
         margin_combined   = int(margin_with_trend or sm == 1)
 
-        l         = large_sig.get(sid, 0)            # 大戶上升 (1 分)
-        sd        = small_decrease_sig.get(sid, 0)   # 散戶下降 (1 分,獨立計分)
+        l         = large_sig.get(sid, 0)            # 大戶上升 (旗標 0/1,計分時 ×2)
+        sd        = small_decrease_sig.get(sid, 0)   # 散戶下降 (旗標 0/1,計分時 ×2,獨立計分)
         chip_sync = int(l == 1 and sd == 1)          # 籌碼共振 (僅供排序,不計分)
         # 籌碼信心分級 (方案 C:把最有 edge 的大戶↑/散戶↓ 當「分級標籤」而非「篩選門票」,
         # 完全不影響誰入選,只標出值得優先看的股。依訊號歸因:大戶↑ edge +6%、散戶↓ +3%。
@@ -1179,13 +1196,17 @@ def run_screening(
     elif market_data_ok and market_consolidating:
         score_note = "⚠️ 大盤盤整修正中：RS 不計分，且需「大戶↑或散戶↓」至少其一才入選"
     elif not market_data_ok:
-        score_note = "⚠️ 大盤數據取得失敗，門檻自動調整"
+        score_note = (f"⚠️ {twii_stale_msg}，視為大盤資料失效，門檻自動調整" if twii_stale_msg
+                      else "⚠️ 大盤數據取得失敗，門檻自動調整")
     # 恐慌警示(不擋選股):單獨存入 panic_note,讓推播分行渲染,避免 score_note 擠成一行
     panic_note = ""
     if panic_warning:
         panic_note = "🛑 止跌判讀:高度恐慌——此階段歷史上入選股 5 日平均 -6.9%,部位請自行斟酌"
 
-    if not market_bullish:
+    if not market_data_ok:
+        # 資料失效時 market_bullish 只是預設值 True,不能顯示成「偏多操作」
+        market_state, market_status = 'unknown', "大盤資料缺"
+    elif not market_bullish:
         market_state, market_status = 'bear', "謹慎保守"
     elif market_consolidating:
         market_state, market_status = 'consolidation', "盤整慎選"
@@ -1203,7 +1224,7 @@ def run_screening(
         'market_data_ok':        market_data_ok,
         'market_bullish':        market_bullish,
         'market_consolidating':  market_consolidating,
-        'market_state':          market_state,   # 'bull' / 'consolidation' / 'bear'
+        'market_state':          market_state,   # 'bull' / 'consolidation' / 'bear' / 'unknown'
         'market_status':         market_status,
         'twii_now':              twii_now,
         'twii_ma':               twii_ma,

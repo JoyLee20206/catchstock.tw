@@ -12,6 +12,8 @@ UI 與 Telegram 共用同一套判斷,避免兩邊顯示不一致
 3. 散戶持股率不在 [0, 100] → chips 資料壞掉
 4. 法人資料筆數驟降 → 三大法人 fetch 異常
 """
+import html
+
 import pandas as pd
 
 
@@ -186,14 +188,18 @@ def check_data_health(cache_dir) -> dict:
 
     # ── 3. chips(散戶持股率)異常 ────────────────────────
     try:
-        chip_files = sorted(cache_dir.glob('chips_*.parquet'))
+        # fetch_cache 寫的是 holders_*.parquet(TDCC 股權分散),專案裡沒有任何程式產生 chips 檔,
+        # 原本找 chips_* 會讓這項檢查永遠不執行
+        chip_files = sorted(cache_dir.glob('holders_*.parquet'))
         if chip_files:
             chip_df = pd.read_parquet(chip_files[-1], columns=['stock_id', 'date', 'percent'])
             chip_df['date'] = pd.to_datetime(chip_df['date'])
             latest_chip_date = chip_df['date'].max()
             latest_chips = chip_df[chip_df['date'] == latest_chip_date]
-            # percent 可能是字串(歷史 bug),用 to_numeric 安全轉
-            percents = pd.to_numeric(latest_chips['percent'], errors='coerce').dropna()
+            # percent 可能是字串或帶 '%',先去符號再安全轉
+            percents = pd.to_numeric(
+                latest_chips['percent'].astype(str).str.replace('%', '', regex=False).str.strip(),
+                errors='coerce').dropna()
             if not percents.empty:
                 bad = ((percents < 0) | (percents > 100)).sum()
                 if bad > 0:
@@ -240,8 +246,8 @@ def format_health_for_tg(health: dict) -> str:
     if health.get("level") == "ok":
         return ""
     icon = "❗" if health["level"] == "error" else "⚠️"
-    text = f"{icon} <b>{health['summary']}</b>"
+    text = f"{icon} <b>{html.escape(str(health['summary']))}</b>"
     # 列出最多 3 項問題
     for issue in health.get("issues", [])[:3]:
-        text += f"\n   ・{issue}"
+        text += f"\n   ・{html.escape(str(issue))}"   # 錯誤訊息常含 '<' 等字元,HTML 模式會被退件
     return text + "\n"

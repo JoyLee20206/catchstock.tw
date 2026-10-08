@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Telegram 發送共用模組 — telegram_notify.py(選股推播)與 bottom_push.py(止跌判讀)共用。
 
-設計約束:這個檔案只准依賴 os / requests,**絕不 import 選股系統的任何模組**。
+設計約束:這個檔案只准依賴標準庫與 requests,**絕不 import 選股系統的任何模組**。
 理由:bottom_push 是輕量排程,若透過 telegram_notify 取得發送函式,會連帶載入
 screening0515 / performance / market_sentiment 整套堆疊——任何一個壞掉,
 止跌推播就跟著掛。發送邏輯抽到這裡,兩邊的排程才能真正互不牽連。
@@ -10,7 +10,9 @@ screening0515 / performance / market_sentiment 整套堆疊——任何一個壞
 - 選股推播:HTML 格式、超長自動分段、沒 token 視為設定錯誤(回 False)
 - 止跌推播:純文字、訊息短不分段也夠、沒 token 轉 dry-run 印出(方便本機測試)
 """
+import html as _html
 import os
+import re
 
 import requests
 
@@ -92,6 +94,13 @@ def send_telegram_message(
             payload["parse_mode"] = parse_mode
         try:
             resp = requests.post(url, json=payload, timeout=timeout)
+            if resp.status_code == 400 and parse_mode == "HTML":
+                # HTML 解析失敗(漏 escape 的 &/<、分段切斷了 <b>…</b>)時 Telegram 會整段退件;
+                # 改用純文字重送這一段:失去粗體/連結,但內容不會整段消失
+                print(f"[Telegram 第 {i}/{len(chunks)} 段 HTML 被退件,改純文字重送] {resp.text[:150]}")
+                plain = _html.unescape(re.sub(r"<[^>]+>", "", chunk))
+                resp = requests.post(url, json={"chat_id": chat_id, "text": plain,
+                                                "disable_web_page_preview": True}, timeout=timeout)
             resp.raise_for_status()
         except Exception as e:
             print(f"[Telegram 第 {i}/{len(chunks)} 段發送失敗] {e}")

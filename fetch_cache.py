@@ -583,6 +583,13 @@ def fetch_twse_institutional(date_str):
     col_db1, col_ds1 = find_col([["自營商買進", "自行"]]),      find_col([["自營商賣出", "自行"]])
     col_db2, col_ds2 = find_col([["自營商買進", "避險"]]),      find_col([["自營商賣出", "避險"]])
 
+    # 證交所改欄名時這裡會找不到欄位;直接 r[None] 會 KeyError,且外層沒接住 → 整支 fetch 中止、
+    # 後面的融資券/日K/大戶全都抓不到。改成這一天回空(上層會視為該日失敗、不寫入)。
+    _cols = [col_id, col_fb1, col_fs1, col_fb2, col_fs2, col_tb, col_ts, col_db1, col_ds1, col_db2, col_ds2]
+    if any(c is None for c in _cols):
+        print(f"      !!! [TWSE 法人欄位變動] {date_str}: 找不到必要欄位,欄名 = {list(df.columns)[:12]}")
+        return pd.DataFrame()
+
     records = []
     for _, r in df.iterrows():
         sid = str(r[col_id]).strip('="')
@@ -845,6 +852,11 @@ def fetch_yfinance_daily(info_df, default_start_date, chunk_size=400):
             
         consecutive_fail = 0
         if len(chunk) == 1:
+            # 新版 yfinance 單檔也回雙層欄名 ('Close','2330.TW'),不先壓平的話
+            # reset_index 後欄名是 tuple、改名對不上,該檔 close 全空被丟掉
+            if isinstance(data.columns, pd.MultiIndex):
+                data = data.copy()
+                data.columns = data.columns.get_level_values(0)
             df_flat = data.reset_index()
             df_flat['Ticker'] = chunk[0]
         else:
@@ -1522,7 +1534,9 @@ def fetch_taifex_stock_futures():
         cleanup_old_cache("stock_futures")
     except Exception as e:
         print(f"   !!! 個股期貨清單抓取失敗: {e}")
-        _fallback_prev_to_today("stock_futures")   # 墊舊檔,不影響主流程
+        # 週更類不墊檔:墊檔會把舊資料標成今天日期,_should_skip_weekly 以檔名算檔齡
+        # → 誤判剛抓過、再等 7 天才重試。不墊檔則舊檔保留可讀,隔天排程因檔齡過期自動重抓
+        print("   -> 保留舊快取不墊檔,下次排程自動重試")
 
 
 fetch_taifex_stock_futures()
@@ -1608,7 +1622,9 @@ def fetch_taifex_stock_margin():
         cleanup_old_cache("stock_margin")
     except Exception as e:
         print(f"   !!! 個股期貨保證金比例抓取失敗: {e}")
-        _fallback_prev_to_today("stock_margin")   # 墊舊檔,不影響主流程
+        # 週更類不墊檔:墊檔會把舊資料標成今天日期,_should_skip_weekly 以檔名算檔齡
+        # → 誤判剛抓過、再等 7 天才重試。不墊檔則舊檔保留可讀,隔天排程因檔齡過期自動重抓
+        print("   -> 保留舊快取不墊檔,下次排程自動重試")
 
 
 fetch_taifex_stock_margin()
@@ -1682,7 +1698,9 @@ def fetch_taifex_etf_futures():
         cleanup_old_cache("etf_futures")
     except Exception as e:
         print(f"   !!! ETF 期貨抓取失敗: {e}")
-        _fallback_prev_to_today("etf_futures")
+        # 週更類不墊檔:墊檔會把舊資料標成今天日期,_should_skip_weekly 以檔名算檔齡
+        # → 誤判剛抓過、再等 7 天才重試。不墊檔則舊檔保留可讀,隔天排程因檔齡過期自動重抓
+        print("   -> 保留舊快取不墊檔,下次排程自動重試")
 
 
 fetch_taifex_etf_futures()
@@ -1744,7 +1762,9 @@ def fetch_taifex_index_margin():
         cleanup_old_cache("idx_margin")
     except Exception as e:
         print(f"   !!! 台指期保證金抓取失敗: {e}")
-        _fallback_prev_to_today("idx_margin")
+        # 週更類不墊檔:墊檔會把舊資料標成今天日期,_should_skip_weekly 以檔名算檔齡
+        # → 誤判剛抓過、再等 7 天才重試。不墊檔則舊檔保留可讀,隔天排程因檔齡過期自動重抓
+        print("   -> 保留舊快取不墊檔,下次排程自動重試")
 
 
 fetch_taifex_index_margin()
@@ -1775,7 +1795,26 @@ if (not FORCE) and need_fetch("revenue") and _revenue_today_tpe.day >= 13:
                 _last_dt = _revenue_today_tpe.replace(day=1) - timedelta(days=1)
                 _ym_have = set(zip(_df_check['revenue_year'].astype(int),
                                    _df_check['revenue_month'].astype(int)))
-                if (_last_dt.year, _last_dt.month) in _ym_have:
+                # 上市、上櫃要分開看:只要一邊有上月資料,舊寫法就判定「已有上月」永遠跳過,
+                # 另一邊(常是上櫃 API 失敗那幾天)那個月就再也補不回來
+                _cov_ok = True
+                try:
+                    _last_ids = set(_df_check.loc[
+                        (_df_check['revenue_year'].astype(int) == _last_dt.year)
+                        & (_df_check['revenue_month'].astype(int) == _last_dt.month),
+                        'stock_id'].astype(str))
+                    _is_otc = info['type'].astype(str).str.lower().isin(['tpex', 'otc'])
+                    for _mkt, _ids in (("上市", info.loc[~_is_otc, 'stock_id']),
+                                       ("上櫃", info.loc[_is_otc, 'stock_id'])):
+                        _ids = set(_ids.astype(str))
+                        if _ids:
+                            _cov = len(_last_ids & _ids) / len(_ids)
+                            if _cov < 0.8:
+                                _cov_ok = False
+                                print(f"[6] 月營收: {_mkt}上月資料僅涵蓋 {_cov:.0%},照常抓取補齊")
+                except Exception as _ce:
+                    print(f"   ⚠ 月營收覆蓋率檢查失敗,略過此檢查: {_ce}")
+                if (_last_dt.year, _last_dt.month) in _ym_have and _cov_ok:
                     _skip_revenue = True
                     print(f"[6] 月營收: 今日 {_revenue_today_tpe.day} 日 ≥13 且已有上月"
                           f"({_last_dt.year}-{_last_dt.month:02d}) 資料,略過抓取(省 API 配額)")

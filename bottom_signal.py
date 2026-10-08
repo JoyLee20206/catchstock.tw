@@ -15,8 +15,7 @@
   P/C ratio       — TAIFEX /cht/3/pcRatioDown(CSV)
   成交金額/加權   — TWSE rwd FMTQIK(可帶月份抓歷史)
   外資現貨買賣超  — TWSE rwd BFI82U(可帶日期抓歷史)
-  加權/2330 OHLC  — 快取優先(選股排程 twii/daily parquet,須為今日)
-                    → TWSE 官方(MI_5MINS_HIST / STOCK_DAY)→ yfinance 備援
+  加權/2330 OHLC  — yfinance ^TWII / 2330.TW(GHA 上若失敗,之後補 TWSE 備援)
   外資期貨未平倉  — 沿用 market_sentiment._fetch_taifex_institutional
                     + fi_futures_history.json(需累積 ≥ 2 日才能判「回補」)
 
@@ -37,13 +36,22 @@ import numpy as np
 import pandas as pd
 import requests
 
+from datetime import timezone as _timezone
+
+_TPE = _timezone(timedelta(hours=8))
+
+
+def _tw_now() -> datetime:
+    """台灣時間(tz-naive,與本檔其餘 naive datetime 運算相容)。
+    排程/Streamlit Cloud 主機是 UTC,直接用主機時間會差 8 小時:
+    台灣凌晨手動重判會寫成前一天、UI 顯示的產生時間也會錯。"""
+    return datetime.now(_TPE).replace(tzinfo=None)
+
 # ══════════════════════════════════════════════════════════════════════
 # 可調參數(回測後再校準)
 # ══════════════════════════════════════════════════════════════════════
 CFG = {
-    "gate_level":        40.0,   # 01 閘門:跌破才「開」(關→開門檻)
-    "gate_exit_level":   42.0,   # 01 閘門遲滯:已開後需彈回此值以上才「關」
-                                 #    (開→關門檻較高,避免在 40 邊緣單日小彈忽開忽關)
+    "gate_level":        40.0,   # 01 閘門
     "fall_level":        38.0,   # 02 續降(嚴格版可改 35)
     "fall_lookback":     3,      # 02 過去 N 日未站回 40
     "spread_avg_days":   5,      # 03 與美 VIX 差距 vs 近 N 日均
@@ -151,7 +159,7 @@ def _roc_to_date(s: str):
 def fetch_vixtwn_daily(months: int = 3) -> "pd.Series | None":
     """VIXTWN 每日收盤(主來源:期交所月檔,tab 分隔 big5)。"""
     rows = {}
-    today = datetime.now()
+    today = _tw_now()
     for k in range(months):
         # 往回推 k 個月
         y, m = today.year, today.month - k
@@ -179,7 +187,7 @@ def fetch_vixtwn_daily(months: int = 3) -> "pd.Series | None":
 def fetch_vixtwn_today_from_minute() -> "dict | None":
     """VIXTWN 備援/當日高:期交所分鐘檔。回 {date, high, last}。"""
     try:
-        d = datetime.now().strftime("%Y%m%d")
+        d = _tw_now().strftime("%Y%m%d")
         r = _get(f"https://www.taifex.com.tw/cht/7/getVixData?filesname={d}")
         if r.status_code != 200:
             return None
@@ -203,7 +211,7 @@ def fetch_vixtwn_today_from_minute() -> "dict | None":
 def fetch_tx_futures_close(days: int = 10) -> "pd.Series | None":
     """台指期近月收盤(一般時段)。回 Series(date → close)。"""
     try:
-        end = datetime.now()
+        end = _tw_now()
         start = end - timedelta(days=days + 8)
         form = {"down_type": "1", "commodity_id": "TX",
                 "queryStartDate": start.strftime("%Y/%m/%d"),
@@ -237,7 +245,7 @@ def fetch_pc_ratio(days: int = 20) -> "pd.Series | None":
     注意:TAIFEX 查詢區間上限 30 天,固定抓 28 天(約 19 個交易日)。
     """
     try:
-        end = datetime.now()
+        end = _tw_now()
         start = end - timedelta(days=28)
         form = {"queryStartDate": start.strftime("%Y/%m/%d"),
                 "queryEndDate": end.strftime("%Y/%m/%d")}
@@ -260,7 +268,7 @@ def fetch_pc_ratio(days: int = 20) -> "pd.Series | None":
 def fetch_market_turnover(months: int = 2) -> "pd.DataFrame | None":
     """大盤成交金額 + 加權收盤/漲跌(TWSE FMTQIK,逐月)。"""
     frames = []
-    today = datetime.now()
+    today = _tw_now()
     for k in range(months):
         y, m = today.year, today.month - k
         while m <= 0:
@@ -308,7 +316,7 @@ def fetch_margin_balance_from_cache(cache_dir, max_age_days: int = 4) -> "pd.Ser
         bal.index = [datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
                      for d in bal.index]
         bal = bal.sort_index()
-        age = (datetime.now().date() - bal.index[-1]).days
+        age = (_tw_now().date() - bal.index[-1]).days
         if age > max_age_days:
             print(f"   ⚠ margin 快取最新日 {bal.index[-1]}(已 {age} 天),改現抓")
             return None
@@ -341,7 +349,7 @@ def fetch_breadth_from_cache(cache_dir, days: int = 6,
                             "down": (chg < 0).sum(axis=1)})
         out.index = [datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
                      for d in out.index]
-        age = (datetime.now().date() - out.index[-1]).days
+        age = (_tw_now().date() - out.index[-1]).days
         if age > max_age_days:
             print(f"   ⚠ daily 快取最新日 {out.index[-1]}(已 {age} 天),改現抓")
             return None
@@ -351,118 +359,22 @@ def fetch_breadth_from_cache(cache_dir, days: int = 6,
         return None
 
 
-def fetch_us_vix_from_cache(cache_dir, max_age_days: int = 6,
-                            fetched_today_only: bool = False) -> "pd.DataFrame | None":
-    """美股 VIX,從選股排程的 vix parquet 讀取。
-
-    fetched_today_only=True(cache 優先):檔名日期必須是今天——代表
-    選股排程今天抓過,內容與此刻打 yfinance 等價(台灣下午美股未開盤,
-    雙方的最新值都是同一個美股收盤);不是今天就回 None 改現抓。
-    注意用「檔名」而非內容日期:美股 VIX 最新值本來就是 1~3 天前
-    (週末/美股假日),內容日期判斷不了新鮮度。
-    fetched_today_only=False(備援):yfinance 掛了,內容 max_age_days
-    天內都堪用(總比沒有好)。
-    已知極端況:排程當天 yfinance 也失敗時會「墊昨檔」(檔名今天、內容
-    少最新一天),此時 cache 優先會吃到少一天的資料;但那種日子現抓
-    多半也會失敗,且差距收斂項用 5 日均,影響有限。
-    """
+def fetch_us_vix_from_cache(cache_dir, max_age_days: int = 6) -> "pd.DataFrame | None":
+    """美股 VIX 備援:選股排程的 vix parquet(yfinance 現抓失敗時用)。"""
     if cache_dir is None:
         return None
     try:
         files = sorted(Path(cache_dir).glob("vix_*.parquet"))
         if not files:
             return None
-        if fetched_today_only:
-            fname_date = files[-1].stem[len("vix_"):]
-            if fname_date != datetime.now().strftime("%Y-%m-%d"):
-                print(f"   ⚠ vix 快取是 {fname_date} 抓的(非今日),改現抓")
-                return None
         df = pd.read_parquet(files[-1])
         df.columns = [str(c).lower() for c in df.columns]
         df = df.set_index(pd.to_datetime(df["date"])).sort_index()
-        if (datetime.now() - df.index[-1]).days > max_age_days:
+        if (_tw_now() - df.index[-1]).days > max_age_days:
             return None
-        if fetched_today_only:
-            print(f"   ✓ 美股 VIX 用 vix 快取(最新收盤 {df.index[-1]:%Y-%m-%d})")
         return df[["close"]].dropna()
     except Exception as e:
         print(f"   ⚠ vix 快取讀取失敗: {str(e)[:80]}")
-        return None
-
-
-def fetch_index_ohlc_from_cache(cache_dir, max_age_days: int = 0) -> "pd.DataFrame | None":
-    """加權指數 OHLC,從選股排程的 twii parquet 讀取 — 零網路請求。
-
-    fetch_cache.py 每天 15:30 抓 TWSE 官方 TAIEX(同 fetch_index_ohlc_twse
-    的來源,資料等價)。本訊號把最後一列當「今日」判定,所以 cache 最新日
-    必須是今天(max_age_days=0);16:10 初判時選股排程可能還沒 commit,
-    cache 還停在昨天 → 回 None,讓呼叫端照舊現抓。
-    """
-    if cache_dir is None:
-        return None
-    try:
-        files = sorted(Path(cache_dir).glob("twii_*.parquet"))
-        if not files:
-            return None
-        df = pd.read_parquet(files[-1])
-        df.columns = [str(c).lower() for c in df.columns]
-        need = ["date", "open", "high", "low", "close"]
-        if any(c not in df.columns for c in need):
-            return None
-        df = df[need].dropna()
-        if df.empty:
-            # 舊版 fetch_cache 用 FMTQIK 端點抓的檔只有收盤,開高低全 NaN
-            print("   ⚠ twii 快取沒有完整 OHLC 列(僅收盤的舊格式),改現抓")
-            return None
-        df["date"] = pd.to_datetime(df["date"])
-        df = df.drop_duplicates("date").sort_values("date").set_index("date")
-        df.index = [d.date() for d in df.index]
-        age = (datetime.now().date() - df.index[-1]).days
-        if age > max_age_days:
-            print(f"   ⚠ twii 快取最新日 {df.index[-1]}(已 {age} 天),改現抓")
-            return None
-        print(f"   ✓ 加權指數用 twii 快取({len(df)} 筆,最新 {df.index[-1]})")
-        return df.tail(130)
-    except Exception as e:
-        print(f"   ⚠ twii 快取讀取失敗: {str(e)[:80]}")
-        return None
-
-
-def fetch_stock_ohlc_from_cache(cache_dir, stock_no: str,
-                                max_age_days: int = 0) -> "pd.DataFrame | None":
-    """個股 OHLC,從選股排程的 daily parquet 讀取 — 零網路請求。
-
-    daily parquet 是 yfinance 還原價(欄名 open/max/min/close),與官方
-    原始價略有差異;本訊號只比相對關係(今低 vs 前低、收盤 vs MA),
-    同一檔案內部一致即可,不影響判定。最新日不是今天 → 回 None 改現抓。
-    """
-    if cache_dir is None:
-        return None
-    try:
-        files = sorted(Path(cache_dir).glob("daily_*.parquet"))
-        if not files:
-            return None
-        df = pd.read_parquet(
-            files[-1], columns=["stock_id", "date", "open", "max", "min", "close"])
-        df = df[df["stock_id"].astype(str) == str(stock_no)]
-        if df.empty:
-            return None
-        df = df.rename(columns={"max": "high", "min": "low"})
-        df = df[["date", "open", "high", "low", "close"]].dropna()
-        if df.empty:
-            print(f"   ⚠ daily 快取({stock_no})沒有完整 OHLC 列,改現抓")
-            return None
-        df["date"] = pd.to_datetime(df["date"])
-        df = df.drop_duplicates("date").sort_values("date").set_index("date")
-        df.index = [d.date() for d in df.index]
-        age = (datetime.now().date() - df.index[-1]).days
-        if age > max_age_days:
-            print(f"   ⚠ daily 快取({stock_no})最新日 {df.index[-1]}(已 {age} 天),改現抓")
-            return None
-        print(f"   ✓ {stock_no} 用 daily 快取({len(df)} 筆,最新 {df.index[-1]})")
-        return df
-    except Exception as e:
-        print(f"   ⚠ daily 快取({stock_no})讀取失敗: {str(e)[:80]}")
         return None
 
 
@@ -518,7 +430,7 @@ def fetch_foreign_spot_net_from_cache(cache_dir, max_age_days: int = 4) -> "pd.S
         net.index = [datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
                      for d in net.index]
         net = net.sort_index()
-        age = (datetime.now().date() - net.index[-1]).days
+        age = (_tw_now().date() - net.index[-1]).days
         if age > max_age_days:
             print(f"   ⚠ institutional 快取最新日 {net.index[-1]}(已 {age} 天),改現抓")
             return None
@@ -531,7 +443,7 @@ def fetch_foreign_spot_net_from_cache(cache_dir, max_age_days: int = 4) -> "pd.S
 def fetch_foreign_spot_net(days: int = 6) -> "pd.Series | None":
     """外資現貨買賣差額(元),近 N 個交易日(TWSE BFI82U 逐日)。"""
     rows = {}
-    d = datetime.now()
+    d = _tw_now()
     tried = 0
     while len(rows) < days and tried < days * 3:
         if d.weekday() < 5:
@@ -561,7 +473,7 @@ def fetch_margin_balance(days: int = 7) -> "pd.Series | None":
     才是最終值,但本訊號比的是減幅趨勢,逐日用同一欄位即可。
     """
     rows = {}
-    d = datetime.now()
+    d = _tw_now()
     tried = 0
     while len(rows) < days and tried < days * 3:
         if d.weekday() < 5:
@@ -590,7 +502,7 @@ def fetch_market_breadth(days: int = 4) -> "pd.DataFrame | None":
     回 DataFrame(date → up/down),'259(14)' 只取括號前的家數。
     """
     rows = {}
-    d = datetime.now()
+    d = _tw_now()
     tried = 0
     while len(rows) < days and tried < days * 3:
         if d.weekday() < 5:
@@ -626,7 +538,7 @@ def fetch_index_ohlc_twse(months: int = 5) -> "pd.DataFrame | None":
     且 yfinance 偶爾缺交易日(實測缺過 2026-06-09)。官方資料完整。
     """
     rows = []
-    today = datetime.now()
+    today = _tw_now()
     for k in range(months):
         y, m = today.year, today.month - k
         while m <= 0:
@@ -661,7 +573,7 @@ def fetch_index_ohlc_twse(months: int = 5) -> "pd.DataFrame | None":
 def fetch_stock_ohlc_twse(stock_no: str, months: int = 3) -> "pd.DataFrame | None":
     """個股每日 OHLC(TWSE STOCK_DAY,逐月)。停牌日價格為 '--',自動略過。"""
     rows = []
-    today = datetime.now()
+    today = _tw_now()
     for k in range(months):
         y, m = today.year, today.month - k
         while m <= 0:
@@ -708,7 +620,7 @@ def fetch_fi_futures_yesterday_today(cache_dir):
             if not row.empty:
                 today_net = int(row["oi_net_vol"].iloc[0])
         history = _load_fi_history(cache_dir)
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_str = _tw_now().strftime("%Y-%m-%d")
         past = [h["net_vol"] for h in history if h.get("date") != today_str]
         if past:
             yesterday_net = int(past[-1])
@@ -758,10 +670,8 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
         alerts.append("🚨 台灣恐慌指數(閘門)兩個來源都抓不到!今天無法判定分級,"
                       "請晚點按「立即重抓」再試,持續失敗請檢查期交所網站是否改版。")
 
-    print("📥 抓美股 VIX(快取優先)/ 美債 / 美元 / 台幣 / 費半(yfinance)…")
-    us_vix = fetch_us_vix_from_cache(cache_dir, fetched_today_only=True)
-    if us_vix is None:
-        us_vix = _yf_series("^VIX", period="30d")
+    print("📥 抓美股 VIX / 美債 / 美元 / 台幣 / 費半(yfinance)…")
+    us_vix = _yf_series("^VIX", period="30d")
     if us_vix is None:
         us_vix = fetch_us_vix_from_cache(cache_dir)
     us10y = _yf_series("^TNX", period="15d")       # 美國 10 年期公債殖利率(%)
@@ -769,19 +679,15 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     twd = _yf_series("TWD=X", period="15d")        # 美元兌台幣(升=台幣貶)
     sox = _yf_series("^SOX", period="60d")         # 費城半導體指數
 
-    print("📥 抓加權 / 台積電 OHLC(快取優先;TWSE 官方 → yfinance 備援)…")
-    twii = fetch_index_ohlc_from_cache(cache_dir)
-    if twii is None:
-        twii = fetch_index_ohlc_twse()
+    print("📥 抓加權 / 台積電 OHLC(TWSE 官方,yfinance 備援)…")
+    twii = fetch_index_ohlc_twse()
     if twii is None:
         twii = _yf_series("^TWII", period="120d")
         if twii is not None:
             alerts.append("大盤股價改用備用來源(Yahoo):證交所官方暫時抓不到,"
                           "判讀照常,但備用來源偶爾缺一兩天資料,"
                           "「未破前低」等比較前幾天的項目可能略有誤差。下次更新通常會自動恢復。")
-    tsmc = fetch_stock_ohlc_from_cache(cache_dir, "2330")
-    if tsmc is None:
-        tsmc = fetch_stock_ohlc_twse("2330")
+    tsmc = fetch_stock_ohlc_twse("2330")
     if tsmc is None:
         tsmc = _yf_series("2330.TW", period="60d")
         if tsmc is not None:
@@ -802,8 +708,10 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
                           "其餘照常。")
     # 外資現貨:優先用選股排程已抓好的快取(零網路請求),沒有才現抓
     f_spot = fetch_foreign_spot_net_from_cache(cache_dir)
+    f_spot_div, f_spot_unit = 1e7, "萬張"          # 快取單位:股
     if f_spot is None:
         f_spot = fetch_foreign_spot_net()
+        f_spot_div, f_spot_unit = 1e8, "億"        # BFI82U 單位:元
 
     print("📥 抓融資餘額 / 漲跌家數(快取優先,證交所備援)…")
     margin = fetch_margin_balance_from_cache(cache_dir)
@@ -820,29 +728,18 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
 
     items = []
 
-    # ── 01 恐慌指數(閘門,遲滯) ────────────────────────────────
-    #   關→開:跌破 40 且低於近5日高點(確認從恐慌高點回落)
-    #   開→關:已開後需彈回 gate_exit_level(42)以上才關
-    #   兩端不同門檻,避免在 40 邊緣單日小彈就把分級打回最恐慌。
+    # ── 01 恐慌指數(閘門) ────────────────────────────────────
     g = "01 恐慌指數"
-    gate_open_prev = last_gate_state(cache_dir) is True
     if vix_tw is not None and len(vix_tw) >= 2:
-        v = float(vix_tw.iloc[-1])
-        # 不含今日的近期高點(資料少時自然退化成現有前幾筆最高,
-        # 不會變回「今<昨」單日比較,以免又被單日小彈卡住)
-        recent5_max = float(vix_tw.tail(6).iloc[:-1].max())
-        if gate_open_prev:
-            ok = v < c["gate_exit_level"]
-            note = f"今 {v:.1f}(已開,守住 {c['gate_exit_level']:.0f} 以下)"
-        else:
-            ok = (v < c["gate_level"]) and (v < recent5_max)
-            note = f"今 {v:.1f} / 近5高 {recent5_max:.1f}"
-        items.append(_item("gate", g, f"跌破 {c['gate_level']:.0f} ★閘門", ok, note))
+        v, prev = float(vix_tw.iloc[-1]), float(vix_tw.iloc[-2])
+        recent5_max = float(vix_tw.tail(6).iloc[:-1].max()) if len(vix_tw) >= 6 else prev
+        ok = (v < c["gate_level"]) and (v < prev) and (v < recent5_max)
+        items.append(_item("gate", g, f"跌破 {c['gate_level']:.0f} ★閘門", ok,
+                           f"今 {v:.1f} / 昨 {prev:.1f}"))
     elif vix_tw is not None and len(vix_tw) == 1:
         v = float(vix_tw.iloc[-1])
-        thr = c["gate_exit_level"] if gate_open_prev else c["gate_level"]
         items.append(_item("gate", g, f"跌破 {c['gate_level']:.0f} ★閘門",
-                           v < thr, f"今 {v:.1f}(無昨日值,僅比 {thr:.0f})"))
+                           v < c["gate_level"], f"今 {v:.1f}(無昨日值,僅比 40)"))
     else:
         items.append(_item("gate", g, f"跌破 {c['gate_level']:.0f} ★閘門", None, "資料缺"))
 
@@ -878,7 +775,14 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     else:
         items.append(_item("vix_spread", g, "差距收斂且VIXTWN降", None, "資料缺"))
 
-    if vix_tw is not None and vix_intraday is not None and len(vix_tw) >= c["spike_high_days"]:
+    # 分鐘檔的「日高」與日資料的「最後收盤」必須是同一天;月檔尚未更新到今天時,
+    # 會變成拿今天的高點比昨天的收盤,回落幅度算錯
+    _vix_same_day = (vix_tw is not None and vix_intraday is not None and len(vix_tw) > 0
+                     and pd.Timestamp(vix_tw.index[-1]).normalize()
+                     == pd.Timestamp(vix_intraday["date"]).normalize())
+    if vix_tw is not None and vix_intraday is not None and not _vix_same_day:
+        items.append(_item("vix_spike", g, "爆衝後急殺", None, "日資料尚未更新到今天"))
+    elif vix_tw is not None and vix_intraday is not None and len(vix_tw) >= c["spike_high_days"]:
         hi = vix_intraday["high"]
         close_v = float(vix_tw.iloc[-1])
         past_hi = float(vix_tw.tail(c["spike_high_days"] + 1).iloc[:-1].max())
@@ -1006,7 +910,8 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
         avg_sell = float((-past[past < 0]).mean()) if (past < 0).any() else 0.0
         ok = (net >= 0) or (avg_sell > 0 and -net < avg_sell)
         items.append(_item("f_spot", g, "外資現貨賣超收斂", ok,
-                           f"今 {net / 1e8:+,.0f} 億 / 近5日均賣 {avg_sell / 1e8:,.0f} 億"))
+                           f"今 {net / f_spot_div:+,.1f} {f_spot_unit} / "
+                           f"近5日均賣 {avg_sell / f_spot_div:,.1f} {f_spot_unit}"))
     else:
         items.append(_item("f_spot", g, "外資現貨賣超收斂", None, "資料缺"))
 
@@ -1093,7 +998,7 @@ def run_all_checks(cache_dir=None, manual_flags=None) -> dict:
     # ── 分級 ─────────────────────────────────────────────────
     result = {
         "asof": str(vix_tw.index[-1]) if vix_tw is not None else
-                datetime.now().strftime("%Y-%m-%d"),
+                _tw_now().strftime("%Y-%m-%d"),
         "items": items,
         "alerts": alerts,
         "manual_flags": manual_flags,
@@ -1202,7 +1107,7 @@ def save_manual_flags(cache_dir, flags: dict):
     if cache_dir is None:
         return
     f = Path(cache_dir) / MANUAL_FILE
-    flags = dict(flags, updated=datetime.now().strftime("%Y-%m-%d %H:%M"))
+    flags = dict(flags, updated=_tw_now().strftime("%Y-%m-%d %H:%M"))
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps(flags, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1215,7 +1120,7 @@ def persist_bottom_latest(cache_dir, result: dict):
     if cache_dir is None or result is None:
         return
     f = Path(cache_dir) / LATEST_FILE
-    data = dict(result, generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
+    data = dict(result, generated_at=_tw_now().strftime("%Y-%m-%d %H:%M"))
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -1249,26 +1154,12 @@ def load_bottom_history(cache_dir) -> list:
         return []
 
 
-def last_gate_state(cache_dir) -> "bool | None":
-    """讀歷史最後一筆(非今日)的閘門 ok,供遲滯判斷用。
-
-    回 True=昨天已開 / False=昨天未開 / None=無紀錄(首次或資料缺,
-    視同未開,套用較嚴格的「開」門檻)。
-    """
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    hist = [h for h in load_bottom_history(cache_dir) if h.get("date") != today_str]
-    if not hist:
-        return None
-    last = sorted(hist, key=lambda h: h["date"])[-1]
-    return last.get("items", {}).get("gate")
-
-
 def persist_bottom_history(cache_dir, result: dict):
     """每日一筆:日期 / 分級 / 成立數 / 各項 ok。同日重跑覆蓋。"""
     if cache_dir is None or result is None:
         return
     f = Path(cache_dir) / HISTORY_FILE
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = _tw_now().strftime("%Y-%m-%d")
     history = [h for h in load_bottom_history(cache_dir) if h.get("date") != today_str]
     history.append({
         "date": today_str,
@@ -1313,7 +1204,7 @@ def format_bottom_for_tg(result: dict, pass_label: str = "") -> str:
     if gate["ok"] is True:
         lines.append(f"🔑 閘門:VIXTWN {vix_txt} ✅ 已開")
     elif gate["ok"] is False:
-        lines.append(f"🔑 閘門:VIXTWN {vix_txt} ❌ 未開(需跌破 40 並脫離高點)")
+        lines.append(f"🔑 閘門:VIXTWN {vix_txt} ❌ 未開(需跌破 40)")
         lines.append("　└ 閘門未開,分級壓在最恐慌")
     else:
         lines.append(f"🔑 閘門:VIXTWN {vix_txt} ❓ 無法判定")

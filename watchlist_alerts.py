@@ -10,6 +10,8 @@
 
 預期被 telegram_notify.py 在主流程中呼叫,將結果整合到推播訊息。
 """
+import html
+
 import pandas as pd
 
 
@@ -190,6 +192,7 @@ def format_alerts_for_tg(alerts: list, name_map: dict = None) -> str:
         for a in by_sid[sid]:
             icon = ALERT_ICON.get(a["type"], "⚠️")
             lines.append(
-                f"{icon} <a href='https://tw.stock.yahoo.com/quote/{sid}'>{sid}</a> {name}:{a['msg']}"
+                f"{icon} <a href='https://tw.stock.yahoo.com/quote/{html.escape(str(sid))}'>{html.escape(str(sid))}</a> "
+                f"{html.escape(str(name))}:{html.escape(str(a['msg']))}"
             )
     return "\n".join(lines) + "\n"

@@ -22,7 +22,8 @@ import json
 
 
 HISTORY_FILE = "cache/previous_picks.json"
-HISTORY_DAYS = 365  # 保留一年:讓績效/歸因/大盤濾網/出場回測能「跨多空」累積。
+HISTORY_DAYS = 365  # 保留最近 365 筆(一天一筆、只有交易日才寫 → 約 17 個月,不是 365 個日曆天)。
+                    # 目的:讓績效/歸因/大盤濾網/出場回測能「跨多空」累積。
                     # (原 30 天上限會讓所有回測永遠長不大、跨不過一次大盤回檔)
                     # 熱度榜/輪動只看近期,改由 compute_hot_picks 的 window 參數控制,不受此影響。
 

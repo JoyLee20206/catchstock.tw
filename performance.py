@@ -5,6 +5,8 @@
 
 提供 UI「策略績效」分頁需要的 dataframe。
 """
+import statistics
+
 import pandas as pd
 from picks_history import get_picks, get_shadow_picks
 
@@ -69,8 +71,9 @@ def _forward_return(matrices, sid: str, entry_date, n_days: int):
 
     entry_ts = pd.Timestamp(entry_date)
     dates = close_s.index
-    idx = dates.searchsorted(entry_ts)
-    if idx >= len(dates):
+    # 訊號日 T = ≤ 入選日的最近交易日(入選日落在假日時,不會把下一個交易日誤當 T、晚一天進場)
+    idx = dates.searchsorted(entry_ts, side="right") - 1
+    if idx < 0 or idx >= len(dates):
         return None
 
     next_idx = idx + 1          # T+1:隔日
@@ -112,13 +115,14 @@ def _risk_metrics(returns_in_date_order: list, hold_days: int) -> dict:
         return {"mdd": 0.0, "sharpe": 0.0, "std": 0.0}
 
     # 最大回檔:複利資金曲線從高點到低點的最大跌幅
-    # 口徑對齊 backtest.py:高點從「第一筆交易後的資金」起算(等同 np.maximum.accumulate)
+    # 高點從「本金 1.0」起算(口徑同 backtest.py):從第一筆後才起算,開局就虧的回檔會被漏掉
+    # (例 [-10, -10] 會算成 -10%,實際 -19%)
     equity_curve = []
     e = 1.0
     for r in rets:
         e *= (1 + r / 100.0)
         equity_curve.append(e)
-    peak, mdd = equity_curve[0], 0.0
+    peak, mdd = 1.0, 0.0
     for e in equity_curve:
         if e > peak:
             peak = e
@@ -223,7 +227,7 @@ def compute_performance(history: list, cache_dir, n_days_list=(5, 10, 20)) -> di
                 overall[f"n_{n}d"] = len(valid)
                 overall[f"win_rate_{n}d"] = wins / len(valid)
                 overall[f"avg_return_{n}d"] = sum(valid) / len(valid)
-                overall[f"median_return_{n}d"] = sorted(valid)[len(valid) // 2]
+                overall[f"median_return_{n}d"] = statistics.median(valid)   # 偶數筆取中間兩個平均
                 overall[f"max_return_{n}d"] = max(valid)
                 overall[f"min_return_{n}d"] = min(valid)
                 overall[f"avg_gain_{n}d"] = sum(gains) / len(gains) if gains else 0.0
@@ -457,8 +461,8 @@ def _price_path(matrices, sid: str, entry_date, max_hold: int):
     if s.empty:
         return None
     dates = s.index
-    idx = dates.searchsorted(pd.Timestamp(entry_date))
-    if idx >= len(dates) or idx + max_hold >= len(dates):
+    idx = dates.searchsorted(pd.Timestamp(entry_date), side="right") - 1   # T = ≤ 入選日的最近交易日
+    if idx < 0 or idx >= len(dates) or idx + max_hold >= len(dates):
         return None
 
     # 取隔日開盤作為進場價;無資料時回退為當日收盤
@@ -739,10 +743,10 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
         # 指數為對照基準、不可直接交易 → 不加滑價(picks 端的 SLIPPAGE 是真實交易成本,基準不該也扣)。
         twii_ret = None
         if twii_close is not None:
-            idx = twii_close.index.searchsorted(entry_date)   # T
+            idx = twii_close.index.searchsorted(entry_date, side="right") - 1   # T(同 picks 口徑)
             next_idx = idx + 1                                 # T+1(進場日,對齊 picks)
             target_idx = idx + hold_days                       # T+N(出場日)
-            if next_idx < len(twii_close) and target_idx < len(twii_close):
+            if idx >= 0 and next_idx < len(twii_close) and target_idx < len(twii_close):
                 # 進場價:T+1 開盤(無開盤資料則退回 T+1 收盤);出場價:T+N 收盤
                 entry_p = None
                 if twii_open is not None:
@@ -755,7 +759,9 @@ def compute_equity_curve(history: list, cache_dir, hold_days: int = 5) -> dict:
                 if entry_p is not None and entry_p > 0 and pd.notna(entry_p) and pd.notna(target_p):
                     twii_ret = (target_p - entry_p) / entry_p * 100
         if twii_ret is None:
-            twii_ret = 0.0  # 找不到大盤資料時當 0,避免下方統計噴掉
+            # 大盤沒有同期資料(指數快取較短/落後)→ 這天不列入對照;
+            # 當成 0% 會把 alpha 與「贏大盤天數」灌高
+            continue
 
         rows.append({
             "date":         entry["date"],
@@ -1038,7 +1044,7 @@ def format_performance_summary(perf: dict) -> str:
     pf_str = "∞" if pf == float("inf") else (f"{pf:.2f}" if pf is not None else "—")
     exp = o.get("net_expectancy_5d", 0.0)
     return (
-        f"📊 近 30 日策略績效(5 日後):"
+        f"📊 累計策略績效(5 日後):"
         f"勝率 {o['win_rate_5d']*100:.0f}% / "
         f"淨期望值 {exp:+.2f}% / "
         f"損益比 {pf_str} / "
