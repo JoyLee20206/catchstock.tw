@@ -12,6 +12,7 @@
 3. 累計 N 次 429 後直接放棄,避免一次燒光當日配額
 """
 import os
+import re
 import time
 import requests
 
@@ -76,6 +77,31 @@ def _is_service_unavailable(exc) -> bool:
     return "503" in msg or "service unavailable" in msg
 
 
+_THINK_BLOCK = re.compile(r"<think>.*?(</think>|$)", re.DOTALL | re.IGNORECASE)
+_REASONING_HEAD = re.compile(r"^\s*(thinking process|thought process|let me think|okay,? (so|let)|"
+                             r"analy[sz]e the request)", re.IGNORECASE)
+
+
+def _clean_answer(raw: str) -> str:
+    """清掉推理殘留與 Markdown,回傳可顯示的答案;判定為「思考過程」時回空字串。
+
+    推理型模型(auto:free 有時會路由到)會把英文思考過程放進 content,或
+    content 被 max_tokens 截在思考半途 → 這種內容絕不能當答案顯示。
+    """
+    text = _THINK_BLOCK.sub("", raw or "").strip()
+    for tok in ("###", "##", "**", "*", "`"):
+        text = text.replace(tok, "")
+    text = text.strip()
+    if not text or _REASONING_HEAD.match(text):
+        return ""
+    # 所有呼叫端都要求繁中輸出:英文字母比中文字還多 → 幾乎必是外漏的英文推理
+    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
+    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+    if latin > cjk:
+        return ""
+    return text
+
+
 def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, models: list = None):
     """依序嘗試模型清單,回傳 (model_name, ai_text);全部失敗回傳 (None, None)。
 
@@ -117,6 +143,8 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
             "max_tokens": max_tokens,
+            # 要求推理型模型別回傳推理內容(不支援此參數的模型會忽略)
+            "reasoning": {"exclude": True},
         }
         attempt_429 = 0
         attempt_503 = 0
@@ -130,16 +158,15 @@ def call_openrouter_ai(prompt: str, timeout: int = 20, max_tokens: int = 250, mo
                 j = resp.json()
 
                 if "choices" in j and j["choices"]:
-                    # 防禦:有些模型回傳 content=null(把答案放在 reasoning 欄)或缺 message,
-                    # 直接 .strip() 會噴 'NoneType' object has no attribute 'strip'
+                    # 只認 content。reasoning 欄是模型的思考草稿(常是英文、且被 max_tokens 截斷),
+                    # 絕不能拿來當答案;content 空或只有思考殘留 → 視為失敗、換下一支模型。
                     _msg = j["choices"][0].get("message") or {}
-                    text = (_msg.get("content") or _msg.get("reasoning") or "").strip()
-                    for tok in ("###", "##", "**", "*", "`"):
-                        text = text.replace(tok, "")
-                    text = text.strip()
+                    text = _clean_answer(_msg.get("content"))
                     if text:
                         print(f"   ✅ AI 模型 {m['name']} 回應成功")
                         return m["name"], text
+                    print(f"   ⚠ {m['name']} 只回了思考過程/空內容"
+                          f"(finish={j['choices'][0].get('finish_reason')}),換下一支")
                 elif "error" in j:
                     print(f"   ⚠ {m['name']} 拒絕: {j['error'].get('message', '')[:120]}")
                 break   # 非 429/503 失敗 → 換下一支
