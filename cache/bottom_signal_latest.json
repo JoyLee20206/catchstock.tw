@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": true,
-   "value": "差 10.4 / 5日均 10.8",
+   "value": "差 4.1 / 5日均 10.8",
    "manual": false,
    "observe": false
   },
@@ -32,8 +32,8 @@
    "key": "vix_spike",
    "group": "01 恐慌指數",
    "name": "爆衝後急殺",
-   "ok": false,
-   "value": "日高 29.4 收 26.4(回落 10.3%)",
+   "ok": null,
+   "value": "資料缺",
    "manual": false,
    "observe": false
   },
@@ -104,8 +104,8 @@
    "key": "margin_calm",
    "group": "04 信用與廣度",
    "name": "融資減幅收斂",
-   "ok": false,
-   "value": "今 -10.5 萬張 / 近日均減 5.8 萬張",
+   "ok": true,
+   "value": "今 -1.4 萬張 / 近日均減 6.0 萬張",
    "manual": false,
    "observe": true
   },
@@ -140,8 +140,8 @@
    "key": "fi_cover",
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
-   "ok": true,
-   "value": "淨額 -97,582 → -93,675 口",
+   "ok": false,
+   "value": "淨額 -93,675 → -93,675 口",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": true,
-   "value": "102.6 → 101.8",
+   "value": "102.6 → 101.9",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 32.10 → 32.39",
+   "value": "USDTWD 32.10 → 32.42",
    "manual": false,
    "observe": true
   },
@@ -203,8 +203,8 @@
    "key": "sox_no_low",
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
-   "ok": false,
-   "value": "今低 11,172 / 前10日低 11,639",
+   "ok": true,
+   "value": "今低 11,242 / 前10日低 11,172",
    "manual": false,
    "observe": true
   },
@@ -234,6 +234,6 @@
  "level": 1,
  "level_label": "剛降溫",
  "level_icon": "🟡",
- "n_ok": 11,
- "generated_at": "2026-10-16 21:12"
+ "n_ok": 10,
+ "generated_at": "2026-10-17 01:35"
 }
