@@ -122,8 +122,8 @@
    "key": "fut_basis",
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
-   "ok": null,
-   "value": "資料缺",
+   "ok": false,
+   "value": "價差 +231",
    "manual": false,
    "observe": false
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": false,
-   "value": "5.15% → 4.97%",
+   "value": "5.15% → 4.99%",
    "manual": false,
    "observe": false
   },
@@ -185,8 +185,8 @@
    "key": "dxy_fall",
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
-   "ok": true,
-   "value": "101.8 → 101.7",
+   "ok": false,
+   "value": "101.8 → 101.8",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": true,
-   "value": "USDTWD 32.58 → 32.57",
+   "value": "USDTWD 32.58 → 32.58",
    "manual": false,
    "observe": true
   },
@@ -203,8 +203,8 @@
    "key": "sox_no_low",
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
-   "ok": false,
-   "value": "今低 10,666 / 前10日低 11,043",
+   "ok": true,
+   "value": "今低 10,668 / 前10日低 10,666",
    "manual": false,
    "observe": true
   },
@@ -236,6 +236,6 @@
  "level": 0,
  "level_label": "高度恐慌",
  "level_icon": "🔴",
- "n_ok": 4,
- "generated_at": "2026-10-23 21:21"
+ "n_ok": 3,
+ "generated_at": "2026-10-24 01:55"
 }
