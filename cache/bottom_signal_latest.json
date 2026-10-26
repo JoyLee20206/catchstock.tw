@@ -105,7 +105,7 @@
    "group": "04 信用與廣度",
    "name": "融資減幅收斂",
    "ok": false,
-   "value": "今 -7.6 萬張 / 近日均減 5.5 萬張",
+   "value": "今 -7.6 萬張 / 近日均減 4.7 萬張",
    "manual": false,
    "observe": true
   },
@@ -114,7 +114,7 @@
    "group": "04 信用與廣度",
    "name": "跌家比從極端回落",
    "ok": false,
-   "value": "跌家比 36% → 79%",
+   "value": "跌家比 79% → 100%",
    "manual": false,
    "observe": true
   },
@@ -122,8 +122,8 @@
    "key": "fut_basis",
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
-   "ok": false,
-   "value": "價差 +231",
+   "ok": null,
+   "value": "資料缺",
    "manual": false,
    "observe": false
   },
@@ -140,8 +140,8 @@
    "key": "fi_cover",
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
-   "ok": false,
-   "value": "淨額 -87,297 → -87,297 口",
+   "ok": true,
+   "value": "淨額 -87,297 → -86,072 口",
    "manual": false,
    "observe": false
   },
@@ -176,8 +176,8 @@
    "key": "us_10y",
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
-   "ok": false,
-   "value": "5.15% → 4.99%",
+   "ok": true,
+   "value": "4.95% → 4.98%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "101.8 → 101.8",
+   "value": "101.6 → 102.0",
    "manual": false,
    "observe": false
   },
@@ -194,8 +194,8 @@
    "key": "twd_stable",
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
-   "ok": true,
-   "value": "USDTWD 32.58 → 32.58",
+   "ok": false,
+   "value": "USDTWD 32.37 → 32.57",
    "manual": false,
    "observe": true
   },
@@ -204,7 +204,7 @@
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
    "ok": true,
-   "value": "今低 10,668 / 前10日低 10,666",
+   "value": "今低 10,824 / 前10日低 10,666",
    "manual": false,
    "observe": true
   },
@@ -232,10 +232,10 @@
  ],
  "manual_flags": {},
  "vixtwn": 30.31,
- "fi_net_today": -87297,
+ "fi_net_today": -86072,
  "level": 0,
  "level_label": "高度恐慌",
  "level_icon": "🔴",
- "n_ok": 3,
- "generated_at": "2026-10-24 01:55"
+ "n_ok": 5,
+ "generated_at": "2026-10-26 23:09"
 }
