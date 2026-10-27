@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 11.9 / 5日均 10.8",
+   "value": "差 12.1 / 5日均 10.8",
    "manual": false,
    "observe": false
   },
@@ -32,8 +32,8 @@
    "key": "vix_spike",
    "group": "01 恐慌指數",
    "name": "爆衝後急殺",
-   "ok": true,
-   "value": "日高 32.7 收 29.9(回落 8.8%)",
+   "ok": null,
+   "value": "資料缺",
    "manual": false,
    "observe": false
   },
@@ -140,8 +140,8 @@
    "key": "fi_cover",
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
-   "ok": true,
-   "value": "淨額 -87,297 → -86,043 口",
+   "ok": false,
+   "value": "淨額 -86,043 → -86,043 口",
    "manual": false,
    "observe": false
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": true,
-   "value": "4.99% → 5.00%",
+   "value": "4.99% → 4.99%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "101.8 → 102.2",
+   "value": "101.8 → 102.3",
    "manual": false,
    "observe": false
   },
@@ -234,6 +234,6 @@
  "level": 1,
  "level_label": "剛降溫",
  "level_icon": "🟡",
- "n_ok": 8,
- "generated_at": "2026-10-27 22:23"
+ "n_ok": 6,
+ "generated_at": "2026-10-28 02:49"
 }
