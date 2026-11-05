@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 15.0 / 5日均 13.6",
+   "value": "差 13.3 / 5日均 13.6(美VIX升所致,不算)",
    "manual": false,
    "observe": false
   },
@@ -141,7 +141,7 @@
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
    "ok": false,
-   "value": "淨額 -93,647 → -95,651 口",
+   "value": "淨額 -95,651 → -95,651 口",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": false,
-   "value": "USDTWD 32.59 → 33.02",
+   "value": "USDTWD 32.59 → 33.04",
    "manual": false,
    "observe": true
   },
@@ -227,7 +227,9 @@
    "observe": false
   }
  ],
- "alerts": [],
+ "alerts": [
+  "台美恐慌差距縮小,但是「美股 VIX 上升」造成的,不是台灣恐慌在退——這不是止跌好訊號,反而要留意本地利空開始外溢到全球的可能。"
+ ],
  "manual_flags": {},
  "vixtwn": 39.92,
  "fi_net_today": -95651,
@@ -235,5 +237,5 @@
  "level_label": "高度恐慌",
  "level_icon": "🔴",
  "n_ok": 3,
- "generated_at": "2026-11-06 00:25"
+ "generated_at": "2026-11-06 04:45"
 }
