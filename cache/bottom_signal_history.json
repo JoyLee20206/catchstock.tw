@@ -3624,5 +3624,38 @@
       "news_dulled": false,
       "news_resolved": false
     }
+  },
+  {
+    "date": "2026-11-07",
+    "level": 0,
+    "n_ok": 3,
+    "vixtwn": 46.52,
+    "items": {
+      "gate": false,
+      "vix_fall": false,
+      "vix_spread": false,
+      "vix_spike": null,
+      "px_no_low": false,
+      "px_higher_low": null,
+      "px_strong_k": true,
+      "px_hold": false,
+      "vol_spike_down": false,
+      "vol_shrink": false,
+      "vol_up": false,
+      "margin_calm": false,
+      "breadth_falloff": false,
+      "fut_basis": true,
+      "f_spot": true,
+      "fi_cover": false,
+      "pc_falloff": false,
+      "tsmc_no_low": false,
+      "tsmc_ma": false,
+      "us_10y": false,
+      "dxy_fall": false,
+      "twd_stable": false,
+      "sox_no_low": true,
+      "news_dulled": false,
+      "news_resolved": false
+    }
   }
 ]
