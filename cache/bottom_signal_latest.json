@@ -1,12 +1,12 @@
 {
- "asof": "2026-11-09",
+ "asof": "2026-11-10",
  "items": [
   {
    "key": "gate",
    "group": "01 恐慌指數",
    "name": "跌破 40 ★閘門",
    "ok": false,
-   "value": "今 43.8 / 昨 46.5",
+   "value": "今 40.1 / 昨 43.8",
    "manual": false,
    "observe": false
   },
@@ -15,7 +15,7 @@
    "group": "01 恐慌指數",
    "name": "續降 38",
    "ok": false,
-   "value": "今 43.8",
+   "value": "今 40.1",
    "manual": false,
    "observe": false
   },
@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 23.9 / 5日均 15.6",
+   "value": "差 19.4 / 5日均 18.3",
    "manual": false,
    "observe": false
   },
@@ -42,7 +42,7 @@
    "group": "02 股價走勢",
    "name": "未破前低",
    "ok": true,
-   "value": "今低 40,347 / 前10日低 37,837",
+   "value": "今低 41,930 / 前10日低 37,837",
    "manual": false,
    "observe": false
   },
@@ -51,7 +51,7 @@
    "group": "02 股價走勢",
    "name": "低點墊高",
    "ok": null,
-   "value": "前轉折 09/14(距今 35 日)屬上一波段,不比較",
+   "value": "前轉折 09/14(距今 36 日)屬上一波段,不比較",
    "manual": false,
    "observe": false
   },
@@ -60,7 +60,7 @@
    "group": "02 股價走勢",
    "name": "強K守收盤",
    "ok": true,
-   "value": "收 41,662(紅K,下影 66%)",
+   "value": "收 42,712(紅K,下影 65%)",
    "manual": false,
    "observe": false
   },
@@ -78,7 +78,7 @@
    "group": "03 成交量",
    "name": "爆量下跌",
    "ok": false,
-   "value": "量 0.88 兆(0.89×均) +4.9%",
+   "value": "量 1.03 兆(1.05×均) +2.5%",
    "manual": false,
    "observe": false
   },
@@ -86,8 +86,8 @@
    "key": "vol_shrink",
    "group": "03 成交量",
    "name": "量縮止穩",
-   "ok": true,
-   "value": "量縮 +4.9%",
+   "ok": false,
+   "value": "量增 +2.5%",
    "manual": false,
    "observe": false
   },
@@ -95,8 +95,8 @@
    "key": "vol_up",
    "group": "03 成交量",
    "name": "帶量上漲",
-   "ok": false,
-   "value": "量縮 +4.9%",
+   "ok": true,
+   "value": "量增 +2.5%",
    "manual": false,
    "observe": false
   },
@@ -105,7 +105,7 @@
    "group": "04 信用與廣度",
    "name": "融資減幅收斂",
    "ok": true,
-   "value": "今 +2.8 萬張 / 近日均減 5.5 萬張",
+   "value": "今 -2.7 萬張 / 近日均減 5.5 萬張",
    "manual": false,
    "observe": true
   },
@@ -113,8 +113,8 @@
    "key": "breadth_falloff",
    "group": "04 信用與廣度",
    "name": "跌家比從極端回落",
-   "ok": true,
-   "value": "跌家比 89% → 18%",
+   "ok": false,
+   "value": "跌家比 18% → 45%",
    "manual": false,
    "observe": true
   },
@@ -123,7 +123,7 @@
    "group": "05 期貨與大戶",
    "name": "逆價差→正價差站穩",
    "ok": false,
-   "value": "價差 -239",
+   "value": "價差 -89",
    "manual": false,
    "observe": false
   },
@@ -132,7 +132,7 @@
    "group": "05 期貨與大戶",
    "name": "外資現貨賣超收斂",
    "ok": true,
-   "value": "今 -13.2 萬張 / 近5日均賣 24.8 萬張",
+   "value": "今 +3.3 萬張 / 近5日均賣 26.7 萬張",
    "manual": false,
    "observe": false
   },
@@ -141,7 +141,7 @@
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
    "ok": false,
-   "value": "淨額 -101,771 → -101,771 口",
+   "value": "淨額 -101,771 → -103,473 口",
    "manual": false,
    "observe": false
   },
@@ -150,7 +150,7 @@
    "group": "05 期貨與大戶",
    "name": "P/C比從極端回落",
    "ok": false,
-   "value": "40% → 51%",
+   "value": "51% → 67%",
    "manual": false,
    "observe": false
   },
@@ -159,7 +159,7 @@
    "group": "06 台積電",
    "name": "台積止穩不破低",
    "ok": true,
-   "value": "今低 2,190 / 前10日低 2,020",
+   "value": "今低 2,230 / 前10日低 2,020",
    "manual": false,
    "observe": false
   },
@@ -168,7 +168,7 @@
    "group": "06 台積電",
    "name": "台積翻紅站MA5",
    "ok": true,
-   "value": "收 2,235 / MA5 2,233",
+   "value": "收 2,285 / MA5 2,231",
    "manual": false,
    "observe": false
   },
@@ -177,7 +177,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美債殖利率回升",
    "ok": true,
-   "value": "4.84% → 4.86%",
+   "value": "4.86% → 4.99%",
    "manual": false,
    "observe": false
   },
@@ -186,7 +186,7 @@
    "group": "07 國際資金(輔助)",
    "name": "美元指數回落",
    "ok": false,
-   "value": "101.6 → 101.7",
+   "value": "102.3 → 102.3",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": true,
-   "value": "USDTWD 32.82 → 32.79",
+   "value": "USDTWD 33.11 → 32.98",
    "manual": false,
    "observe": true
   },
@@ -204,7 +204,7 @@
    "group": "07 國際資金(輔助)",
    "name": "費半未破前低",
    "ok": true,
-   "value": "今低 9,467 / 前10日低 8,997",
+   "value": "今低 9,795 / 前10日低 8,997",
    "manual": false,
    "observe": true
   },
@@ -229,11 +229,11 @@
  ],
  "alerts": [],
  "manual_flags": {},
- "vixtwn": 43.8,
- "fi_net_today": -101771,
+ "vixtwn": 40.06,
+ "fi_net_today": -103473,
  "level": 0,
  "level_label": "高度恐慌",
  "level_icon": "🔴",
  "n_ok": 7,
- "generated_at": "2026-11-10 07:03"
+ "generated_at": "2026-11-11 00:23"
 }
