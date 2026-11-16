@@ -3826,7 +3826,7 @@
   {
     "date": "2026-11-17",
     "level": 0,
-    "n_ok": 5,
+    "n_ok": 4,
     "vixtwn": 48.85,
     "items": {
       "gate": false,
@@ -3844,7 +3844,7 @@
       "breadth_falloff": false,
       "fut_basis": false,
       "f_spot": false,
-      "fi_cover": true,
+      "fi_cover": false,
       "pc_falloff": false,
       "tsmc_no_low": true,
       "tsmc_ma": false,
