@@ -3859,7 +3859,7 @@
   {
     "date": "2026-11-18",
     "level": 0,
-    "n_ok": 5,
+    "n_ok": 4,
     "vixtwn": 49.55,
     "items": {
       "gate": false,
@@ -3882,7 +3882,7 @@
       "tsmc_no_low": true,
       "tsmc_ma": false,
       "us_10y": false,
-      "dxy_fall": true,
+      "dxy_fall": false,
       "twd_stable": true,
       "sox_no_low": true,
       "news_dulled": false,
