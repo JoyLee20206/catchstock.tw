@@ -3929,7 +3929,7 @@
   {
     "date": "2026-11-21",
     "level": 0,
-    "n_ok": 3,
+    "n_ok": 1,
     "vixtwn": 52.13,
     "items": {
       "gate": false,
@@ -3947,12 +3947,12 @@
       "breadth_falloff": false,
       "fut_basis": false,
       "f_spot": true,
-      "fi_cover": true,
+      "fi_cover": false,
       "pc_falloff": false,
       "tsmc_no_low": false,
       "tsmc_ma": false,
       "us_10y": false,
-      "dxy_fall": true,
+      "dxy_fall": false,
       "twd_stable": false,
       "sox_no_low": false,
       "news_dulled": false,
