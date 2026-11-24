@@ -3948,7 +3948,7 @@
       "fut_basis": false,
       "f_spot": true,
       "fi_cover": false,
-      "pc_falloff": null,
+      "pc_falloff": false,
       "tsmc_no_low": true,
       "tsmc_ma": false,
       "us_10y": false,

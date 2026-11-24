@@ -24,7 +24,7 @@
    "group": "01 恐慌指數",
    "name": "差距收斂且VIXTWN降",
    "ok": false,
-   "value": "差 27.8 / 5日均 21.7",
+   "value": "差 28.7 / 5日均 21.7",
    "manual": false,
    "observe": false
   },
@@ -141,7 +141,7 @@
    "group": "05 期貨與大戶",
    "name": "外資期貨空單回補",
    "ok": false,
-   "value": "淨額 -97,863 → -103,432 口",
+   "value": "淨額 -103,432 → -103,432 口",
    "manual": false,
    "observe": false
   },
@@ -149,8 +149,8 @@
    "key": "pc_falloff",
    "group": "05 期貨與大戶",
    "name": "P/C比從極端回落",
-   "ok": null,
-   "value": "資料缺",
+   "ok": false,
+   "value": "30% → 31%",
    "manual": false,
    "observe": false
   },
@@ -195,7 +195,7 @@
    "group": "07 國際資金(輔助)",
    "name": "台幣止貶回升",
    "ok": true,
-   "value": "USDTWD 32.93 → 32.79",
+   "value": "USDTWD 33.03 → 32.77",
    "manual": false,
    "observe": true
   },
@@ -235,5 +235,5 @@
  "level_label": "高度恐慌",
  "level_icon": "🔴",
  "n_ok": 4,
- "generated_at": "2026-11-24 04:07"
+ "generated_at": "2026-11-24 09:06"
 }
