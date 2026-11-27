@@ -3929,11 +3929,11 @@
   {
     "date": "2026-11-28",
     "level": 0,
-    "n_ok": 9,
-    "vixtwn": 51.94,
+    "n_ok": 10,
+    "vixtwn": 30.95,
     "items": {
       "gate": false,
-      "vix_fall": false,
+      "vix_fall": true,
       "vix_spread": false,
       "vix_spike": null,
       "px_no_low": true,
